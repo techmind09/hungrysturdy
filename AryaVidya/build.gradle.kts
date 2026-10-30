@@ -1,5 +1,4 @@
 plugins {
-    id("com.android.library") // Android plugin zaroori hai
     id("com.lagradost.cloudstream3.gradle")
 }
 
