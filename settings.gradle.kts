@@ -17,6 +17,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "hungrystury"
+rootProject.name = "hungrysturdy"
 
 include(":AryaVidya")
