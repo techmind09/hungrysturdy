@@ -1,3 +1,7 @@
+plugins {
+    id("com.lagradost.cloudstream3.gradle")
+}
+
 version = 2
 
 cloudstream {
@@ -5,7 +9,7 @@ cloudstream {
     // All of these properties are optional, you can safely remove them
 
     description = "Only Education And Live Stream"
-     authors = listOf("Hungry Birds")
+    authors = listOf("Hungry Birds")
 
     /**
      * Status int as the following:
