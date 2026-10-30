@@ -17,6 +17,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "sturdyfishstick"
+rootProject.name = "hungrystury"
 
-include(":BollyFlix")
+include(":AryaVidya")
