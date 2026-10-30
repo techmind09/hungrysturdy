@@ -2,8 +2,8 @@
   "name": "Hungry Birds Extensions",
   "description": "Custom Cloudstream Plugins",
   "manifestVersion": 2,
-  "repositoryUrl": "https://github.com/techmind09/multiprovide",
+  "repositoryUrl": "https://github.com/techmind09/hungrysturdy",
   "pluginLists": [
-    "https://raw.githubusercontent.com/techmind09/multiprovide/builds/plugins.json"
+    "https://raw.githubusercontent.com/techmind09/hungrysturdy/builds/plugins.json"
   ]
 }
