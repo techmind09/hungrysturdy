@@ -1,13 +1,12 @@
-package com.AryaVidya
-
-import com.lagradost.cloudstream3.Plugins
-import com.lagradost.cloudstream3.MainAPI
+package com.hungrysturdy.Aryavidya
+import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
+import com.lagradost.cloudstream3.plugins.Plugin
 import android.content.Context
 
-@Plugins
+@CloudstreamPlugin
 class AryaVidyaPlugin : Plugin() {
     override fun load(context: Context) {
-        // Registering the provider
+        // All providers should be registered here using registerMainAPI
         registerMainAPI(AryaVidyaProvider())
     }
 }
