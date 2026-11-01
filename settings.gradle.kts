@@ -19,4 +19,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "hungrysturdy"
 
-include(":AryaVidya")
+
