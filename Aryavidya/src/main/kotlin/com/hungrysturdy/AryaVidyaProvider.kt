@@ -11,13 +11,17 @@ class AryaVidyaProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Documentary, TvType.Others)
     override val hasMainPage = true
 
+    // Xylem/AryaVidya JSON Structure ke anusaar data classes
+    data class ApiResponse(
+        @JsonProperty("batches") val batches: List<BatchItem?>?
+    )
+
     data class BatchItem(
-        @JsonProperty("title") val title: String?,
+        @JsonProperty("batch_id") val batchId: String?,
+        @JsonProperty("byName") val byName: String?,
         @JsonProperty("name") val name: String?,
-        @JsonProperty("url") val url: String?,
-        @JsonProperty("link") val link: String?,
-        @JsonProperty("poster") val poster: String?,
-        @JsonProperty("image") val image: String?
+        @JsonProperty("photo") val photo: String?,
+        @JsonProperty("exam") val exam: String?
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -25,25 +29,31 @@ class AryaVidyaProvider : MainAPI() {
         val batchCards = mutableListOf<SearchResponse>()
 
         try {
-            val jsonUrl = "https://semfy-gros.github.io/batches/batcha.json"
-            val jsonResponse = app.get(jsonUrl).parsedSafe<List<BatchItem>>()
-            if (!jsonResponse.isNullOrEmpty()) {
-                jsonResponse.mapNotNull { item ->
-                    val title = item.title ?: item.name ?: return@mapNotNull null
-                    val href = fixUrlNull(item.url ?: item.link) ?: return@mapNotNull null
-                    val poster = fixUrlNull(item.poster ?: item.image)
-                    newAnimeSearchResponse(title, href, TvType.Documentary) {
-                        this.posterUrl = poster
-                    }
-                }.let { batchCards.addAll(it) }
-            }
+            // Sahi JSON endpoint jo aapke network logs mein mila hai
+            val jsonUrl = "$mainUrl/assets/static/json/xylem-courses.json"
+            val jsonResponse = app.get(jsonUrl).parsedSafe<ApiResponse>()
+            
+            jsonResponse?.batches?.mapNotNull { item ->
+                if (item == null) return@mapNotNull null
+                val title = item.byName ?: item.name ?: item.exam ?: return@mapNotNull null
+                val id = item.batchId ?: return@mapNotNull null
+                val href = "$mainUrl/batch/$id"
+                val poster = fixUrlNull(item.photo)
+
+                newAnimeSearchResponse(title, href, TvType.Documentary) {
+                    this.posterUrl = poster
+                }
+            }?.let { batchCards.addAll(it) }
         } catch (_: Exception) {}
 
+        // Fallback agar API se na mile toh HTML scrape karein
         if (batchCards.isEmpty()) {
-            val doc = app.get(mainUrl).document
-            doc.select("div.batch-card, div.random-batch-item, div.group, .card, a[href*='batch'], div[class*='batch']").mapNotNull { 
-                it.toSearchResult()
-            }.let { batchCards.addAll(it) }
+            try {
+                val doc = app.get(mainUrl).document
+                doc.select("div.batch-card, div.random-batch-item, div.group, .card, a[href*='batch'], div[class*='batch']").mapNotNull { 
+                    it.toSearchResult()
+                }.let { batchCards.addAll(it) }
+            } catch (_: Exception) {}
         }
 
         val distinctCards = batchCards.distinctBy { it.url }
@@ -69,9 +79,30 @@ class AryaVidyaProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val results = mutableListOf<SearchResponse>()
         try {
-            val doc = app.get("$mainUrl/search?q=$query").document
-            doc.select("div.batch-card, div.search-item, .card, a[href*='batch']").mapNotNull { it.toSearchResult() }.let { results.addAll(it) }
+            val jsonUrl = "$mainUrl/assets/static/json/xylem-courses.json"
+            val jsonResponse = app.get(jsonUrl).parsedSafe<ApiResponse>()
+            
+            jsonResponse?.batches?.mapNotNull { item ->
+                if (item == null) return@mapNotNull null
+                val title = item.byName ?: item.name ?: item.exam ?: return@mapNotNull null
+                if (!title.contains(query, ignoreCase = true)) return@mapNotNull null
+                val id = item.batchId ?: return@mapNotNull null
+                val href = "$mainUrl/batch/$id"
+                val poster = fixUrlNull(item.photo)
+
+                newAnimeSearchResponse(title, href, TvType.Documentary) {
+                    this.posterUrl = poster
+                }
+            }?.let { results.addAll(it) }
         } catch (_: Exception) {}
+
+        if (results.isEmpty()) {
+            try {
+                val doc = app.get("$mainUrl/search?q=$query").document
+                doc.select("div.batch-card, div.search-item, .card, a[href*='batch']").mapNotNull { it.toSearchResult() }.let { results.addAll(it) }
+            } catch (_: Exception) {}
+        }
+
         return results.distinctBy { it.url }
     }
 
@@ -80,7 +111,6 @@ class AryaVidyaProvider : MainAPI() {
         val title = doc.selectFirst("h1, .batch-title, .title")?.text() ?: "Study Content"
         val poster = fixUrlNull(doc.selectFirst("img.poster, img.banner, img")?.attr("src"))
 
-        // Subjects, Chapters aur Lectures/Episodes ko extract karna
         val elements = doc.select("div.lecture-item, .class-row, li.episode-item, .episode, a[href*='watch'], a[href*='video'], .lesson-item, .subject-card, .chapter-item, div.card")
         
         val episodes = mutableListOf<Episode>()
