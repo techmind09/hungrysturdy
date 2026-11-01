@@ -18,5 +18,5 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "hungrysturdy"
-include(":Plugin Name")
+include(":Aryavidya")
 
