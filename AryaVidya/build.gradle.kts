@@ -1,10 +1,17 @@
 plugins {
     id("com.android.library")
+    id("kotlin-android")
     id("com.lagradost.cloudstream3.gradle")
 }
 
+cloudstream {
+    setReadme("README.md")
+    // Plugins metadata configuration
+    authors = listOf("techmind09")
+}
+
 android {
-    namespace = "com.AryaVidya"
+    namespace = "com.techmind09.aarvavidya"
     compileSdk = 34
 
     defaultConfig {
@@ -13,29 +20,16 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_1_X
+        targetCompatibility = JavaVersion.VERSION_1_X
     }
 
     kotlinOptions {
-        jvmTarget = "17"
+        jvmTarget = "1.8"
     }
 }
 
-version = 2
-
-cloudstream {
-    language = "hi"
-    description = "Only Education And Live Stream"
-    authors = listOf("Hungry Birds")
-
-    status = 1 
-    tvTypes = listOf(
-        "Education",
-        "Classes",
-        "Live's",
-        "Knowledge"
-    )
-
-    iconUrl = "https://raw.githubusercontent.com/techmind09/hungrysturdy/refs/heads/main/AryaVidya/icon.png"
+dependencies {
+    implementation(com.lagradost.cloudstream3.utils.AppUtils.API_IMPLEMENTATION ?: "")
+    // Jo bhi Jsoup ya dependencies chahiye wo yahan add karein
 }
