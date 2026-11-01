@@ -1,0 +1,22 @@
+[
+  {
+    "url": "https://raw.githubusercontent.com/techmind09/hungrysturdy/builds/Aryavidya.cs3",
+    "status": 1,
+    "version": 2,
+    "name": "Aryavidya",
+    "internalName": "Aryavidya",
+    "authors": [
+      "sturdyfishstick"
+    ],
+    "description": "Aryavidya - Indian",
+    "fileSize": 18346,
+    "repositoryUrl": "https://github.com/techmind09/hungrysturdy",
+    "language": "hi",
+    "tvTypes": [
+      "hi"
+    ],
+    "iconUrl": "https://stream.aryavidya.cc/",
+    "apiVersion": 1,
+    "fileHash": "sha256-aa49d048ea8e5bd7f557080c78043e00009941d68d58b448ff43097c7a44edea"
+  }
+]
