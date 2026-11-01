@@ -1,4 +1,4 @@
-name: Build Hungrysturdy Plugins
+name: Build HungrySturdy Plugins
 
 concurrency:
   group: "build-${{ github.ref }}"
@@ -64,9 +64,17 @@ jobs:
           import json, glob, zipfile, os, hashlib
 
           PLUGIN_META = {
-              'AryaVidya': {
-                  'name': 'AryaVidya',
-                  'iconUrl': 'https://raw.githubusercontent.com/techmind09/hungrysturdy/refs/heads/main/AryaVidya/icon.png'
+              'BlakitePlugin': {
+                  'name': 'Blakite Anime',
+                  'iconUrl': 'https://blogger.googleusercontent.com/img/a/AVvXsEgWJNM8v7dkKlHDuBncLOZsjiURJtbxv6de_W_TkIg75W51emlvr-3DATj02j__QUikkzjxhYKv8jYtQp4lc04xObvSTvthIHg_DA0Ud4SRiEUKqralljdfKnUumPN96NEBQwW6y0SpVKcCCPzuIwh8on5sgzjH7BT5PpR6_vp_qS7Qia8OMj04qz-DyMw=s937'
+              },
+              'ZLivePlugin': {
+                  'name': 'ZLive',
+                  'iconUrl': 'https://ui-avatars.com/api/?name=ZLive&background=0d0d0d&color=8288fe&size=512&bold=true&length=2'
+              },
+              'AnimeDekhoPlugin': {
+                  'name': 'AnimeDekho',
+                  'iconUrl': 'https://animedekho.app/wp-content/uploads/2023/02/cropped-favicon-270x270.png'
               }
           }
 
@@ -130,7 +138,7 @@ jobs:
       - name: Upload Build Artifacts (Zip)
         uses: actions/upload-artifact@v4
         with:
-          name: hungrysturdy-plugins
+          name: allanime-plugins
           path: ${{ runner.temp }}/build_artifacts/*
           retention-days: 14
 
@@ -145,6 +153,6 @@ jobs:
           if git diff-index --quiet HEAD --; then
             echo "No changes to commit."
           else
-            git commit -m "Automated Hungrysturdy build: ${{ github.sha }}"
+            git commit -m "Automated Allanime build: ${{ github.sha }}"
             git push origin builds --force
           fi
