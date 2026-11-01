@@ -1,2 +1,2 @@
-rootProject.name = "HungrySturdy"
-include(":AarvaVidya")
+rootProject.name = "Hungrysturdy"
+include(":AaryaVidya")
