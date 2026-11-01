@@ -72,7 +72,7 @@ class AryaVidyaProvider : MainAPI() {
         }
     }
 
-    override suspend fun loadLinks(
+        override suspend fun loadLinks(
         data: String,
         isCtype: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -98,10 +98,11 @@ class AryaVidyaProvider : MainAPI() {
                     newExtractorLink(
                         source = name,
                         name = name,
-                        url = fixedVideoUrl,
-                        referer = "$mainUrl/",
-                        quality = Qualities.Unknown.value
-                    )
+                        url = fixedVideoUrl
+                    ) {
+                        this.referer = "$mainUrl/"
+                        this.quality = Qualities.Unknown.value
+                    }
                 )
             }
             return true
@@ -119,10 +120,11 @@ class AryaVidyaProvider : MainAPI() {
                     newExtractorLink(
                         source = name,
                         name = name,
-                        url = foundUrl,
-                        referer = "$mainUrl/",
-                        quality = Qualities.Unknown.value
-                    )
+                        url = foundUrl
+                    ) {
+                        this.referer = "$mainUrl/"
+                        this.quality = Qualities.Unknown.value
+                    }
                 )
             }
             return true
@@ -130,4 +132,3 @@ class AryaVidyaProvider : MainAPI() {
 
         return false
     }
-}
