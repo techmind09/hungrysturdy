@@ -1,4 +1,4 @@
-package com.AryaVidya
+package com.hungrysturdy.Aryavidya
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
@@ -14,7 +14,6 @@ class AryaVidyaProvider : MainAPI() {
         val doc = app.get(mainUrl).document
         val homePages = mutableListOf<HomePageList>()
 
-        // Batches aur Courses ke cards ko properly select karna
         val batchCards = doc.select("div.batch-card, div.random-batch-item, div.group, .card, a[href*='batch'], div[class*='batch']").mapNotNull { 
             it.toSearchResult()
         }.distinctBy { it.url }
@@ -48,7 +47,6 @@ class AryaVidyaProvider : MainAPI() {
         val title = doc.selectFirst("h1, .batch-title, .title")?.text() ?: "Study Content"
         val poster = fixUrlNull(doc.selectFirst("img.poster, img.banner, img")?.attr("src"))
 
-        // Lectures, classes ya episodes ki list ko extract karna
         val episodes = doc.select("div.lecture-item, .class-row, li.episode-item, .episode, a[href*='watch'], a[href*='video'], .lesson-item").mapIndexed { index, element ->
             val epName = element.selectFirst(".name, span, h4, p")?.text() ?: "Lecture ${index + 1}"
             val aTag = if (element.tagName() == "a") element else element.selectFirst("a") ?: element
@@ -60,7 +58,6 @@ class AryaVidyaProvider : MainAPI() {
             }
         }
 
-        // Agar direct episodes na milein toh page ko hi single episode maan kar load karein
         val finalEpisodes = if (episodes.isEmpty()) {
             listOf(newEpisode(url) {
                 this.name = title
@@ -83,7 +80,6 @@ class AryaVidyaProvider : MainAPI() {
     ): Boolean {
         val doc = app.get(data).document
         
-        // Video player tags, sources, ya iframes ko target karna
         val videoUrl = doc.selectFirst("video source")?.attr("src") 
             ?: doc.selectFirst("video")?.attr("src")
             ?: doc.selectFirst("iframe")?.attr("src")
@@ -99,7 +95,7 @@ class AryaVidyaProvider : MainAPI() {
                 ).forEach(callback)
             } else {
                 callback(
-                    ExtractorLink(
+                    newExtractorLink(
                         source = name,
                         name = name,
                         url = fixedVideoUrl,
@@ -111,7 +107,6 @@ class AryaVidyaProvider : MainAPI() {
             return true
         }
 
-        // Agar HTML tags mein direct link na mile toh scripts ke andar video/m3u8 url ko dhundna
         val scriptContent = doc.select("script").html()
         val urlRegex = "(https?://[^\\s\"']+\\.(?:m3u8|mp4)[^\\s\"']*)".toRegex()
         val match = urlRegex.find(scriptContent)
@@ -121,7 +116,7 @@ class AryaVidyaProvider : MainAPI() {
                 M3u8Helper.generateM3u8(name, foundUrl, referer = "$mainUrl/").forEach(callback)
             } else {
                 callback(
-                    ExtractorLink(
+                    newExtractorLink(
                         source = name,
                         name = name,
                         url = foundUrl,
