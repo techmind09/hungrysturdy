@@ -1,5 +1,6 @@
 package com.hungrysturdy.Aryavidya
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
@@ -10,16 +11,44 @@ class AryaVidyaProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.Documentary, TvType.Others)
     override val hasMainPage = true
 
+    data class BatchItem(
+        @JsonProperty("title") val title: String?,
+        @JsonProperty("name") val name: String?,
+        @JsonProperty("url") val url: String?,
+        @JsonProperty("link") val link: String?,
+        @JsonProperty("poster") val poster: String?,
+        @JsonProperty("image") val image: String?
+    )
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val doc = app.get(mainUrl).document
         val homePages = mutableListOf<HomePageList>()
+        val batchCards = mutableListOf<SearchResponse>()
 
-        val batchCards = doc.select("div.batch-card, div.random-batch-item, div.group, .card, a[href*='batch'], div[class*='batch']").mapNotNull { 
-            it.toSearchResult()
-        }.distinctBy { it.url }
+        try {
+            val jsonUrl = "https://semfy-gros.github.io/batches/batcha.json"
+            val jsonResponse = app.get(jsonUrl).parsedSafe<List<BatchItem>>()
+            if (!jsonResponse.isNullOrEmpty()) {
+                jsonResponse.mapNotNull { item ->
+                    val title = item.title ?: item.name ?: return@mapNotNull null
+                    val href = fixUrlNull(item.url ?: item.link) ?: return@mapNotNull null
+                    val poster = fixUrlNull(item.poster ?: item.image)
+                    newAnimeSearchResponse(title, href, TvType.Documentary) {
+                        this.posterUrl = poster
+                    }
+                }.let { batchCards.addAll(it) }
+            }
+        } catch (_: Exception) {}
 
-        if (batchCards.isNotEmpty()) {
-            homePages.add(HomePageList("Batches & Study Material", batchCards))
+        if (batchCards.isEmpty()) {
+            val doc = app.get(mainUrl).document
+            doc.select("div.batch-card, div.random-batch-item, div.group, .card, a[href*='batch'], div[class*='batch']").mapNotNull { 
+                it.toSearchResult()
+            }.let { batchCards.addAll(it) }
+        }
+
+        val distinctCards = batchCards.distinctBy { it.url }
+        if (distinctCards.isNotEmpty()) {
+            homePages.add(HomePageList("Batches & Study Material", distinctCards))
         }
 
         return newHomePageResponse(homePages)
@@ -38,8 +67,12 @@ class AryaVidyaProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val doc = app.get("$mainUrl/search?q=$query").document
-        return doc.select("div.batch-card, div.search-item, .card, a[href*='batch']").mapNotNull { it.toSearchResult() }.distinctBy { it.url }
+        val results = mutableListOf<SearchResponse>()
+        try {
+            val doc = app.get("$mainUrl/search?q=$query").document
+            doc.select("div.batch-card, div.search-item, .card, a[href*='batch']").mapNotNull { it.toSearchResult() }.let { results.addAll(it) }
+        } catch (_: Exception) {}
+        return results.distinctBy { it.url }
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -47,14 +80,22 @@ class AryaVidyaProvider : MainAPI() {
         val title = doc.selectFirst("h1, .batch-title, .title")?.text() ?: "Study Content"
         val poster = fixUrlNull(doc.selectFirst("img.poster, img.banner, img")?.attr("src"))
 
-        val episodes = doc.select("div.lecture-item, .class-row, li.episode-item, .episode, a[href*='watch'], a[href*='video'], .lesson-item").mapIndexed { index, element ->
-            val epName = element.selectFirst(".name, span, h4, p")?.text() ?: "Lecture ${index + 1}"
-            val aTag = if (element.tagName() == "a") element else element.selectFirst("a") ?: element
-            val epUrl = fixUrlNull(aTag.attr("href") ?: url) ?: url
-            
-            newEpisode(epUrl) {
-                this.name = epName
-                this.episode = index + 1
+        // Subjects, Chapters aur Lectures/Episodes ko extract karna
+        val elements = doc.select("div.lecture-item, .class-row, li.episode-item, .episode, a[href*='watch'], a[href*='video'], .lesson-item, .subject-card, .chapter-item, div.card")
+        
+        val episodes = mutableListOf<Episode>()
+        if (elements.isNotEmpty()) {
+            elements.mapIndexedNotNull { index, element ->
+                val epName = element.selectFirst(".name, span, h4, p, h3")?.text() ?: "Lecture ${index + 1}"
+                val aTag = if (element.tagName() == "a") element else element.selectFirst("a") ?: element
+                val epUrl = fixUrlNull(aTag.attr("href")) ?: return@mapIndexedNotNull null
+                
+                episodes.add(
+                    newEpisode(epUrl) {
+                        this.name = epName
+                        this.episode = index + 1
+                    }
+                )
             }
         }
 
@@ -64,7 +105,7 @@ class AryaVidyaProvider : MainAPI() {
                 this.episode = 1
             })
         } else {
-            episodes
+            episodes.distinctBy { it.data }
         }
 
         return newTvSeriesLoadResponse(title, url, TvType.Documentary, finalEpisodes) {
