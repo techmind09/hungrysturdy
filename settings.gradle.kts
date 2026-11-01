@@ -1,2 +1,2 @@
 rootProject.name = "Hungrysturdy"
-include(":AaryaVidya")
+include(":AryaVidya")
