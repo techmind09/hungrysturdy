@@ -72,7 +72,7 @@ class AryaVidyaProvider : MainAPI() {
         }
     }
 
-        override suspend fun loadLinks(
+    override suspend fun loadLinks(
         data: String,
         isCtype: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -132,3 +132,4 @@ class AryaVidyaProvider : MainAPI() {
 
         return false
     }
+}
