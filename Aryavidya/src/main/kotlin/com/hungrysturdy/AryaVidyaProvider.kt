@@ -27,7 +27,14 @@ class AryaVidyaProvider : MainAPI() {
         val homePages = mutableListOf<HomePageList>()
         val batchCards = mutableListOf<SearchResponse>()
 
-        // 1. Website ke JSON API endpoint se batches fetch karne ki koshish
+        // 1. PDF Bank Shortcut Option
+        batchCards.add(
+            newAnimeSearchResponse("📚 PDF Bank (Short Notes, Mindmaps, Formula Sheets)", "$mainUrl/#/pdf-bank", TvType.Documentary) {
+                this.posterUrl = "https://static.pw.live/"
+            }
+        )
+
+        // 2. JSON API se Batches fetch karna
         try {
             val jsonUrl = "$mainUrl/assets/static/json/xylem-courses.json"
             val jsonResponse = app.get(jsonUrl).parsedSafe<ApiResponse>()
@@ -36,7 +43,7 @@ class AryaVidyaProvider : MainAPI() {
                 if (item == null) return@mapNotNull null
                 val title = item.byName ?: item.name ?: item.exam ?: return@mapNotNull null
                 val id = item.batchId ?: return@mapNotNull null
-                val href = "$mainUrl/batch/$id"
+                val href = "$mainUrl/#/batch/$id"
                 val poster = fixUrlNull(item.photo)
 
                 newAnimeSearchResponse(title, href, TvType.Documentary) {
@@ -45,37 +52,9 @@ class AryaVidyaProvider : MainAPI() {
             }?.let { batchCards.addAll(it) }
         } catch (_: Exception) {}
 
-        // 2. Agar API data na mile toh HTML elements scrape karein
-        if (batchCards.isEmpty()) {
-            try {
-                val doc = app.get(mainUrl).document
-                doc.select("div.batch-card, div.random-batch-item, div.group, .card, a[href*='batch'], div[class*='batch']").mapNotNull { 
-                    it.toSearchResult()
-                }.let { batchCards.addAll(it) }
-            } catch (_: Exception) {}
-        }
-
-        // 3. Fallback: Agar phir bhi list khali ho toh default popular batches dikhayein taaki error na aaye
-        if (batchCards.isEmpty()) {
-            val defaultBatches = listOf(
-                Triple("Generative AI for All", "$mainUrl/batches", "https://static.pw.live/"),
-                Triple("Lakshya JEE 2025", "$mainUrl/batches", "https://static.pw.live/"),
-                Triple("Yakeen Hindi 2023", "$mainUrl/batches", "https://static.pw.live/"),
-                Triple("Arjuna JEE 2.0 2024", "$mainUrl/batches", "https://static.pw.live/"),
-                Triple("NEET Ultimate Crash Course 2.0", "$mainUrl/batches", "https://static.pw.live/")
-            )
-            for ((title, href, poster) in defaultBatches) {
-                batchCards.add(
-                    newAnimeSearchResponse(title, href, TvType.Documentary) {
-                        this.posterUrl = poster
-                    }
-                )
-            }
-        }
-
         val distinctCards = batchCards.distinctBy { it.url }
         if (distinctCards.isNotEmpty()) {
-            homePages.add(HomePageList("Batches & Study Material", distinctCards))
+            homePages.add(HomePageList("Study Material & Batches", distinctCards))
         }
 
         return newHomePageResponse(homePages)
@@ -104,7 +83,7 @@ class AryaVidyaProvider : MainAPI() {
                 val title = item.byName ?: item.name ?: item.exam ?: return@mapNotNull null
                 if (!title.contains(query, ignoreCase = true)) return@mapNotNull null
                 val id = item.batchId ?: return@mapNotNull null
-                val href = "$mainUrl/batch/$id"
+                val href = "$mainUrl/#/batch/$id"
                 val poster = fixUrlNull(item.photo)
 
                 newAnimeSearchResponse(title, href, TvType.Documentary) {
@@ -113,29 +92,25 @@ class AryaVidyaProvider : MainAPI() {
             }?.let { results.addAll(it) }
         } catch (_: Exception) {}
 
-        if (results.isEmpty()) {
-            try {
-                val doc = app.get("$mainUrl/search?q=$query").document
-                doc.select("div.batch-card, div.search-item, .card, a[href*='batch']").mapNotNull { it.toSearchResult() }.let { results.addAll(it) }
-            } catch (_: Exception) {}
-        }
-
         return results.distinctBy { it.url }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val doc = app.get(url).document
-        val title = doc.selectFirst("h1, .batch-title, .title")?.text() ?: "Study Content"
+        val targetUrl = if (url.contains("/#")) url.replace("/#", "") else url
+        val doc = app.get(targetUrl).document
+        val title = doc.selectFirst("h1, .batch-title, .title, h3")?.text() ?: "Study Content"
         val poster = fixUrlNull(doc.selectFirst("img.poster, img.banner, img")?.attr("src"))
 
-        val elements = doc.select("div.lecture-item, .class-row, li.episode-item, .episode, a[href*='watch'], a[href*='video'], .lesson-item, .subject-card, .chapter-item, div.card")
+        // Batches, Subjects, Topics, aur PDF Bank elements ko target karna
+        val elements = doc.select("div.lecture-item, .class-row, li.episode-item, .episode, a[href*='watch'], a[href*='video'], .lesson-item, .subject-card, .chapter-item, div.card, a[href*='topic'], a[href*='subject'], a[href*='pdf'], a[href*='deeplink']")
         
         val episodes = mutableListOf<Episode>()
         if (elements.isNotEmpty()) {
             elements.mapIndexedNotNull { index, element ->
-                val epName = element.selectFirst(".name, span, h4, p, h3")?.text() ?: "Lecture ${index + 1}"
+                val epName = element.selectFirst(".name, span, h4, p, h3")?.text() ?: "Item ${index + 1}"
                 val aTag = if (element.tagName() == "a") element else element.selectFirst("a") ?: element
-                val epUrl = fixUrlNull(aTag.attr("href")) ?: return@mapIndexedNotNull null
+                val rawHref = aTag.attr("href")
+                val epUrl = fixUrlNull(if (rawHref.startsWith("#")) "$mainUrl/$rawHref" else rawHref) ?: return@mapIndexedNotNull null
                 
                 episodes.add(
                     newEpisode(epUrl) {
@@ -143,6 +118,22 @@ class AryaVidyaProvider : MainAPI() {
                         this.episode = index + 1
                     }
                 )
+            }
+        }
+
+        if (episodes.isEmpty()) {
+            doc.select("a[href]").mapIndexedNotNull { index, element ->
+                val href = element.attr("href")
+                if (href.contains("watch") || href.contains("video") || href.contains("lecture") || href.contains("class") || href.contains("topic") || href.contains("subject") || href.contains("pdf")) {
+                    val epName = element.text().ifBlank { "Content ${index + 1}" }
+                    val epUrl = fixUrlNull(if (href.startsWith("#")) "$mainUrl/$href" else href) ?: return@mapIndexedNotNull null
+                    episodes.add(
+                        newEpisode(epUrl) {
+                            this.name = epName
+                            this.episode = index + 1
+                        }
+                    )
+                } else null
             }
         }
 
@@ -166,7 +157,8 @@ class AryaVidyaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val doc = app.get(data).document
+        val targetData = if (data.contains("/#")) data.replace("/#", "") else data
+        val doc = app.get(targetData).document
         
         val videoUrl = doc.selectFirst("video source")?.attr("src") 
             ?: doc.selectFirst("video")?.attr("src")
@@ -196,8 +188,24 @@ class AryaVidyaProvider : MainAPI() {
             return true
         }
 
+        // Agar PDF ya document link ho toh use as direct extractor link pass karein
+        val pdfUrl = doc.selectFirst("a[href$='.pdf']")?.attr("href")
+        if (!pdfUrl.isNullOrEmpty()) {
+            callback(
+                newExtractorLink(
+                    source = name,
+                    name = "Document PDF",
+                    url = fixUrl(pdfUrl)
+                ) {
+                    this.referer = "$mainUrl/"
+                    this.quality = Qualities.Unknown.value
+                }
+            )
+            return true
+        }
+
         val scriptContent = doc.select("script").html()
-        val urlRegex = "(https?://[^\\s\"']+\\.(?:m3u8|mp4)[^\\s\"']*)".toRegex()
+        val urlRegex = "(https?://[^\\s\"']+\\.(?:m3u8|mp4|pdf)[^\\s\"']*)".toRegex()
         val match = urlRegex.find(scriptContent)
         if (match != null) {
             val foundUrl = match.value
