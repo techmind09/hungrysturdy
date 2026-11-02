@@ -7,9 +7,7 @@
   "name": "Hungry Birds Extensions",
   "description": "Everyone Cloudstream Plugins",
   "manifestVersion": 2,
-  "repositoryUrl": "https://github.com/techmind09/hungrysturdy",
-  "pluginLists": [
-"https://raw.githubusercontent.com/techmind09/hungrysturdy/builds/plugins.json")
+  "repositoryUrl": "https://raw.githubusercontent.com/techmind09/hungrysturdy/refs/heads/main/repo.json")
 
   
 **The Ultimate Non-SNon-Stoption for Streaming Education,*Desiecially curated for the Desi audience! 🍿
