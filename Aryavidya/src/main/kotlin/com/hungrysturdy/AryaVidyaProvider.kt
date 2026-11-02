@@ -1,4 +1,4 @@
-Package com.hungrysturdy.Aryavidya
+package com.hungrysturdy.Aryavidya
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
