@@ -18,5 +18,5 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "hungrysturdy"
-include(":Aryavidya")
+include(":Multi")
 
