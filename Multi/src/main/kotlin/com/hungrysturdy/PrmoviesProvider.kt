@@ -80,12 +80,11 @@ class PrmoviesProvider : MainAPI() {
 
         return if (tvtype == TvType.TvSeries) {
             val episodes = listOf(
-                Episode(
-                    data = links.firstOrNull() ?: url,
-                    name = "Episode 1",
-                    season = 1,
-                    episode = 1
-                )
+                newEpisode(links.firstOrNull() ?: url) {
+                    this.name = "Episode 1"
+                    this.season = 1
+                    this.episode = 1
+                }
             )
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = posterUrl
