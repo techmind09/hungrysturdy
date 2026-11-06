@@ -41,11 +41,7 @@ class PrmoviesProvider : MainAPI() {
         return try {
             app.get(url, headers = browserHeaders, referer = referer)
         } catch (e: Exception) {
-            try {
-                app.getWithCf(url, headers = browserHeaders, referer = referer)
-            } catch (ex: Exception) {
-                null
-            }
+            null
         }
     }
 
