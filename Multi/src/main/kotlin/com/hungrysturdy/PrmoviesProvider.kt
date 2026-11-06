@@ -1,4 +1,4 @@
-package com.hungrysturdy
+package com.prmovies
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
@@ -9,12 +9,6 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import com.lagradost.nicehttp.NiceResponse
 
-@CloudstreamPlugin
-class PrmoviesPlugin : Plugin() {
-    override fun load(context: Context) {
-        registerMainAPI(PrmoviesProvider())
-    }
-}
 
 class PrmoviesProvider : MainAPI() {
     override var mainUrl = "https://prmovies.ventures/"
