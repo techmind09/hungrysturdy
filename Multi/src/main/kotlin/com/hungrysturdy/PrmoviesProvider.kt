@@ -2,15 +2,13 @@ package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
-import com.lagradost.cloudstream3.plugins.Plugin
 import android.content.Context
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import com.lagradost.nicehttp.NiceResponse
 
 class PrmoviesProvider : MainAPI() {
-    override var mainUrl = "https://prmovies.ventures"
+    override var mainUrl = "https://prmovies.directory"
     override var name = "Prmovies"
     override val hasMainPage = true
     override var lang = "en"
@@ -25,16 +23,16 @@ class PrmoviesProvider : MainAPI() {
         "Accept-Language" to "en-US,en;q=0.9"
     )
 
-    override val mainPage = mainPageOf(
-        "$mainUrl/page/%d/" to "Latest Movies",
-        "$mainUrl/category/dual-audio/page/%d/" to "Dual Audio",
-        "$mainUrl/category/trending/page/%d/" to "Trending",
-        "$mainUrl/category/hollywood-dubbed/page/%d/" to "Hollywood Dubbed",
-        "$mainUrl/category/south-dubbed/page/%d/" to "South Dubbed",
-        "$mainUrl/director/amazon-prime/page/%d/" to "Amazon Prime",
-        "$mainUrl/director/netflix/page/%d/" to "Netflix",
-        "$mainUrl/director/zee5/page/%d/" to "Zee5",
-        "$mainUrl/director/hotstar/page/%d/" to "Hotstar"
+    override val mainPage = listOf(
+        MainPageData("Latest", "$mainUrl/"),
+        MainPageData("Dual Audio", "$mainUrl/category/dual-audio/"),
+        MainPageData("Trending", "$mainUrl/category/trending/"),
+        MainPageData("Hollywood Dubbed", "$mainUrl/category/hollywood-dubbed/"),
+        MainPageData("South Dubbed", "$mainUrl/category/south-dubbed/"),
+        MainPageData("Amazon Prime", "$mainUrl/director/amazon-prime/"),
+        MainPageData("Netflix", "$mainUrl/director/netflix/"),
+        MainPageData("Zee5", "$mainUrl/director/zee5/"),
+        MainPageData("Hotstar", "$mainUrl/director/hotstar/")
     )
 
     private suspend fun getPage(url: String, referer: String? = null): NiceResponse? {
@@ -78,7 +76,15 @@ class PrmoviesProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val pageUrl = request.data.format(page)
+        val pageUrl = if (page <= 1) {
+            request.data
+        } else {
+            if (request.data.endsWith("/")) {
+                "${request.data}page/$page/"
+            } else {
+                "${request.data}/page/$page/"
+            }
+        }
         val html = getPage(pageUrl)?.text ?: return newHomePageResponse(emptyList<HomePageList>(), hasNext = false)
         val items = extractItems(html)
         return newHomePageResponse(listOf(HomePageList(request.name, items)), hasNext = items.isNotEmpty())
