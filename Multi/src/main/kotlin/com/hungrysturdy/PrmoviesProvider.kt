@@ -1,4 +1,4 @@
-package com.prmovies
+package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
@@ -9,9 +9,8 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import com.lagradost.nicehttp.NiceResponse
 
-
 class PrmoviesProvider : MainAPI() {
-    override var mainUrl = "https://prmovies.ventures/"
+    override var mainUrl = "https://prmovies.ventures"
     override var name = "Prmovies"
     override val hasMainPage = true
     override var lang = "en"
@@ -26,6 +25,20 @@ class PrmoviesProvider : MainAPI() {
         "Accept-Language" to "en-US,en;q=0.9"
     )
 
+    override val mainPage = listOf(
+        MainPageData("Latest Movies", "$mainUrl/"),
+        MainPageData("Dual Audio", "$mainUrl/category/dual-audio/"),
+        MainPageData("Bollywood", "$mainUrl/category/bollywood/"),
+        MainPageData("Hollywood", "$mainUrl/category/hollywood/"),
+        MainPageData("Hindi Series", "$mainUrl/category/hindi-series/"),
+        MainPageData("English Series", "$mainUrl/category/english-series/"),
+        MainPageData("Action", "$mainUrl/category/action/"),
+        MainPageData("Animation", "$mainUrl/category/animation/"),
+        MainPageData("Comedy", "$mainUrl/category/comedy/"),
+        MainPageData("Horror", "$mainUrl/category/horror/"),
+        MainPageData("Romance", "$mainUrl/category/romance/")
+    )
+
     private suspend fun getPage(url: String, referer: String? = null): NiceResponse? {
         return try {
             app.get(url, headers = browserHeaders, referer = referer)
@@ -34,14 +47,6 @@ class PrmoviesProvider : MainAPI() {
         }
     }
 
-    // ---- catalog cards (homepage + search) ----
-    // <div data-movie-id="..." class="ml-item">
-    //   <a href="URL" class="ml-mask jt" oldtitle="TITLE" title="">
-    //     <span class="mli-quality">HINDI</span>          <- movie
-    //     <span class="mli-eps">Eps<i>10</i></span>        <- series
-    //     <img data-original="POSTER" class="lazy thumb mli-thumb" alt="TITLE">
-    //     <span class="mli-info"><h2>TITLE</h2></span>
-    //   </a>
     private fun extractItems(html: String): List<SearchResponse> {
         val doc = Jsoup.parse(html)
         val items = mutableListOf<SearchResponse>()
@@ -75,18 +80,16 @@ class PrmoviesProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val pageUrl = if (page <= 1) "$mainUrl/" else "$mainUrl/page/$page/"
+        val pageUrl = if (page <= 1) request.data else "${request.data}page/$page/"
         val html = getPage(pageUrl)?.text ?: return newHomePageResponse(emptyList<HomePageList>(), hasNext = false)
         val items = extractItems(html)
-        return newHomePageResponse(listOf(HomePageList("Latest", items)), hasNext = items.isNotEmpty())
+        return newHomePageResponse(listOf(HomePageList(request.name, items)), hasNext = items.isNotEmpty())
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val html = getPage("$mainUrl/?s=${query.trim().replace(" ", "+")}")?.text ?: return emptyList()
         return extractItems(html)
     }
-
-    // ---- detail ----
 
     override suspend fun load(url: String): LoadResponse {
         val html = getPage(url)?.text ?: throw ErrorLoadingException("Failed to load page")
@@ -114,7 +117,6 @@ class PrmoviesProvider : MainAPI() {
             ?.let { Regex("""(\d+)""").find(it)?.groupValues?.get(1)?.toIntOrNull() }
 
         if (url.contains("/series/", true)) {
-            // real series landing page: #seasons -> .tvseason -> episode links
             val episodes = mutableListOf<Episode>()
             for (tvseason in doc.select("#seasons .tvseason")) {
                 val seasonTitle = tvseason.selectFirst(".les-title strong")?.text() ?: "Season 1"
@@ -141,12 +143,10 @@ class PrmoviesProvider : MainAPI() {
                     this.duration = duration
                 }
             }
-            // series landing with no parsed episodes -> fall through to page-player handling
         }
 
         val isSeries = Regex("""(?i)\bseason\s*\d|\bepisode\s*\d|\bs\d{1,2}\b""").containsMatchIn(title)
         if (isSeries) {
-            // batch page like "Reacher (2026) Season 4 Episode 1-3" -> single playable episode
             val episodes = listOf(
                 newEpisode(url) {
                     this.name = title
@@ -172,8 +172,6 @@ class PrmoviesProvider : MainAPI() {
         }
     }
 
-    // ---- link resolution ----
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -189,7 +187,6 @@ class PrmoviesProvider : MainAPI() {
             if (pageUrl.contains("/episode/", true)) {
                 found = resolveEpisodePage(doc, pageUrl, callback)
             } else {
-                // movie / series-batch page: iframes to speedostream + download section
                 found = resolvePagePlayer(doc, pageUrl, callback)
             }
         } catch (e: Exception) {
@@ -200,8 +197,6 @@ class PrmoviesProvider : MainAPI() {
 
     private suspend fun resolvePagePlayer(doc: Element, pageUrl: String, callback: (ExtractorLink) -> Unit): Boolean {
         var found = false
-
-        // map tab ids to their labels (Server 1 -> HD 1080p ...)
         val tabLabels = mutableMapOf<String, String>()
         for (li in doc.select(".player_nav .idTabs li")) {
             val anchor = li.selectFirst("a[href^=#]") ?: continue
@@ -219,7 +214,6 @@ class PrmoviesProvider : MainAPI() {
             }
         }
 
-        // fallback: the download section links straight to speedostream file pages
         if (!found) {
             for (a in doc.select("#list-downloads a[href*=speedostream]")) {
                 val href = a.attr("href")
@@ -231,7 +225,6 @@ class PrmoviesProvider : MainAPI() {
         return found
     }
 
-    // /episode/ pages embed a vidsrc-style iframe (vidsrcme.su/embed/tv?tmdb=...).
     private suspend fun resolveEpisodePage(doc: Element, pageUrl: String, callback: (ExtractorLink) -> Unit): Boolean {
         var found = false
         for (iframe in doc.select("#player2 iframe[src], div.movieplay iframe[src]")) {
@@ -245,7 +238,6 @@ class PrmoviesProvider : MainAPI() {
         return found
     }
 
-    // speedostream1.com embed -> JWPlayer config -> sources: [{file:"<m3u8>"}]
     private suspend fun resolveSpeedostream(embedUrl: String, label: String, callback: (ExtractorLink) -> Unit): Boolean {
         return try {
             val clean = fixUrlNull(embedUrl) ?: return false
@@ -277,7 +269,6 @@ class PrmoviesProvider : MainAPI() {
         }
     }
 
-    // vidsrc chain: embed page -> iframe to a cloud player -> parse file/source
     private suspend fun resolveVidsrc(embedUrl: String, referer: String, callback: (ExtractorLink) -> Unit): Boolean {
         return try {
             val clean = fixUrlNull(embedUrl) ?: return false
