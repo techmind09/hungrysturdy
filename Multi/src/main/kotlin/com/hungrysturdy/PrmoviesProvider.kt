@@ -25,25 +25,27 @@ class PrmoviesProvider : MainAPI() {
         "Accept-Language" to "en-US,en;q=0.9"
     )
 
-    override val mainPage = listOf(
-        MainPageData("Latest Movies", "$mainUrl/"),
-        MainPageData("Dual Audio", "$mainUrl/category/dual-audio/"),
-        MainPageData("Bollywood", "$mainUrl/category/bollywood/"),
-        MainPageData("Hollywood", "$mainUrl/category/hollywood/"),
-        MainPageData("Hindi Series", "$mainUrl/category/hindi-series/"),
-        MainPageData("English Series", "$mainUrl/category/english-series/"),
-        MainPageData("Action", "$mainUrl/category/action/"),
-        MainPageData("Animation", "$mainUrl/category/animation/"),
-        MainPageData("Comedy", "$mainUrl/category/comedy/"),
-        MainPageData("Horror", "$mainUrl/category/horror/"),
-        MainPageData("Romance", "$mainUrl/category/romance/")
+    override val mainPage = mainPageOf(
+        "$mainUrl/page/%d/" to "Latest Movies",
+        "$mainUrl/category/dual-audio/page/%d/" to "Dual Audio",
+        "$mainUrl/category/trending/page/%d/" to "Trending",
+        "$mainUrl/category/hollywood-dubbed/page/%d/" to "Hollywood Dubbed",
+        "$mainUrl/category/south-dubbed/page/%d/" to "South Dubbed",
+        "$mainUrl/director/amazon-prime/page/%d/" to "Amazon Prime",
+        "$mainUrl/director/netflix/page/%d/" to "Netflix",
+        "$mainUrl/director/zee5/page/%d/" to "Zee5",
+        "$mainUrl/director/hotstar/page/%d/" to "Hotstar"
     )
 
     private suspend fun getPage(url: String, referer: String? = null): NiceResponse? {
         return try {
             app.get(url, headers = browserHeaders, referer = referer)
         } catch (e: Exception) {
-            null
+            try {
+                app.getWithCf(url, headers = browserHeaders, referer = referer)
+            } catch (ex: Exception) {
+                null
+            }
         }
     }
 
@@ -80,7 +82,7 @@ class PrmoviesProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val pageUrl = if (page <= 1) request.data else "${request.data}page/$page/"
+        val pageUrl = request.data.format(page)
         val html = getPage(pageUrl)?.text ?: return newHomePageResponse(emptyList<HomePageList>(), hasNext = false)
         val items = extractItems(html)
         return newHomePageResponse(listOf(HomePageList(request.name, items)), hasNext = items.isNotEmpty())
@@ -242,7 +244,7 @@ class PrmoviesProvider : MainAPI() {
         return try {
             val clean = fixUrlNull(embedUrl) ?: return false
             val host = try { java.net.URI(clean).host ?: "speedostream1.com" } catch (e: Exception) { "speedostream1.com" }
-            val r = app.get(clean, headers = browserHeaders, referer = "https://$host/")
+            val r = getPage(clean, referer = "https://$host/") ?: return false
             if (!r.isSuccessful) return false
             val text = r.text
             if (text.contains("Embeds disabled", true)) return false
@@ -280,7 +282,7 @@ class PrmoviesProvider : MainAPI() {
                 val s = it.attr("src")
                 if (s.isNotBlank()) { target = if (s.startsWith("http")) s else fixUrlNull(s); return@forEach }
             }
-            var playerUrl = target ?: return false
+            val playerUrl = target ?: return false
             if (!playerUrl.startsWith("http")) return false
 
             val r2 = getPage(playerUrl, referer = clean) ?: return false
