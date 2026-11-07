@@ -1,0 +1,22 @@
+[
+  {
+    "url": "https://raw.githubusercontent.com/techmind09/hungrysturdy/builds/Multi.cs3",
+    "status": 1,
+    "version": 5,
+    "name": "Multi",
+    "internalName": "Multi",
+    "authors": [
+      "sturdyfishstick1"
+    ],
+    "description": "Multi - Indian Hindi+English Movies&Web Series",
+    "fileSize": 24667,
+    "repositoryUrl": "https://github.com/techmind09/hungrysturdy",
+    "language": "hi",
+    "tvTypes": [
+      "Movies"
+    ],
+    "iconUrl": "https://share.google/V41t5XxU2Dr0xssSK",
+    "apiVersion": 1,
+    "fileHash": "sha256-3df8c981637ec807f95d3c389001102216ddc443e763427e8049f697ab5b3635"
+  }
+]
