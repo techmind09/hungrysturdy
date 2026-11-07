@@ -37,9 +37,15 @@ class PrmoviesProvider : MainAPI() {
 
     private suspend fun getPage(url: String, referer: String? = null): NiceResponse? {
         return try {
+            // Pehle normal request try karein
             app.get(url, headers = browserHeaders, referer = referer)
         } catch (e: Exception) {
-            null
+            try {
+                // Agar Cloudflare block kare toh CF Killer / getWithCf use karein
+                app.getWithCf(url, headers = browserHeaders, referer = referer)
+            } catch (ex: Exception) {
+                null
+            }
         }
     }
 
