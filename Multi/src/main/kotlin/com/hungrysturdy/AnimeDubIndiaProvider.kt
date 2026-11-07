@@ -88,7 +88,7 @@ class AnimeDubIndiaProvider : MainAPI() {
                 ?: card.text().trim()
             if (title.isBlank()) continue
 
-            val poster = fixUrlNull(card.selectFirst("img")?.attr("src") ?: card.selectFirst("img")?.attr("data-src")) ?: ""
+            val poster = fixUrlNull(card.selectFirst("img")?.attr("src") ?: card.selectFirst("img")?.attr("data-src"))
 
             items.add(
                 newAnimeSearchResponse(title, url, TvType.Anime) {
@@ -123,7 +123,7 @@ class AnimeDubIndiaProvider : MainAPI() {
         val poster = fixUrlNull(
             doc.selectFirst("meta[property=og:image]")?.attr("content")
                 ?: doc.selectFirst("img.object-cover")?.attr("src")
-        ) ?: ""
+        )
 
         val description = doc.selectFirst("meta[name=description]")?.attr("content")
             ?: doc.selectFirst(".synopsis, .description")?.text()?.trim()
