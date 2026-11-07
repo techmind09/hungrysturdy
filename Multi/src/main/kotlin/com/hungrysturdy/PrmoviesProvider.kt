@@ -318,7 +318,7 @@ class PrmoviesProvider : MainAPI() {
             val playerUrl = target ?: return false
             if (!playerUrl.startsWith("http")) return false
 
-            val r2 =Page(playerUrl, referer = clean) ?: return false
+            val r2 = getPage(playerUrl, referer = clean) ?: return false
             val text = r2.text
 
             val m3u8 = Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""").find(text)?.groupValues?.get(1)
