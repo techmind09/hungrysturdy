@@ -6,6 +6,10 @@ import android.content.Context
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import com.lagradost.nicehttp.NiceResponse
+import com.lagradost.cloudstream3.network.CloudflareKiller
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class PrmoviesProvider : MainAPI() {
     override var mainUrl = "https://prmovies.directory"
@@ -15,13 +19,27 @@ class PrmoviesProvider : MainAPI() {
     override val hasDownloadSupport = false
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
 
-    private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    private val userAgent = "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36"
 
     private val browserHeaders = mapOf(
         "User-Agent" to userAgent,
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language" to "en-US,en;q=0.9"
     )
+
+    // Cloudflare Killer Maps & Mutex (jaise aapke extractors mein hain)
+    private val cfMutexMap = ConcurrentHashMap<String, Mutex>()
+    private val cfKillerMap = ConcurrentHashMap<String, CloudflareKiller>()
+
+    private fun mutexFor(url: String): Mutex =
+        cfMutexMap.getOrPut(URI(url).host ?: mainUrl) { Mutex() }
+
+    private fun killerFor(url: String): CloudflareKiller =
+        cfKillerMap.getOrPut(URI(url).host ?: mainUrl) { CloudflareKiller() }
+
+    private fun isCloudflarePage(response: NiceResponse): Boolean {
+        return response.code in listOf(403, 503)
+    }
 
     override val mainPage = listOf(
         MainPageData("Latest", "$mainUrl/"),
@@ -35,17 +53,26 @@ class PrmoviesProvider : MainAPI() {
         MainPageData("Hotstar", "$mainUrl/director/hotstar/")
     )
 
+    // Cloudflare Bypass Integration in getPage
     private suspend fun getPage(url: String, referer: String? = null): NiceResponse? {
         return try {
-            // Pehle normal request try karein
-            app.get(url, headers = browserHeaders, referer = referer)
-        } catch (e: Exception) {
-            try {
-                // Agar Cloudflare block kare toh CF Killer / getWithCf use karein
-                app.getWithCf(url, headers = browserHeaders, referer = referer)
-            } catch (ex: Exception) {
-                null
+            val response = app.get(url, headers = browserHeaders, referer = referer)
+            if (!isCloudflarePage(response)) {
+                response
+            } else {
+                mutexFor(url).withLock {
+                    val cfKiller = killerFor(url)
+                    val retryResponse = app.get(url, headers = browserHeaders, interceptor = cfKiller, referer = referer)
+                    if (isCloudflarePage(retryResponse)) {
+                        cfKiller.savedCookies.clear()
+                        app.get(url, headers = browserHeaders, interceptor = cfKiller, referer = referer)
+                    } else {
+                        retryResponse
+                    }
+                }
             }
+        } catch (e: Exception) {
+            null
         }
     }
 
