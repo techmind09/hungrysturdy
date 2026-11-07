@@ -7,6 +7,7 @@ import android.content.Context
 @CloudstreamPlugin
 class AnimeDubIndiaPlugin : Plugin() {
     override fun load(context: Context) {
+        // Register the main API provider implementation
         registerMainAPI(AnimeDubIndiaProvider())
     }
 }
