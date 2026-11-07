@@ -25,7 +25,7 @@ class PrmoviesProvider : MainAPI() {
         "User-Agent" to userAgent,
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language" to "en-US,en;q=0.9",
-        "Cookie" to "_ga=GA1.1.1629448397.1794059276; domain-alert=1; fpestid=qKEJFcR_c3RLFa6Kn--eeRQW2dShUUkgk5lB1Hx76DaGCwYwnn5wDmCy7qWmMUlFPnD5Zw; _ga_7BWGJ9MXSS=GS2.1.s1794059275$o1$g1$t1794059680$j60$l0$h0"
+        "Cookie" to "_ga=GA1.1.1629448397.1794059276; domain-alert=1; fpestid=qKEJFcR_c3RLFa6Kn--eeRQW2dShUUkgk5lB1Hx76DaGCwYwnn5wDmCy7qWmMUlFPnD5Zw; _ga_7BWGJ9MXSS=GS2.1.s1794059275\$o1\$g1\$t1794059680\$j60\$l0\$h0"
     )
 
     private val cfMutexMap = ConcurrentHashMap<String, Mutex>()
@@ -318,7 +318,7 @@ class PrmoviesProvider : MainAPI() {
             val playerUrl = target ?: return false
             if (!playerUrl.startsWith("http")) return false
 
-            val r2 = getPage(playerUrl, referer = clean) ?: return false
+            val r2 =Page(playerUrl, referer = clean) ?: return false
             val text = r2.text
 
             val m3u8 = Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""").find(text)?.groupValues?.get(1)
