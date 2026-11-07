@@ -2,7 +2,6 @@ package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import android.content.Context
 import android.net.Uri
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
@@ -13,7 +12,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 class PrmoviesProvider : MainAPI() {
-    override var mainUrl = "https://prmovies.directory"
+    override var mainUrl = "https://prmovies.ventures"
     override var name = "Prmovies"
     override val hasMainPage = true
     override var lang = "en"
@@ -25,7 +24,8 @@ class PrmoviesProvider : MainAPI() {
     private val browserHeaders = mapOf(
         "User-Agent" to userAgent,
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language" to "en-US,en;q=0.9"
+        "Accept-Language" to "en-US,en;q=0.9",
+        "Cookie" to "_ga=GA1.1.1629448397.1794059276; domain-alert=1; fpestid=qKEJFcR_c3RLFa6Kn--eeRQW2dShUUkgk5lB1Hx76DaGCwYwnn5wDmCy7qWmMUlFPnD5Zw; _ga_7BWGJ9MXSS=GS2.1.s1794059275$o1$g1$t1794059680$j60$l0$h0"
     )
 
     private val cfMutexMap = ConcurrentHashMap<String, Mutex>()
@@ -43,14 +43,13 @@ class PrmoviesProvider : MainAPI() {
 
     override val mainPage = listOf(
         MainPageData("Latest", "$mainUrl/"),
-        MainPageData("Dual Audio", "$mainUrl/category/dual-audio/"),
-        MainPageData("Trending", "$mainUrl/category/trending/"),
-        MainPageData("Hollywood Dubbed", "$mainUrl/category/hollywood-dubbed/"),
-        MainPageData("South Dubbed", "$mainUrl/category/south-dubbed/"),
-        MainPageData("Amazon Prime", "$mainUrl/director/amazon-prime/"),
-        MainPageData("Netflix", "$mainUrl/director/netflix/"),
-        MainPageData("Zee5", "$mainUrl/director/zee5/"),
-        MainPageData("Hotstar", "$mainUrl/director/hotstar/")
+        MainPageData("Bollywood", "$mainUrl/genre/bollywood/"),
+        MainPageData("Hollywood", "$mainUrl/genre/hollywood/"),
+        MainPageData("Dual Audio", "$mainUrl/genre/dual-audio/"),
+        MainPageData("Trending", "$mainUrl/genre/top-rated/"),
+        MainPageData("Hindi Series", "$mainUrl/genre/web-series/"),
+        MainPageData("English Series", "$mainUrl/series/"),
+        MainPageData("Hot Series", "$mainUrl/genre/tv-shows/")
     )
 
     private suspend fun getPage(url: String, referer: String? = null): NiceResponse? {
