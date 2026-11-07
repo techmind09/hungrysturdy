@@ -1,12 +1,12 @@
-package com.animedubindia
+package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
-class AnimeDubIndiaProvider : MainUrlPlugin() {
+class AnimeDubIndiaProvider : MainAPI() {
     override var mainUrl = "https://www.animehubindia.com"
-    override var name = "Anime Indian"
+    override var name = "Anime Dub India"
     override var lang = "hi"
     override val hasMainPage = true
     override val hasDownloadSupport = true
@@ -16,7 +16,6 @@ class AnimeDubIndiaProvider : MainUrlPlugin() {
         TvType.OVA
     )
 
-    // Standard headers mimicking standard browser requests along with the requested cookies
     private val cookies = mapOf(
         "_ga_CPLDHBTQGX" to "GS2.1.s1794065397\$o1\$g0\$t1794065397\$j60\$l0\$h0",
         "_ga" to "GA1.1.389048499.1794065398"
