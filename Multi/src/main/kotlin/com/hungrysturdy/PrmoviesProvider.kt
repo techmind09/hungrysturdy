@@ -3,6 +3,7 @@ package com.hungrysturdy
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import android.content.Context
+import android.net.Uri
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import com.lagradost.nicehttp.NiceResponse
@@ -27,15 +28,14 @@ class PrmoviesProvider : MainAPI() {
         "Accept-Language" to "en-US,en;q=0.9"
     )
 
-    // Cloudflare Killer Maps & Mutex (jaise aapke extractors mein hain)
     private val cfMutexMap = ConcurrentHashMap<String, Mutex>()
     private val cfKillerMap = ConcurrentHashMap<String, CloudflareKiller>()
 
     private fun mutexFor(url: String): Mutex =
-        cfMutexMap.getOrPut(URI(url).host ?: mainUrl) { Mutex() }
+        cfMutexMap.getOrPut(try { Uri.parse(url).host ?: mainUrl } catch (e: Exception) { mainUrl }) { Mutex() }
 
     private fun killerFor(url: String): CloudflareKiller =
-        cfKillerMap.getOrPut(URI(url).host ?: mainUrl) { CloudflareKiller() }
+        cfKillerMap.getOrPut(try { Uri.parse(url).host ?: mainUrl } catch (e: Exception) { mainUrl }) { CloudflareKiller() }
 
     private fun isCloudflarePage(response: NiceResponse): Boolean {
         return response.code in listOf(403, 503)
@@ -53,7 +53,6 @@ class PrmoviesProvider : MainAPI() {
         MainPageData("Hotstar", "$mainUrl/director/hotstar/")
     )
 
-    // Cloudflare Bypass Integration in getPage
     private suspend fun getPage(url: String, referer: String? = null): NiceResponse? {
         return try {
             val response = app.get(url, headers = browserHeaders, referer = referer)
@@ -278,7 +277,7 @@ class PrmoviesProvider : MainAPI() {
     private suspend fun resolveSpeedostream(embedUrl: String, label: String, callback: (ExtractorLink) -> Unit): Boolean {
         return try {
             val clean = fixUrlNull(embedUrl) ?: return false
-            val host = try { java.net.URI(clean).host ?: "speedostream1.com" } catch (e: Exception) { "speedostream1.com" }
+            val host = try { Uri.parse(clean).host ?: "speedostream1.com" } catch (e: Exception) { "speedostream1.com" }
             val r = getPage(clean, referer = "https://$host/") ?: return false
             if (!r.isSuccessful) return false
             val text = r.text
