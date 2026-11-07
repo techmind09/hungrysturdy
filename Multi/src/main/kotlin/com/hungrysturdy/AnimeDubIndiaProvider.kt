@@ -36,7 +36,7 @@ class AnimeDubIndiaProvider : MainAPI() {
         "$mainUrl/#supernatural-section" to "Supernatural Anime"
     )
 
-    override async fun getMainPage(
+    override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
@@ -73,11 +73,11 @@ class AnimeDubIndiaProvider : MainAPI() {
 
         return newAnimeSearchResponse(title, url, TvType.Anime) {
             this.posterUrl = posterUrl
-            this.dubStatus = setOf(DubStatus.Dubbed)
+            this.dubStatus = mutableSetOf(DubStatus.Dubbed)
         }
     }
 
-    override async fun search(query: String): List<SearchResponse> {
+    override suspend fun search(query: String): List<SearchResponse> {
         val doc = app.get(
             mainUrl,
             headers = getHeaders(),
@@ -97,7 +97,7 @@ class AnimeDubIndiaProvider : MainAPI() {
         }.distinctBy { it.url }
     }
 
-    override async fun load(url: String): LoadResponse {
+    override suspend fun load(url: String): LoadResponse {
         val response = app.get(
             url,
             headers = getHeaders(),
@@ -151,7 +151,7 @@ class AnimeDubIndiaProvider : MainAPI() {
         }
     }
 
-    override async fun loadLinks(
+    override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
