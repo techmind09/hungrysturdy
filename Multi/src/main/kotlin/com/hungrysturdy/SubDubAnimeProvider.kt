@@ -14,9 +14,9 @@ class SubDubAnimeProvider : MainAPI() {
 
     private val apiUrl = "https://blakiteapi.xyz/api/getAllAnime.php"
 
-    // Custom headers with provided Cookie session string
+    // Custom headers with properly escaped cookie string
     private val defaultHeaders = mapOf(
-        "Cookie" to "_ga=GA1.1.1058041228.1794107191; dom3ic8zudi28v8lr6fgphwffqoz0j6c=01a1b91f-32a7-72ff-9db5-ce7dc129fecc; pp_main_481484428e47e8b2a541aaafc2544461=1; vrk4n8fqhwc3jzy7pbsmgt6dx5lha2u9=01a1b91f-32a7-72ff-9db5-ce7dc129fecc_2; pp_sub_481484428e47e8b2a541aaafc2544461=1; _ga_P600KN8YQ0=GS2.1.s1794107191$o1$g1$t1794107625$j60$l0$h0",
+        "Cookie" to "_ga=GA1.1.1058041228.1794107191; dom3ic8zudi28v8lr6fgphwffqoz0j6c=01a1b91f-32a7-72ff-9db5-ce7dc129fecc; pp_main_481484428e47e8b2a541aaafc2544461=1; vrk4n8fqhwc3jzy7pbsmgt6dx51ha2u9=01a1b91f-32a7-72ff-9db5-ce7dc129fecc_2; pp_sub_481484428e47e8b2a541aaafc2544461=1; _ga_P600KN8YQ0=GS2.1.s1794107191\$o1\$g1\$t1794107625\$j60\$l0\$h0",
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     )
 
@@ -179,7 +179,7 @@ class SubDubAnimeProvider : MainAPI() {
         @JsonProperty("dramas") val dramas: Map<String, MediaItem>?
     )
 
-    data class MediaItem(
+    Data class MediaItem(
         @JsonProperty("title") val title: String?,
         @JsonProperty("language") val language: String?,
         @JsonProperty("IMAGES") val IMAGES: Images?,
