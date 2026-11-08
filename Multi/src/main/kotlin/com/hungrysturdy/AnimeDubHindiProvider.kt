@@ -75,10 +75,10 @@ class AnimeDubHindiProvider : MainAPI() {
         for (card in doc.select("article.ast-article-post, div.post-thumb-img-content, div.ast-article-inner")) {
             val a = card.selectFirst("h2.entry-title a, h1.entry-title a, a") ?: continue
             val url = fixUrlNull(a.attr("href")) ?: continue
-            val title = (a.attr("title")
-                ?: a.text()
-                ?: card.selectFirst("img")?.attr("alt"))
-                ?.trim() ?: ""
+            
+            // Cleaned up attribute checks to avoid non-nullable Elvis operator warnings
+            val rawTitle = a.attr("title").ifBlank { a.text() }
+            val title = (rawTitle.ifBlank { card.selectFirst("img")?.attr("alt") ?: "" }).trim()
             if (title.isBlank()) continue
             
             val img = card.selectFirst("img")
@@ -206,7 +206,7 @@ class AnimeDubHindiProvider : MainAPI() {
                 }
             }
 
-            // Extract direct video source links (.mp4, .mxl, .m3u8)
+            // Extract direct video source links (.mp4, .mkv, .m3u8)
             for (el in doc.select("source[src], a[href$='.mp4'], a[href$='.mkv'], a[href$='.m3u8']")) {
                 val videoUrl = el.attr("href").ifBlank { el.attr("src") }
                 if (videoUrl.isNotBlank()) {
