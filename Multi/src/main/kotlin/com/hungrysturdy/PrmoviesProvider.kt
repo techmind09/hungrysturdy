@@ -43,13 +43,32 @@ class PrmoviesProvider : MainAPI() {
 
     override val mainPage = listOf(
         MainPageData("Latest", "$mainUrl/"),
-        MainPageData("Bollywood", "$mainUrl/genre/bollywood/"),
-        MainPageData("Hollywood", "$mainUrl/genre/hollywood/"),
-        MainPageData("Dual Audio", "$mainUrl/genre/dual-audio/"),
         MainPageData("Trending", "$mainUrl/genre/top-rated/"),
-        MainPageData("Hindi Series", "$mainUrl/genre/web-series/"),
+        // Dual Audio Sub-categories
+        MainPageData("New Movies", "$mainUrl/release-year/2026/"),
+        MainPageData("Hollywood Dubbed", "$mainUrl/genre/hollywood-dubbed/"),
+        MainPageData("South Dubbed", "$mainUrl/genre/south-special/"),
+        MainPageData("Unofficial Hindi Dubbed", "https://hhdmovies.forum/genre/unofficial-dubbed/"),
+        // Bollywood Years
+        MainPageData("Bollywood (2026)", "$mainUrl/account/?ptype=post&tax_category%5B0%5D=bollywood&tax_release-year=2026&wpas=1"),
+        MainPageData("Bollywood (2025)", "$mainUrl/account/?ptype=post&tax_category%5B0%5D=bollywood&tax_release-year=2025&wpas=1"),
+        MainPageData("Bollywood (2024)", "$mainUrl/account/?ptype=post&tax_category%5B0%5D=bollywood&tax_release-year=2024&wpas=1"),
+        // Hollywood Years
+        MainPageData("Hollywood (2026)", "$mainUrl/account/?ptype=post&tax_category%5B0%5D=hollywood&tax_release-year=2026&wpas=1"),
+        MainPageData("Hollywood (2025)", "$mainUrl/account/?ptype=post&tax_category%5B0%5D=hollywood&tax_release-year=2025&wpas=1"),
+        MainPageData("Hollywood (2024)", "$mainUrl/account/?ptype=post&tax_category%5B0%5D=hollywood&tax_release-year=2024&wpas=1"),
+        // English Series
         MainPageData("English Series", "$mainUrl/series/"),
-        MainPageData("Hot Series", "$mainUrl/genre/tv-shows/")
+        // Hindi Series / OTT Platforms
+        MainPageData("Netflix", "$mainUrl/director/netflix/"),
+        MainPageData("Amazon Prime", "$mainUrl/director/amazon-prime/"),
+        MainPageData("Altbalaji", "$mainUrl/director/altbalaji/"),
+        MainPageData("Zee5", "$mainUrl/director/zee5/"),
+        MainPageData("Voot", "$mainUrl/director/voot-originals/"),
+        MainPageData("Mx Player", "$mainUrl/director/mx-player/"),
+        MainPageData("Hotstar", "$mainUrl/director/hotstar/"),
+        MainPageData("Viu", "$mainUrl/director/viu-originals/"),
+        MainPageData("Sony Liv", "$mainUrl/director/sonyliv-original/")
     )
 
     private suspend fun getPage(url: String, referer: String? = null): NiceResponse? {
