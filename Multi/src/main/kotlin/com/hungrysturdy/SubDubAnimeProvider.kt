@@ -140,7 +140,8 @@ class SubDubAnimeProvider : MainAPI() {
             
             // Fixed type mismatch by wrapping list into MutableMap<DubStatus, List<Episode>>
             val episodeMap = mutableMapOf<DubStatus, List<Episode>>()
-            episodeMap[DubStatus.SUB] = episodes
+            episodeMap[DubStatus.Subbed] = episodes
+
 
             return newAnimeLoadResponse(title, url, TvType.Anime) {
                 this.posterUrl = poster
