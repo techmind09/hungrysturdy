@@ -7,7 +7,7 @@ import org.jsoup.nodes.Element
 
 class SubDubAnimeProvider : MainAPI() {
     override var mainUrl = "https://www.subdubanime.site"
-    override var name = "Sub Dub Anime"
+    override var name = "SubDubAnime"
     override val hasMainPage = true
     override var lang = "hi"
     override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA, TvType.TvSeries)
@@ -31,7 +31,7 @@ class SubDubAnimeProvider : MainAPI() {
         "$mainUrl/search/label/English%20Subbed" to "English Subbed"
     )
 
-    override async fun getMainPage(
+    override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
@@ -82,7 +82,7 @@ class SubDubAnimeProvider : MainAPI() {
         return newHomePageResponse(request.name, list)
     }
 
-    override async fun search(query: String): List<SearchResponse> {
+    override suspend fun search(query: String): List<SearchResponse> {
         val searchList = ArrayList<SearchResponse>()
         val res = app.get(apiUrl, headers = defaultHeaders).parsedSafe<ApiResponse>()
         
@@ -119,7 +119,7 @@ class SubDubAnimeProvider : MainAPI() {
         return searchList
     }
 
-    override async fun load(url: String): LoadResponse {
+    override suspend fun load(url: String): LoadResponse {
         val doc = app.get(url, headers = defaultHeaders).document
         
         val title = doc.select("h1, .post-title, .title").text().ifEmpty { "Sub Dub Anime Item" }
@@ -151,7 +151,7 @@ class SubDubAnimeProvider : MainAPI() {
         }
     }
 
-    override async fun loadLinks(
+    override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
