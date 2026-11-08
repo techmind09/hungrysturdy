@@ -206,7 +206,7 @@ class AnimeDubHindiProvider : MainAPI() {
                 }
             }
 
-            // Extract direct video source links (.mp4, .mkv, .m3u8)
+            // Extract direct video source links (.mp4, .mxl, .m3u8)
             for (el in doc.select("source[src], a[href$='.mp4'], a[href$='.mkv'], a[href$='.m3u8']")) {
                 val videoUrl = el.attr("href").ifBlank { el.attr("src") }
                 if (videoUrl.isNotBlank()) {
@@ -215,7 +215,7 @@ class AnimeDubHindiProvider : MainAPI() {
                             source = name,
                             name = name,
                             url = videoUrl,
-                            type = ExtractorLinkType.Video
+                            type = ExtractorLinkType.M3U8
                         ) {
                             this.quality = Qualities.Unknown.value
                             this.referer = data
