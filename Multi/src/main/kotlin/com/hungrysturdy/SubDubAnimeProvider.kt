@@ -131,17 +131,21 @@ class SubDubAnimeProvider : MainAPI() {
             val totalEp = 12 
             for (i in 1..totalEp) {
                 episodes.add(
-                    Episode(
-                        data = "$url&ep=$i",
-                        name = "Episode $i",
-                        episode = i
-                    )
+                    newEpisode("$url&ep=$i") {
+                        this.name = "Episode $i"
+                        this.episode = i
+                    }
                 )
             }
+            
+            // Fixed type mismatch by wrapping list into MutableMap<DubStatus, List<Episode>>
+            val episodeMap = mutableMapOf<DubStatus, List<Episode>>()
+            episodeMap[DubStatus.SUB] = episodes
+
             return newAnimeLoadResponse(title, url, TvType.Anime) {
                 this.posterUrl = poster
                 this.plot = description
-                this.episodes = episodes
+                this.episodes = episodeMap
             }
         }
 
@@ -179,7 +183,7 @@ class SubDubAnimeProvider : MainAPI() {
         @JsonProperty("dramas") val dramas: Map<String, MediaItem>?
     )
 
-    Data class MediaItem(
+    data class MediaItem(
         @JsonProperty("title") val title: String?,
         @JsonProperty("language") val language: String?,
         @JsonProperty("IMAGES") val IMAGES: Images?,
