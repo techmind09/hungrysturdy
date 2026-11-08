@@ -1,4 +1,4 @@
-package com.lagradost.cloudstream3.plugins
+package com.hungrysturdy
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
@@ -7,10 +7,10 @@ import org.jsoup.nodes.Element
 
 class SubDubAnimeProvider : MainAPI() {
     override var mainUrl = "https://www.subdubanime.site"
-    override var name = "SubDubAnime"
+    override var name = "Sub Dub Anime"
     override val hasMainPage = true
     override var lang = "hi"
-    override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA, TvType.TvSeries, TvType.Other)
+    override val supportedTypes = setOf(TvType.Anime, TvType.AnimeMovie, TvType.OVA, TvType.TvSeries)
 
     private val apiUrl = "https://blakiteapi.xyz/api/getAllAnime.php"
 
@@ -126,10 +126,8 @@ class SubDubAnimeProvider : MainAPI() {
         val poster = doc.select(".poster img, #info img, .thumb img, .entry-content img").attr("src")
         val description = doc.select(".synopsis, .description, .entry-content p").text()
 
-        // If URL contains streaming API query params, generate episodes
         if (url.contains("streaming.html")) {
             val episodes = ArrayList<Episode>()
-            // Default 12 episodes if totalEpisodes is unknown
             val totalEp = 12 
             for (i in 1..totalEp) {
                 episodes.add(
