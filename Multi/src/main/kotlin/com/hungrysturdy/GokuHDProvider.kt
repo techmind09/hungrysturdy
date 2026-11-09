@@ -18,7 +18,6 @@ class GokuHDProvider : MainAPI() {
     override var lang = "hi"
     override val hasMainPage = true
 
-    // Clean cookie map without duplicate keys
     private val cookies = mapOf(
         "_ga" to "GA1.1.1334156482.1794195302",
         "_ga_076NE65BBV" to """GS2.1.s1794195301$o1$g1$t1794197112$j60$l0$h0"""
