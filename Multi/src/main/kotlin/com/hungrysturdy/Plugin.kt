@@ -11,6 +11,7 @@ class Plugin : Plugin() {
         registerMainAPI(VegaMoviesProvider())
         registerMainAPI(AnimeDubHindiProvider())
         registerMainAPI(PrmoviesProvider())
+        registerMainAPI(GokuHDProvider())
         registerExtractorAPI(VCloud())
     }
 }
