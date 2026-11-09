@@ -94,7 +94,7 @@ class GokuHDProvider : MainAPI() {
         val searchUrl = "$mainUrl/?s=$query"
         val document = app.get(searchUrl, headers = headers, cookies = cookies).document
         
-        return document.select("article.post").mapNotNull { it.toSearchResult() }
+        return document.articleSelect("article.post").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -105,8 +105,10 @@ class GokuHDProvider : MainAPI() {
             ?: document.selectFirst("h2.entry-title")?.text() 
             ?: "Anime"
             
+        // Fixed Poster Selector to check OpenGraph meta tag first (which has the correct poster URL)
         val poster = fixUrl(
-            document.selectFirst(".single-entry-body img")?.attr("src") 
+            document.selectFirst("meta[property='og:image']")?.attr("content")
+                ?: document.selectFirst(".single-entry-body img")?.attr("src") 
                 ?: document.selectFirst(".post-image img")?.attr("src") 
                 ?: ""
         )
@@ -117,10 +119,17 @@ class GokuHDProvider : MainAPI() {
 
         val episodes = ArrayList<Episode>()
 
-        document.select("a.wp-download-btn, a.xp-download-btn, a.btn-download, .single-entry-body a, .entry-content a").forEachIndexed { index, element ->
+        // Improved selector to catch all download buttons and links inside the article body
+        document.select("a.wp-download-btn, a.xp-download-btn, a.btn-download, .single-entry-body a").forEachIndexed { _, element ->
             val epName = element.text()
             val epLink = element.attr("href")
-            if (epLink.startsWith("http") && !epLink.contains("telegram.dog") && !epLink.contains("whatsapp") && !epLink.contains("facebook.com") && !epLink.contains("twitter.com")) {
+            if (epLink.startsWith("http") && 
+                !epLink.contains("telegram.dog") && 
+                !epLink.contains("whatsapp") && 
+                !epLink.contains("facebook.com") && 
+                !epLink.contains("twitter.com") &&
+                !epLink.contains("imgbb.fit") // Ignore screenshot image links
+            ) {
                 if (episodes.none { it.data == epLink }) {
                     episodes.add(
                         newEpisode(epLink) {
