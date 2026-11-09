@@ -17,19 +17,29 @@ class GokuHDProvider : MainAPI() {
     )
     override var lang = "hi"
     override val hasMainPage = true
+    private val userAgent = "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36"
 
-    private val cookies = mapOf(
-        "_ga" to "GA1.1.1334156482.1794195302",
-        "_ga_076NE65BBV" to "GS2.1.s1794195301\$o1\$g1\$t1794197112\$j60\$l0\$h0"
+    private val browserHeaders = mapOf(
+        "User-Agent" to userAgent,
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language" to "en-US,en;q=0.9",
+        "Cookie" to "_ga=GA1.1.1629448397.1794059276; domain-alert=1; fpestid=qKEJFcR_c3RLFa6Kn--eeRQW2dShUUkgk5lB1Hx76DaGCwYwnn5wDmCy7qWmMUlFPnD5Zw; _ga_7BWGJ9MXSS=GS2.1.s1794059275\$o1\$g1\$t1794059680\$j60\$l0\$h0"
     )
 
-    private fun getHeaders(): Map<String, String> {
-        return mapOf(
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-            "Referer" to "$mainUrl/"
-        )
+    private val cfMutexMap = ConcurrentHashMap<String, Mutex>()
+    private val cfKillerMap = ConcurrentHashMap<String, CloudflareKiller>()
+
+    private fun mutexFor(url: String): Mutex =
+        cfMutexMap.getOrPut(try { Uri.parse(url).host ?: mainUrl } catch (e: Exception) { mainUrl }) { Mutex() }
+
+    private fun killerFor(url: String): CloudflareKiller =
+        cfKillerMap.getOrPut(try { Uri.parse(url).host ?: mainUrl } catch (e: Exception) { mainUrl }) { CloudflareKiller() }
+
+    private fun isCloudflarePage(response: NiceResponse): Boolean {
+        return response.code in listOf(403, 503)
     }
 
+    
     override val mainPage = mainPageOf(
         "$mainUrl/" to "Home / Latest",
         "$mainUrl/series/hindi-dubbed-series/" to "Hindi Dubbed Series",
