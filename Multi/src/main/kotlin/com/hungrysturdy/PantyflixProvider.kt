@@ -155,8 +155,7 @@ class PantyflixProvider : MainAPI() {
 
     override suspend fun loadLinks(
         data: String,
-        isCdn: Boolean,
-        referer: String?,
+        isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
