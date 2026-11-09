@@ -18,10 +18,10 @@ class GokuHDProvider : MainAPI() {
     override var lang = "hi"
     override val hasMainPage = true
 
-    // Headers with cookies included as requested
+    // Using triple quotes to safely handle cookie values containing $ signs
     private val cookies = mapOf(
         "_ga" to "GA1.1.1334156482.1794195302",
-        "_ga_076NE65BBV" to "GS2.1.s1794195301$o1$g1$t1794197112$j60$l0$h0"
+        "_ga_076NE65BBV" to """GS2.1.s1794195301$o1$g1$t1794197112$j60$l0$h0"""
     )
 
     private fun getHeaders(): Map<String, String> {
@@ -62,9 +62,12 @@ class GokuHDProvider : MainAPI() {
         val href = fixUrl(titleEl.attr("href"))
         val posterUrl = fixUrl(this.selectFirst(".post-image img")?.attr("src") ?: "")
 
+        val isDub = title.contains("Hindi", true) || title.contains("Dub", true)
+        val isSub = title.contains("Sub", true)
+
         return newMovieSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = posterUrl
-            this.addDubStatus(title.contains("Hindi", true), title.contains("Sub", true))
+            this.addDubStatus(isDub, isSub)
         }
     }
 
@@ -93,17 +96,15 @@ class GokuHDProvider : MainAPI() {
 
         val episodes = ArrayList<Episode>()
 
-        // Scrapes episode links, download buttons, or tables cleanly
         document.select(".single-entry-body a, .xp-download-btn, a.btn-download").forEachIndexed { index, element ->
             val epName = element.text()
             val epLink = element.attr("href")
             if (epLink.startsWith("http") && !epLink.contains("telegram.dog") && !epLink.contains("whatsapp")) {
                 episodes.add(
-                    Episode(
-                        data = epLink,
-                        name = if (epName.isNotBlank()) epName else "Episode ${index + 1}",
-                        episode = index + 1
-                    )
+                    newEpisode(epLink) {
+                        this.name = if (epName.isNotBlank()) epName else "Episode ${index + 1}"
+                        this.episode = index + 1
+                    }
                 )
             }
         }
@@ -131,7 +132,6 @@ class GokuHDProvider : MainAPI() {
     ): Boolean {
         val document = app.get(data, headers = getHeaders(), cookies = cookies).document
         
-        // Extract direct links or secondary redirection landing links
         val links = document.select("a.wp-download-btn, a.xp-download-btn, .single-entry-body a, a.btn-download")
         for (linkEl in links) {
             val href = linkEl.attr("href")
@@ -140,7 +140,6 @@ class GokuHDProvider : MainAPI() {
             }
         }
         
-        // Fallback: If the current data itself is a playable/extractable link
         if (data.startsWith("http") && !data.contains("gokuhd.cc")) {
             loadExtractor(data, data, subtitleCallback, callback)
         }
