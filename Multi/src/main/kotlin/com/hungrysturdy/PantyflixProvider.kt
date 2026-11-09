@@ -15,7 +15,7 @@ class PantyflixProvider : MainAPI() {
     override var lang = "en"
     override val hasMainPage = true
 
-    override async fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = Jsoup.connect(mainUrl).get()
         val homePageList = mutableListOf<HomePageList>()
 
@@ -99,7 +99,7 @@ class PantyflixProvider : MainAPI() {
         return newHomePageResponse(homePageList)
     }
 
-    override async fun search(query: String): List<SearchResponse> {
+    override suspend fun search(query: String): List<SearchResponse> {
         val searchUrl = "$mainUrl/search?q=$query"
         val document = Jsoup.connect(searchUrl).get()
         val results = mutableListOf<SearchResponse>()
@@ -131,7 +131,7 @@ class PantyflixProvider : MainAPI() {
         return results.distinctBy { it.url }
     }
 
-    override async fun load(url: String): LoadResponse {
+    override suspend fun load(url: String): LoadResponse {
         val document = Jsoup.connect(url).get()
         val title = document.select("meta[property=og:title]").attr("content")
             .ifEmpty { document.title() }
@@ -153,7 +153,7 @@ class PantyflixProvider : MainAPI() {
         }
     }
 
-    override async fun loadLinks(
+    override suspend fun loadLinks(
         data: String,
         isCdn: Boolean,
         referer: String?,
