@@ -2,7 +2,7 @@ package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import org.jsoup.Jsoup
+import org.jsoup.nodes.Element
 
 class PantyflixProvider : MainAPI() {
     override var mainUrl = "https://pantyflix.com"
@@ -23,7 +23,7 @@ class PantyflixProvider : MainAPI() {
             val homePageList = mutableListOf<HomePageList>()
             val scriptData = document.select("script").html()
             
-            // 1. Trending / Featured Items
+            // 1. Trending / Featured Items from Next.js Script or DOM
             val heroItems = mutableListOf<SearchResponse>()
             val movieRegex = """"id":\s*(\d+),\s*"media_type":\s*"(movie|tv)",\s*"title":\s*"([^"]+)",\s*"poster_path":\s*"([^"]+)"""".toRegex()
             
@@ -42,11 +42,17 @@ class PantyflixProvider : MainAPI() {
                 }
             }
 
+            if (heroItems.isEmpty()) {
+                document.select("a[href*=\"/watch/play/\"]").forEach { element ->
+                    parseCard(element, heroItems)
+                }
+            }
+
             if (heroItems.isNotEmpty()) {
                 homePageList.add(HomePageList("Trending Right Now", heroItems.distinctBy { it.url }))
             }
 
-            // 2. Platforms / Studios List with their individual rows
+            // 2. Platforms / Studios Rows
             val studioList = listOf(
                 Pair("Netflix", "$mainUrl/platforms/8/movie"),
                 Pair("Amazon Prime Video", "$mainUrl/platforms/9/movie"),
@@ -57,39 +63,16 @@ class PantyflixProvider : MainAPI() {
                 Pair("HBO Max", "$mainUrl/platforms/1899/movie"),
                 Pair("MGM Plus", "$mainUrl/platforms/34/movie"),
                 Pair("Paramount Plus", "$mainUrl/platforms/2303/movie"),
-                Pair("Peacock", "$mainUrl/platforms/387/movie"),
-                Pair("Shudder", "$mainUrl/platforms/99/movie"),
-                Pair("Discovery+", "$mainUrl/platforms/531/movie")
+                Pair("Peacock", "$mainUrl/platforms/387/movie")
             )
 
-            // Har platform ke liye alag row fetch karna
             for ((studioName, studioUrl) in studioList) {
                 try {
                     val studioDoc = app.get(studioUrl).document
                     val studioItems = mutableListOf<SearchResponse>()
 
-                    studioDoc.select("a[href*=/movie/], a[href*=/tv/], a[href*=/watch/]").forEach { element ->
-                        val href = element.attr("href")
-                        val title = element.text().ifEmpty { element.select("span, p, img").attr("alt") }
-                        val poster = element.select("img").attr("src")
-
-                        if (title.isNotBlank()) {
-                            val isMovie = href.contains("movie")
-                            val mediaType = if (isMovie) TvType.Movie else TvType.TvSeries
-                            val fullUrl = if (href.startsWith("http")) href else mainUrl + href
-                            
-                            studioItems.add(
-                                if (isMovie) {
-                                    newMovieSearchResponse(title, fullUrl, mediaType) {
-                                        this.posterUrl = poster
-                                    }
-                                } else {
-                                    newTvSeriesSearchResponse(title, fullUrl, mediaType) {
-                                        this.posterUrl = poster
-                                    }
-                                }
-                            )
-                        }
+                    studioDoc.select("a[href*=\"/movie/\"], a[href*=\"/tv/\"], a[href*=\"/watch/\"], a[href*=\"/platforms/\"]").forEach { element ->
+                        parseCard(element, studioItems)
                     }
 
                     if (studioItems.isNotEmpty()) {
@@ -100,14 +83,14 @@ class PantyflixProvider : MainAPI() {
                 }
             }
 
-            // 3. Popular Genres List
+            // 3. Popular Genres Rows
             val genresList = listOf(
                 Pair("Comedy", "$mainUrl/movies?genre=35"),
                 Pair("Action", "$mainUrl/movies?genre=28"),
-                Pair("Drama", "$mainUrl/movies?genre=18"),
                 Pair("Horror", "$mainUrl/movies?genre=27"),
                 Pair("Romance", "$mainUrl/movies?genre=10749"),
-                Pair("Adventure", "$mainUrl/movies?genre=12")
+                Pair("Adventure", "$mainUrl/movies?genre=12"),
+                Pair("Animation", "$mainUrl/movies?genre=16")
             )
 
             for ((genreName, genreUrl) in genresList) {
@@ -115,28 +98,8 @@ class PantyflixProvider : MainAPI() {
                     val genreDoc = app.get(genreUrl).document
                     val genreItems = mutableListOf<SearchResponse>()
 
-                    genreDoc.select("a[href*=/movie/], a[href*=/tv/], a[href*=/watch/]").forEach { element ->
-                        val href = element.attr("href")
-                        val title = element.text().ifEmpty { element.select("span, p, img").attr("alt") }
-                        val poster = element.select("img").attr("src")
-
-                        if (title.isNotBlank()) {
-                            val isMovie = href.contains("movie")
-                            val mediaType = if (isMovie) TvType.Movie else TvType.TvSeries
-                            val fullUrl = if (href.startsWith("http")) href else mainUrl + href
-                            
-                            genreItems.add(
-                                if (isMovie) {
-                                    newMovieSearchResponse(title, fullUrl, mediaType) {
-                                        this.posterUrl = poster
-                                    }
-                                } else {
-                                    newTvSeriesSearchResponse(title, fullUrl, mediaType) {
-                                        this.posterUrl = poster
-                                    }
-                                }
-                            )
-                        }
+                    genreDoc.select("a[href*=\"/movie/\"], a[href*=\"/tv/\"], a[href*=\"/watch/\"]").forEach { element ->
+                        parseCard(element, genreItems)
                     }
 
                     if (genreItems.isNotEmpty()) {
@@ -150,32 +113,38 @@ class PantyflixProvider : MainAPI() {
             return newHomePageResponse(homePageList)
         } else {
             val items = mutableListOf<SearchResponse>()
-            
-            document.select("a[href*=/movie/], a[href*=/tv/], a[href*=/watch/]").forEach { element ->
-                val href = element.attr("href")
-                val title = element.text().ifEmpty { element.select("span, p, img").attr("alt") }
-                val poster = element.select("img").attr("src")
-
-                if (title.isNotBlank()) {
-                    val isMovie = href.contains("movie")
-                    val mediaType = if (isMovie) TvType.Movie else TvType.TvSeries
-                    val fullUrl = if (href.startsWith("http")) href else mainUrl + href
-                    
-                    items.add(
-                        if (isMovie) {
-                            newMovieSearchResponse(title, fullUrl, mediaType) {
-                                this.posterUrl = poster
-                            }
-                        } else {
-                            newTvSeriesSearchResponse(title, fullUrl, mediaType) {
-                                this.posterUrl = poster
-                            }
-                        }
-                    )
-                }
+            document.select("a[href*=\"/movie/\"], a[href*=\"/tv/\"], a[href*=\"/watch/\"]").forEach { element ->
+                parseCard(element, items)
             }
-
             return newHomePageResponse(HomePageList(request.name, items.distinctBy { it.url }))
+        }
+    }
+
+    private fun parseCard(element: Element, list: MutableList<SearchResponse>) {
+        val href = element.attr("href")
+        if (href.isNullOrBlank() || href == "/" || href.startsWith("#")) return
+
+        val title = element.select("h3, h4, p, span").text()
+            .ifEmpty { element.attr("title").ifEmpty { element.select("img").attr("alt") } }
+        
+        val poster = element.select("img").attr("src").let {
+            if (it.startsWith("//")) "https:$it" else if (it.startsWith("/")) "https://pantyflix.com$it" else it
+        }
+
+        if (title.isNotBlank() && (href.contains("movie") || href.contains("tv") || href.contains("watch"))) {
+            val isMovie = href.contains("movie") || href.contains("watch/play/movie")
+            val mediaType = if (isMovie) TvType.Movie else TvType.TvSeries
+            val fullUrl = if (href.startsWith("http")) href else "https://pantyflix.com$href"
+
+            if (isMovie) {
+                list.add(newMovieSearchResponse(title, fullUrl, mediaType) {
+                    this.posterUrl = poster
+                })
+            } else {
+                list.add(newTvSeriesSearchResponse(title, fullUrl, mediaType) {
+                    this.posterUrl = poster
+                })
+            }
         }
     }
 
@@ -184,28 +153,8 @@ class PantyflixProvider : MainAPI() {
         val document = app.get(searchUrl).document
         val results = mutableListOf<SearchResponse>()
 
-        document.select("a[href*=/movie/], a[href*=/tv/], a[href*=/watch/]").forEach { element ->
-            val href = element.attr("href")
-            val title = element.text().ifEmpty { element.select("span, p, img").attr("alt") }
-            val poster = element.select("img").attr("src")
-
-            if (title.isNotBlank()) {
-                val isMovie = href.contains("movie")
-                val mediaType = if (isMovie) TvType.Movie else TvType.TvSeries
-                val fullUrl = if (href.startsWith("http")) href else mainUrl + href
-                
-                results.add(
-                    if (isMovie) {
-                        newMovieSearchResponse(title, fullUrl, mediaType) {
-                            this.posterUrl = poster
-                        }
-                    } else {
-                        newTvSeriesSearchResponse(title, fullUrl, mediaType) {
-                            this.posterUrl = poster
-                        }
-                    }
-                )
-            }
+        document.select("a[href*=\"/movie/\"], a[href*=\"/tv/\"], a[href*=\"/watch/\"]").forEach { element ->
+            parseCard(element, results)
         }
 
         return results.distinctBy { it.url }
@@ -216,6 +165,7 @@ class PantyflixProvider : MainAPI() {
         val title = document.select("meta[property=og:title]").attr("content")
             .ifEmpty { document.title() }
         val poster = document.select("meta[property=og:image]").attr("content")
+            .ifEmpty { document.select("img").first()?.attr("src") ?: "" }
         val description = document.select("meta[name=description]").attr("content")
 
         val isMovie = url.contains("movie")
@@ -242,10 +192,26 @@ class PantyflixProvider : MainAPI() {
         val document = app.get(data).document
         val iframeSrc = document.select("iframe").attr("src")
 
-        if (iframeSrc.isNotEmpty()) {
+        if (!iframeSrc.isNullOrEmpty()) {
             val fullEmbedUrl = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
             loadExtractor(fullEmbedUrl, data, subtitleCallback, callback)
             return true
+        }
+
+        document.select("source, video").forEach { srcEl ->
+            val src = srcEl.attr("src")
+            if (src.isNotBlank()) {
+                callback(
+                    ExtractorLink(
+                        name,
+                        name,
+                        src,
+                        data,
+                        Qualities.Unknown.value,
+                        isM3u8 = src.contains(".m3u8")
+                    )
+                )
+            }
         }
         
         return false
