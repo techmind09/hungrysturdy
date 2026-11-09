@@ -4,7 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.Jsoup
 
-class PantyflixProvider : MainProvider() {
+class PantyflixProvider : MainAPI() {
     override var mainUrl = "https://pantyflix.com"
     override var name = "Pantyflix"
     override val supportedTypes = setOf(
