@@ -25,18 +25,37 @@ class GokuHDProvider : MainAPI() {
     )
 
     private val cookies = mapOf(
-        "_ga" to "GA1.1.1629448397.1794059276",
-        "domain-alert" to "1",
-        "fpestid" to "qKEJFcR_c3RLFa6Kn--eeRQW2dShUUkgk5lB1Hx76DaGCwYwnn5wDmCy7qWmMUlFPnD5Zw",
-        "_ga_7BWGJ9MXSS" to "GS2.1.s1794059275\$o1\$g1\$t1794059680\$j60\$l0\$h0"
+        "_ga" to "GA1.1.1334156482.1794195302",
+        "_ga_076NE65BBV" to "GS2.1.s1794205955\$o2\$g0\$t1794205955\$j60\$l0\$h0"
     )
 
     override val mainPage = mainPageOf(
         "$mainUrl/" to "Home / Latest",
-        "$mainUrl/series/hindi-dubbed-series/" to "Hindi Dubbed Series",
-        "$mainUrl/movies/hindi-dubbed-movies/" to "Hindi Dubbed Movies",
+        "$mainUrl/series/hindi-dubbed-series/" to "Series",
+        "$mainUrl/movies/hindi-dubbed-movies/" to "Movies",
         "$mainUrl/ongoing-series/" to "Ongoing Series",
-        "$mainUrl/trending/" to "Trending Anime"
+        "$mainUrl/trending/" to "Trending Anime",
+        // Languages
+        "$mainUrl/language/hindi/" to "Language: Hindi",
+        "$mainUrl/language/english/" to "Language: English",
+        "$mainUrl/language/japanese/" to "Language: Japanese",
+        // Genres
+        "$mainUrl/genres/action/" to "Genre: Action",
+        "$mainUrl/genres/adventure/" to "Genre: Adventure",
+        "$mainUrl/genres/comedy/" to "Genre: Comedy",
+        "$mainUrl/genres/dark-fantasy/" to "Genre: Dark Fantasy",
+        "$mainUrl/genres/drama/" to "Genre: Drama",
+        "$mainUrl/genres/ecchi/" to "Genre: Ecchi",
+        "$mainUrl/genres/fantasy/" to "Genre: Fantasy",
+        "$mainUrl/genres/harem/" to "Genre: Harem",
+        "$mainUrl/genres/historical/" to "Genre: Historical",
+        "$mainUrl/genres/horror/" to "Genre: Horror",
+        "$mainUrl/genres/isekai/" to "Genre: Isekai",
+        "$mainUrl/genres/magic/" to "Genre: Magic",
+        "$mainUrl/genres/mystery/" to "Genre: Mystery",
+        "$mainUrl/genres/psychological/" to "Genre: Psychological",
+        "$mainUrl/genres/romance/" to "Genre: Romance",
+        "$mainUrl/genres/school/" to "Genre: School"
     )
 
     override suspend fun getMainPage(
@@ -57,7 +76,7 @@ class GokuHDProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val titleEl = this.selectFirst(".entry-title a") ?: return null
+        val titleEl = this.selectFirst(".entry-title a") ?: this.selectFirst("h2.entry-title a") ?: return null
         val title = titleEl.text()
         val href = fixUrl(titleEl.attr("href"))
         val posterUrl = fixUrl(this.selectFirst(".post-image img")?.attr("src") ?: "")
@@ -83,6 +102,7 @@ class GokuHDProvider : MainAPI() {
 
         val title = document.selectFirst(".single-post-title")?.text() 
             ?: document.selectFirst("h1.entry-title")?.text() 
+            ?: document.selectFirst("h2.entry-title")?.text() 
             ?: "Anime"
             
         val poster = fixUrl(
@@ -93,19 +113,22 @@ class GokuHDProvider : MainAPI() {
         
         val description = document.selectFirst(".xp-plot-box")?.text() 
             ?: document.selectFirst(".entry-content")?.text()
+            ?: document.selectFirst(".entry-summary")?.text()
 
         val episodes = ArrayList<Episode>()
 
-        document.select(".single-entry-body a, .xp-download-btn, a.btn-download").forEachIndexed { index, element ->
+        document.select("a.wp-download-btn, a.xp-download-btn, a.btn-download, .single-entry-body a, .entry-content a").forEachIndexed { index, element ->
             val epName = element.text()
             val epLink = element.attr("href")
-            if (epLink.startsWith("http") && !epLink.contains("telegram.dog") && !epLink.contains("whatsapp")) {
-                episodes.add(
-                    newEpisode(epLink) {
-                        this.name = if (epName.isNotBlank()) epName else "Episode ${index + 1}"
-                        this.episode = index + 1
-                    }
-                )
+            if (epLink.startsWith("http") && !epLink.contains("telegram.dog") && !epLink.contains("whatsapp") && !epLink.contains("facebook.com") && !epLink.contains("twitter.com")) {
+                if (episodes.none { it.data == epLink }) {
+                    episodes.add(
+                        newEpisode(epLink) {
+                            this.name = if (epName.isNotBlank() && epName.length < 50) epName else "Episode ${episodes.size + 1}"
+                            this.episode = episodes.size + 1
+                        }
+                    )
+                }
             }
         }
 
@@ -114,11 +137,13 @@ class GokuHDProvider : MainAPI() {
         return if (tvType == TvType.AnimeMovie) {
             newMovieLoadResponse(title, url, TvType.AnimeMovie, episodes.firstOrNull()?.data ?: url) {
                 this.posterUrl = poster
+                this.posterHeaders = headers
                 this.plot = description
             }
         } else {
             newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
                 this.posterUrl = poster
+                this.posterHeaders = headers
                 this.plot = description
             }
         }
