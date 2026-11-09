@@ -23,7 +23,6 @@ class PantyflixProvider : MainAPI() {
             val homePageList = mutableListOf<HomePageList>()
             val scriptData = document.select("script").html()
             
-            // 1. Trending / Featured Items from Next.js Script or DOM
             val heroItems = mutableListOf<SearchResponse>()
             val movieRegex = """"id":\s*(\d+),\s*"media_type":\s*"(movie|tv)",\s*"title":\s*"([^"]+)",\s*"poster_path":\s*"([^"]+)"""".toRegex()
             
@@ -52,7 +51,6 @@ class PantyflixProvider : MainAPI() {
                 homePageList.add(HomePageList("Trending Right Now", heroItems.distinctBy { it.url }))
             }
 
-            // 2. Platforms / Studios Rows
             val studioList = listOf(
                 Pair("Netflix", "$mainUrl/platforms/8/movie"),
                 Pair("Amazon Prime Video", "$mainUrl/platforms/9/movie"),
@@ -83,7 +81,6 @@ class PantyflixProvider : MainAPI() {
                 }
             }
 
-            // 3. Popular Genres Rows
             val genresList = listOf(
                 Pair("Comedy", "$mainUrl/movies?genre=35"),
                 Pair("Action", "$mainUrl/movies?genre=28"),
@@ -189,9 +186,10 @@ class PantyflixProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data).document
-        val iframeSrc = document.select("iframe").attr("src")
+        val response = app.get(data)
+        val document = response.document
 
+        val iframeSrc = document.select("iframe").attr("src")
         if (!iframeSrc.isNullOrEmpty()) {
             val fullEmbedUrl = if (iframeSrc.startsWith("//")) "https:$iframeSrc" else iframeSrc
             loadExtractor(fullEmbedUrl, data, subtitleCallback, callback)
@@ -201,19 +199,37 @@ class PantyflixProvider : MainAPI() {
         document.select("source, video").forEach { srcEl ->
             val src = srcEl.attr("src")
             if (src.isNotBlank()) {
-                callback(
-                    ExtractorLink(
-                        name,
-                        name,
-                        src,
-                        data,
-                        Qualities.Unknown.value,
-                        isM3u8 = src.contains(".m3u8")
+                val fullUrl = if (src.startsWith("//")) "https:$src" else src
+                val isM3u8 = fullUrl.contains(".m3u8")
+
+                if (isM3u8) {
+                    M3u8Helper.generateManifestUrl(name, fullUrl, data).forEach { link ->
+                        callback(link)
+                    }
+                } else {
+                    callback(
+                        newExtractorLink(
+                            name = name,
+                            source = name,
+                            url = fullUrl,
+                            quality = Qualities.Unknown.value
+                        ) {
+                            this.referer = data
+                        }
                     )
-                )
+                }
             }
         }
-        
-        return false
+
+        val scriptData = document.select("script").html()
+        val m3u8Regex = """https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""".toRegex()
+        m3u8Regex.findAll(scriptData).forEach { match ->
+            val m3u8Url = match.value
+            M3u8Helper.generateManifestUrl(name, m3u8Url, data).forEach { link ->
+                callback(link)
+            }
+        }
+
+        return true
     }
 }
