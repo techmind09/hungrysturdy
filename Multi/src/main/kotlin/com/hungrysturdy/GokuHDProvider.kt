@@ -90,7 +90,7 @@ class GokuHDProvider : MainAPI() {
         }
     }
 
-        override suspend fun search(query: String): List<SearchResponse> {
+    override suspend fun search(query: String): List<SearchResponse> {
         val searchUrl = "$mainUrl/?s=$query"
         val document = app.get(searchUrl, headers = headers, cookies = cookies).document
         
@@ -105,7 +105,6 @@ class GokuHDProvider : MainAPI() {
             ?: document.selectFirst("h2.entry-title")?.text() 
             ?: "Anime"
             
-        // Fixed Poster Selector to check OpenGraph meta tag first (which has the correct poster URL)
         val poster = fixUrl(
             document.selectFirst("meta[property='og:image']")?.attr("content")
                 ?: document.selectFirst(".single-entry-body img")?.attr("src") 
@@ -119,8 +118,7 @@ class GokuHDProvider : MainAPI() {
 
         val episodes = ArrayList<Episode>()
 
-        // Improved selector to catch all download buttons and links inside the article body
-        document.select("a.wp-download-btn, a.xp-download-btn, a.btn-download, .single-entry-body a").forEachIndexed { _, element ->
+        document.select("a.wp-download-btn, a.xp-download-btn, a.btn-download, .single-entry-body a, a.btn").forEachIndexed { _, element ->
             val epName = element.text()
             val epLink = element.attr("href")
             if (epLink.startsWith("http") && 
@@ -128,7 +126,7 @@ class GokuHDProvider : MainAPI() {
                 !epLink.contains("whatsapp") && 
                 !epLink.contains("facebook.com") && 
                 !epLink.contains("twitter.com") &&
-                !epLink.contains("imgbb.fit") // Ignore screenshot image links
+                !epLink.contains("imgbb.fit")
             ) {
                 if (episodes.none { it.data == epLink }) {
                     episodes.add(
@@ -164,20 +162,40 @@ class GokuHDProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data, headers = headers, cookies = cookies).document
-        
-        val links = document.select("a.wp-download-btn, a.xp-download-btn, .single-entry-body a, a.btn-download")
-        for (linkEl in links) {
-            val href = linkEl.attr("href")
-            if (href.startsWith("http")) {
-                loadExtractor(href, data, subtitleCallback, callback)
+        try {
+            // Agar data direct fastdl ya vegadrive link hai toh handle karein
+            if (data.contains("fastdl.beer") || data.contains("vglist")) {
+                val doc = app.get(data, headers = headers, cookies = cookies).document
+                val directLink = doc.selectFirst("a.btn-download, a#download, a:contains(Download Now), a:contains(Vegadrop)")?.attr("href")
+                    ?: doc.selectFirst("a[href*='googleusercontent']")?.attr("href")
+                if (!directLink.isNullOrBlank()) {
+                    loadExtractor(directLink, data, subtitleCallback, callback)
+                    return true
+                }
             }
-        }
-        
-        if (data.startsWith("http") && !data.contains("gokuhd.cc")) {
-            loadExtractor(data, data, subtitleCallback, callback)
-        }
 
-        return true
+            val document = app.get(data, headers = headers, cookies = cookies).document
+            
+            // Sabhi buttons aur embed links ko match karne ke liye comprehensive selector
+            val links = document.select("a.wp-download-btn, a.xp-download-btn, .single-entry-body a, a.btn-download, a.btn, div.download-links a, center a")
+            var found = false
+
+            for (linkEl in links) {
+                val href = linkEl.attr("href")
+                if (href.startsWith("http")) {
+                    loadExtractor(href, data, subtitleCallback, callback)
+                    found = true
+                }
+            }
+            
+            if (!found && data.startsWith("http") && !data.contains("gokuhd.cc")) {
+                loadExtractor(data, data, subtitleCallback, callback)
+                found = true
+            }
+
+            return found
+        } catch (e: Exception) {
+            return false
+        }
     }
 }
