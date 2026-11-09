@@ -54,20 +54,10 @@ fun getIndexQuality(str: String?): Int {
     }
 }
 
-suspend fun getLatestBaseUrl(baseUrl: String, source: String): String {
-    return try {
-        val dynamicUrls = app.get("https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json")
-            .parsedSafe<Map<String, String>>()
-        dynamicUrls?.get(source)?.takeIf { it.isNotBlank() } ?: baseUrl
-    } catch (e: Exception) {
-        baseUrl
-    }
-}
-
-open class VCloud : ExtractorApi() {
-    override val name: String = "V-Cloud"
-    override val mainUrl: String = "https://vcloud.*"
-    override val requiresReferer = false
+class GokuHDExtractor : ExtractorApi() {
+    override val name: String = "GokuHD Extractor"
+    override val mainUrl: String = "https://nexdrive.beer"
+    override val requiresReferer: Boolean = false
 
     fun extractPxlUrl(html: String): String? {
         val regex = Regex("""var\s+pxl\s*=\s*["']([^"']+)["']""")
@@ -85,83 +75,105 @@ open class VCloud : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        var baseUrl = getBaseUrl(url)
-
-        val latestBaseUrl = if(url.contains("hubcloud")) {
-            getLatestBaseUrl(baseUrl, "hubcloud")
-        } else {
-            getLatestBaseUrl(baseUrl, "vcloud")
+        if (url.contains("gofile.io") || 
+            url.contains("1fichier.com") ||
+            url.contains("vikingfile") ||
+            url.contains("buzzheavier")
+        ) {
+            loadExtractor(url, referer ?: mainUrl, subtitleCallback, callback)
+            return
         }
 
-        var newUrl = url
+        if (url.contains("fastdl.beer") || url.contains("vglist")) {
+            val doc = app.get(url).document
+            val directLink = doc.selectFirst("a.btn-download, a#download, a:contains(Download Now)")?.attr("href")
+                ?: doc.selectFirst("a[href*='googleusercontent']")?.attr("href")
 
-        if(baseUrl != latestBaseUrl) {
-            newUrl = url.replace(baseUrl, latestBaseUrl)
-            baseUrl = latestBaseUrl
-        }
-
-        val doc = app.get(newUrl).document
-
-        var link = if(newUrl.contains("/video/")) {
-            doc.selectFirst("div.vd > center > a") ?. attr("href") ?: ""
-        }
-        else {
-            val scriptTag = doc.selectFirst("script:containsData(url)")?.toString() ?: ""
-
-            if(newUrl.contains("vcloud")) {
-                extractDoubleAtob(scriptTag) ?: ""
-            } else {
-                Regex("var url = '([^']*)'").find(scriptTag) ?. groupValues ?. get(1) ?: ""
+            if (!directLink.isNullOrBlank()) {
+                callback.invoke(
+                    newExtractorLink(
+                        name,
+                        "$name [10Gbps FastDL]",
+                        directLink,
+                        ExtractorLinkType.VIDEO
+                    ) {
+                        this.quality = Qualities.Unknown.value
+                        this.referer = url
+                    }
+                )
             }
+            return
         }
 
-        if(!link.startsWith("https://")) link = baseUrl + link
+        val baseUrl = getBaseUrl(url)
+        val doc = try {
+            app.get(url).document
+        } catch (e: Exception) {
+            app.get(url).document
+        }
 
-        val document = app.get(link).document
-        val header = document.select("div.card-header").text()
-        val size = document.select("i#size").text()
+        val header = doc.select("div.card-header, h4, .title").text()
+        val size = doc.select("i#size, .size").text()
         val quality = getIndexQuality(header)
 
-        suspend fun myCallback( link: String, server: String = "") {
-            callback.invoke(
-                newExtractorLink(
-                    "${name}${server}",
-                    "${name}${server} ${header}[${size}]",
-                    link,
-                    ExtractorLinkType.VIDEO
-                ) {
-                    this.quality = quality
-                }
-            )
+        suspend fun myCallback(lnk: String, server: String = "") {
+            if (lnk.isBlank()) return
+            if (lnk.contains("hubcloud") || lnk.contains("filepress") || lnk.contains("drive.google") || lnk.contains("vegadrive") || lnk.contains("nexdrive")) {
+                loadExtractor(lnk, url, subtitleCallback, callback)
+            } else {
+                callback.invoke(
+                    newExtractorLink(
+                        "$name$server",
+                        "$name$server $header[$size]",
+                        lnk,
+                        ExtractorLinkType.VIDEO
+                    ) {
+                        this.quality = quality
+                    }
+                )
+            }
         }
 
-        document.select("h2 a.btn").amap {
-            val link = it.attr("href")
+        doc.select("h2 a.btn, a.wp-download-btn, a.btn-download, a.btn, div.download-links a, center a").amap {
+            val lnk = it.attr("href")
             val text = it.text()
 
-            if (text.contains("FSL Server")) myCallback(link, "[FSL Server]")
-            else if (text.contains("FSLv2")) myCallback(link, "[FSLv2 Server]")
-            else if (text.contains("Mega Server")) myCallback(link, "[Mega Server]")
-            else if (text.contains("Download File")) myCallback(link)
-            else if (text.contains("BuzzServer")) {
-                val dlink = app.get("$link/download", referer = link, allowRedirects = false).headers["hx-redirect"] ?: ""
-                val baseUrl = getBaseUrl(link)
-                if(dlink != "") myCallback( baseUrl + dlink, "[BuzzServer]")
+            if (lnk.isBlank() || !lnk.startsWith("http")) return@amap
+
+            if (text.contains("FSL Server")) myCallback(lnk, "[FSL Server]")
+            else if (text.contains("FSLv2")) myCallback(lnk, "[FSLv2 Server]")
+            else if (text.contains("Mega Server") || lnk.contains("transfer.it")) myCallback(lnk, "[Mega/Transferit]")
+            else if (text.contains("G-Direct") || text.contains("Filepress") || text.contains("Vegadrop") || text.contains("Download File")) {
+                myCallback(lnk, if(text.contains("G-Direct")) "[G-Direct]" else "[Filepress]")
             }
-            else if (link.contains("pixeldra")) {
-                val pixelLink = extractPxlUrl(document.toString()) ?: return@amap
+            else if (text.contains("BuzzServer") || text.contains("Buzzheavier")) {
+                val dlink = app.get("$lnk/download", referer = lnk, allowRedirects = false).headers["hx-redirect"] ?: ""
+                val bUrl = getBaseUrl(lnk)
+                if(dlink != "") myCallback(bUrl + dlink, "[BuzzServer]")
+                else myCallback(lnk, "[BuzzServer]")
+            }
+            else if (lnk.contains("pixeldra")) {
+                val pixelLink = extractPxlUrl(doc.toString()) ?: return@amap
                 val baseUrlLink = getBaseUrl(pixelLink)
                 val finalURL = if (pixelLink.contains("download", true)) pixelLink
                 else "$baseUrlLink/api/file/${pixelLink.substringAfterLast("/")}?download"
                 myCallback(finalURL, "[Pixeldrain]")
             }
-            else if (text.contains("Server : 10Gbps")) {
-                var redirectUrl = resolveFinalUrl(link) ?: return@amap
+            else if (text.contains("Server : 10Gbps") || lnk.contains("fastdl.beer")) {
+                var redirectUrl = resolveFinalUrl(lnk) ?: lnk
                 if(redirectUrl.contains("link=")) redirectUrl = redirectUrl.substringAfter("link=")
-                myCallback(redirectUrl, "[Download]")
+                myCallback(redirectUrl, "[10Gbps]")
             }
-            else if (text.contains("Gofile")) loadExtractor(link, "", subtitleCallback, callback)
-            else { Log.d("Error", "No Server matched") }
+            else if (text.contains("Gofile") || lnk.contains("gofile")) {
+                loadExtractor(lnk, "", subtitleCallback, callback)
+            }
+            else {
+                if (lnk.contains("nexdrive") || lnk.contains("hubcloud") || lnk.contains("vegadrive") || lnk.contains("filepress")) {
+                    loadExtractor(lnk, url, subtitleCallback, callback)
+                } else {
+                    myCallback(lnk, if (text.isNotBlank()) " [$text]" else "")
+                }
+            }
         }
     }
 }
