@@ -7,7 +7,6 @@ import android.content.Context
 @CloudstreamPlugin
 class VegaMoviesPlugin : Plugin() {
     override fun load(context: Context) {
-        // Registering VegaMoviesProvider
-        registerMainAPI(VegaMoviesProvider())
+    registerMainAPI(VegaMoviesProvider())
     }
 }
