@@ -76,7 +76,6 @@ class AnimeDubHindiProvider : MainAPI() {
             val a = card.selectFirst("h2.entry-title a, h1.entry-title a, a") ?: continue
             val url = fixUrlNull(a.attr("href")) ?: continue
             
-            // Cleaned up attribute checks to avoid non-nullable Elvis operator warnings
             val rawTitle = a.attr("title").ifBlank { a.text() }
             val title = (rawTitle.ifBlank { card.selectFirst("img")?.attr("alt") ?: "" }).trim()
             if (title.isBlank()) continue
@@ -147,7 +146,6 @@ class AnimeDubHindiProvider : MainAPI() {
 
         val year = Regex("""\b(19|20)\d{2}\b""").find(title)?.groupValues?.get(0)?.toIntOrNull()
 
-        // Check if page contains episode links or list of episodes
         val episodeElements = doc.select("div.entry-content a[href*='episode'], div.entry-content a")
         val episodes = mutableListOf<Episode>()
 
@@ -177,7 +175,6 @@ class AnimeDubHindiProvider : MainAPI() {
             }
         }
 
-        // Default to Movie/Single Episode view if no explicit episode list found
         return newMovieLoadResponse(title, url, TvType.AnimeMovie, url) {
             this.posterUrl = poster
             this.plot = plot
@@ -197,16 +194,14 @@ class AnimeDubHindiProvider : MainAPI() {
             val html = getPage(data)?.text ?: return false
             val doc = Jsoup.parse(html)
 
-            // Extract iframes (embedded video players)
             for (iframe in doc.select("iframe[src]")) {
-                val src = iframe.attr("src") ?: continue
+                val src = iframe.attr("src")
                 if (src.isNotBlank()) {
                     loadExtractor(src, data, subtitleCallback, callback)
                     found = true
                 }
             }
 
-            // Extract direct video source links (.mp4, .mkv, .m3u8)
             for (el in doc.select("source[src], a[href$='.mp4'], a[href$='.mkv'], a[href$='.m3u8']")) {
                 val videoUrl = el.attr("href").ifBlank { el.attr("src") }
                 if (videoUrl.isNotBlank()) {
