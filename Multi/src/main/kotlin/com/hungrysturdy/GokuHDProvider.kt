@@ -17,29 +17,20 @@ class GokuHDProvider : MainAPI() {
     )
     override var lang = "hi"
     override val hasMainPage = true
-    private val userAgent = "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36"
 
-    private val browserHeaders = mapOf(
-        "User-Agent" to userAgent,
+    private val headers = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language" to "en-US,en;q=0.9",
-        "Cookie" to "_ga=GA1.1.1629448397.1794059276; domain-alert=1; fpestid=qKEJFcR_c3RLFa6Kn--eeRQW2dShUUkgk5lB1Hx76DaGCwYwnn5wDmCy7qWmMUlFPnD5Zw; _ga_7BWGJ9MXSS=GS2.1.s1794059275\$o1\$g1\$t1794059680\$j60\$l0\$h0"
+        "Accept-Language" to "en-US,en;q=0.9"
     )
 
-    private val cfMutexMap = ConcurrentHashMap<String, Mutex>()
-    private val cfKillerMap = ConcurrentHashMap<String, CloudflareKiller>()
+    private val cookies = mapOf(
+        "_ga" to "GA1.1.1629448397.1794059276",
+        "domain-alert" to "1",
+        "fpestid" to "qKEJFcR_c3RLFa6Kn--eeRQW2dShUUkgk5lB1Hx76DaGCwYwnn5wDmCy7qWmMUlFPnD5Zw",
+        "_ga_7BWGJ9MXSS" to "GS2.1.s1794059275\$o1\$g1\$t1794059680\$j60\$l0\$h0"
+    )
 
-    private fun mutexFor(url: String): Mutex =
-        cfMutexMap.getOrPut(try { Uri.parse(url).host ?: mainUrl } catch (e: Exception) { mainUrl }) { Mutex() }
-
-    private fun killerFor(url: String): CloudflareKiller =
-        cfKillerMap.getOrPut(try { Uri.parse(url).host ?: mainUrl } catch (e: Exception) { mainUrl }) { CloudflareKiller() }
-
-    private fun isCloudflarePage(response: NiceResponse): Boolean {
-        return response.code in listOf(403, 503)
-    }
-
-    
     override val mainPage = mainPageOf(
         "$mainUrl/" to "Home / Latest",
         "$mainUrl/series/hindi-dubbed-series/" to "Hindi Dubbed Series",
@@ -59,7 +50,7 @@ class GokuHDProvider : MainAPI() {
             "$trimmed/page/$page/"
         }
 
-        val document = app.get(url, headers = getHeaders(), cookies = cookies).document
+        val document = app.get(url, headers = headers, cookies = cookies).document
         val home = document.select("article.post").mapNotNull { it.toSearchResult() }
 
         return newHomePageResponse(request.name, home)
@@ -74,7 +65,7 @@ class GokuHDProvider : MainAPI() {
         val isDub = title.contains("Hindi", true) || title.contains("Dub", true)
         val isSub = title.contains("Sub", true)
 
-        return newMovieSearchResponse(title, href, TvType.Anime) {
+        return newAnimeSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = posterUrl
             this.addDubStatus(isDub, isSub)
         }
@@ -82,13 +73,13 @@ class GokuHDProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val searchUrl = "$mainUrl/?s=$query"
-        val document = app.get(searchUrl, headers = getHeaders(), cookies = cookies).document
+        val document = app.get(searchUrl, headers = headers, cookies = cookies).document
         
         return document.select("article.post").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url, headers = getHeaders(), cookies = cookies).document
+        val document = app.get(url, headers = headers, cookies = cookies).document
 
         val title = document.selectFirst(".single-post-title")?.text() 
             ?: document.selectFirst("h1.entry-title")?.text() 
@@ -139,7 +130,7 @@ class GokuHDProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data, headers = getHeaders(), cookies = cookies).document
+        val document = app.get(data, headers = headers, cookies = cookies).document
         
         val links = document.select("a.wp-download-btn, a.xp-download-btn, .single-entry-body a, a.btn-download")
         for (linkEl in links) {
