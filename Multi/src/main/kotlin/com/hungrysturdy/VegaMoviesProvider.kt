@@ -100,7 +100,7 @@ open class VegaMoviesProvider : MainAPI() {
         val document = app.get(fixUrl(url)).document
         var title = document.select("title").text().replace("Download ", "")
         var posterUrl = document.select("p > img").attr("src")
-        val imdbUrl =  document.select("a[href*=\"imdb\"]").attr("href")
+        val imdbUrl = document.select("a[href*=\"imdb\"]").attr("href")
         val imdbId = imdbUrl.substringAfter("title/").substringBefore("/")
 
         val tvtype = if (
@@ -156,14 +156,14 @@ open class VegaMoviesProvider : MainAPI() {
                     tag.select("a")
                 }
 
-                var unilink = aTags ?. find {
+                var unilink = aTags?.find {
                     it.text().contains("V-Cloud", ignoreCase = true) ||
                     it.text().contains("Episode", ignoreCase = true) ||
                     it.text().contains("Download", ignoreCase = true)
                 }
 
                 if (unilink == null) {
-                    unilink = aTags ?. find {
+                    unilink = aTags?.find {
                         it.text().contains("G-Direct", ignoreCase = true)
                     }
                 }
@@ -198,7 +198,7 @@ open class VegaMoviesProvider : MainAPI() {
 
             for ((key, value) in episodesMap) {
                 val episodeInfo = responseData?.meta?.videos?.find { it.season == key.first && it.episode == key.second }
-                val data = value.map { source->
+                val data = value.map { source ->
                     EpisodeLink(
                         source
                     )
@@ -257,8 +257,7 @@ open class VegaMoviesProvider : MainAPI() {
         val sources = parseJson<ArrayList<EpisodeLink>>(data)
         sources.amap {
             val source = it.source
-            if(source.contains("vcloud")) VCloud().getUrl(source, "", subtitleCallback, callback)
-            else loadExtractor(source, "", subtitleCallback, callback)
+            loadExtractor(source, "", subtitleCallback, callback)
         }
         return true
     }
