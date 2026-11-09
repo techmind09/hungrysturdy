@@ -8,8 +8,6 @@ import android.content.Context
 class Plugin : Plugin() {
     override fun load(context: Context) {
         // All providers should be added in this manner. Please don't edit the providers list directly.
-        registerMainAPI(VegaMoviesProvider())
-        registerMainAPI(AnimeDubHindiProvider())
         registerMainAPI(PrmoviesProvider())
         registerMainAPI(GokuHDProvider())
         registerExtractorAPI(VCloud())
