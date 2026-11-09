@@ -90,11 +90,11 @@ class GokuHDProvider : MainAPI() {
         }
     }
 
-    override suspend fun search(query: String): List<SearchResponse> {
+        override suspend fun search(query: String): List<SearchResponse> {
         val searchUrl = "$mainUrl/?s=$query"
         val document = app.get(searchUrl, headers = headers, cookies = cookies).document
         
-        return document.articleSelect("article.post").mapNotNull { it.toSearchResult() }
+        return document.select("article.post").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse {
