@@ -203,17 +203,23 @@ class PantyflixProvider : MainAPI() {
                 val isM3u8 = fullUrl.contains(".m3u8")
 
                 if (isM3u8) {
-                    M3u8Helper.generateManifestUrl(name, fullUrl, data).forEach { link ->
+                    // Safe M3U8 handling using standard Cloudstream helper
+                    M3u8Helper.generateM3u8(
+                        name,
+                        fullUrl,
+                        data
+                    ).forEach { link ->
                         callback(link)
                     }
                 } else {
                     callback(
                         newExtractorLink(
-                            name = name,
                             source = name,
+                            name = name,
                             url = fullUrl,
-                            quality = Qualities.Unknown.value
+                            type = ExtractorLinkType.VIDEO
                         ) {
+                            this.quality = Qualities.Unknown.value
                             this.referer = data
                         }
                     )
@@ -225,7 +231,11 @@ class PantyflixProvider : MainAPI() {
         val m3u8Regex = """https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""".toRegex()
         m3u8Regex.findAll(scriptData).forEach { match ->
             val m3u8Url = match.value
-            M3u8Helper.generateManifestUrl(name, m3u8Url, data).forEach { link ->
+            M3u8Helper.generateM3u8(
+                name,
+                m3u8Url,
+                data
+            ).forEach { link ->
                 callback(link)
             }
         }
