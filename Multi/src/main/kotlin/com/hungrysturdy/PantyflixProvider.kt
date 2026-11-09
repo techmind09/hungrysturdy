@@ -17,15 +17,15 @@ class PantyflixProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = request.data.ifEmpty { mainUrl }
-        val document = Jsoup.connect(url).get()
+        val document = app.get(url).document
 
         if (request.data.isEmpty()) {
             val homePageList = mutableListOf<HomePageList>()
             val scriptData = document.select("script").html()
             
-            // 1. Featured / Trending Items
+            // 1. Trending / Featured Items
             val heroItems = mutableListOf<SearchResponse>()
-            val movieRegex = """"id":(\d+),"media_type":"(movie|tv)","title":"([^"]+)","poster_path":"([^"]+)"""".toRegex()
+            val movieRegex = """"id":\s*(\d+),\s*"media_type":\s*"(movie|tv)",\s*"title":\s*"([^"]+)",\s*"poster_path":\s*"([^"]+)"""".toRegex()
             
             movieRegex.findAll(scriptData).forEach { matchResult ->
                 val (id, type, title, posterPath) = matchResult.destructured
@@ -46,7 +46,7 @@ class PantyflixProvider : MainAPI() {
                 homePageList.add(HomePageList("Trending Right Now", heroItems.distinctBy { it.url }))
             }
 
-            // 2. Studios / Platforms List with correct /platforms/{id}/movie format
+            // 2. Platforms / Studios List with their individual rows
             val studioList = listOf(
                 Pair("Netflix", "$mainUrl/platforms/8/movie"),
                 Pair("Amazon Prime Video", "$mainUrl/platforms/9/movie"),
@@ -62,12 +62,43 @@ class PantyflixProvider : MainAPI() {
                 Pair("Discovery+", "$mainUrl/platforms/531/movie")
             )
 
-            val studioSearchResponses = studioList.map { (name, link) ->
-                newMovieSearchResponse(name, link, TvType.Movie) {
-                    this.posterUrl = "https://via.placeholder.com/300x180/1a1a1a/ffffff?text=$name"
+            // Har platform ke liye alag row fetch karna
+            for ((studioName, studioUrl) in studioList) {
+                try {
+                    val studioDoc = app.get(studioUrl).document
+                    val studioItems = mutableListOf<SearchResponse>()
+
+                    studioDoc.select("a[href*=/movie/], a[href*=/tv/], a[href*=/watch/]").forEach { element ->
+                        val href = element.attr("href")
+                        val title = element.text().ifEmpty { element.select("span, p, img").attr("alt") }
+                        val poster = element.select("img").attr("src")
+
+                        if (title.isNotBlank()) {
+                            val isMovie = href.contains("movie")
+                            val mediaType = if (isMovie) TvType.Movie else TvType.TvSeries
+                            val fullUrl = if (href.startsWith("http")) href else mainUrl + href
+                            
+                            studioItems.add(
+                                if (isMovie) {
+                                    newMovieSearchResponse(title, fullUrl, mediaType) {
+                                        this.posterUrl = poster
+                                    }
+                                } else {
+                                    newTvSeriesSearchResponse(title, fullUrl, mediaType) {
+                                        this.posterUrl = poster
+                                    }
+                                }
+                            )
+                        }
+                    }
+
+                    if (studioItems.isNotEmpty()) {
+                        homePageList.add(HomePageList(studioName, studioItems.distinctBy { it.url }))
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
             }
-            homePageList.add(HomePageList("Studios & Platforms", studioSearchResponses))
 
             // 3. Popular Genres List
             val genresList = listOf(
@@ -76,27 +107,45 @@ class PantyflixProvider : MainAPI() {
                 Pair("Drama", "$mainUrl/movies?genre=18"),
                 Pair("Horror", "$mainUrl/movies?genre=27"),
                 Pair("Romance", "$mainUrl/movies?genre=10749"),
-                Pair("Adventure", "$mainUrl/movies?genre=12"),
-                Pair("Science Fiction", "$mainUrl/movies?genre=878"),
-                Pair("Thriller", "$mainUrl/movies?genre=53"),
-                Pair("Animation", "$mainUrl/movies?genre=16"),
-                Pair("Crime", "$mainUrl/movies?genre=80"),
-                Pair("Fantasy", "$mainUrl/movies?genre=14"),
-                Pair("Mystery", "$mainUrl/movies?genre=9648"),
-                Pair("Documentary", "$mainUrl/movies?genre=99"),
-                Pair("Family", "$mainUrl/movies?genre=10751"),
-                Pair("History", "$mainUrl/movies?genre=36"),
-                Pair("Music", "$mainUrl/movies?genre=10402"),
-                Pair("War", "$mainUrl/movies?genre=10752"),
-                Pair("Western", "$mainUrl/movies?genre=37")
+                Pair("Adventure", "$mainUrl/movies?genre=12")
             )
 
-            val genreSearchResponses = genresList.map { (genreName, link) ->
-                newMovieSearchResponse(genreName, link, TvType.Movie) {
-                    this.posterUrl = "https://via.placeholder.com/300x180/222222/ffffff?text=$genreName"
+            for ((genreName, genreUrl) in genresList) {
+                try {
+                    val genreDoc = app.get(genreUrl).document
+                    val genreItems = mutableListOf<SearchResponse>()
+
+                    genreDoc.select("a[href*=/movie/], a[href*=/tv/], a[href*=/watch/]").forEach { element ->
+                        val href = element.attr("href")
+                        val title = element.text().ifEmpty { element.select("span, p, img").attr("alt") }
+                        val poster = element.select("img").attr("src")
+
+                        if (title.isNotBlank()) {
+                            val isMovie = href.contains("movie")
+                            val mediaType = if (isMovie) TvType.Movie else TvType.TvSeries
+                            val fullUrl = if (href.startsWith("http")) href else mainUrl + href
+                            
+                            genreItems.add(
+                                if (isMovie) {
+                                    newMovieSearchResponse(title, fullUrl, mediaType) {
+                                        this.posterUrl = poster
+                                    }
+                                } else {
+                                    newTvSeriesSearchResponse(title, fullUrl, mediaType) {
+                                        this.posterUrl = poster
+                                    }
+                                }
+                            )
+                        }
+                    }
+
+                    if (genreItems.isNotEmpty()) {
+                        homePageList.add(HomePageList("Genre: $genreName", genreItems.distinctBy { it.url }))
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
             }
-            homePageList.add(HomePageList("Popular Genres", genreSearchResponses))
 
             return newHomePageResponse(homePageList)
         } else {
@@ -132,7 +181,7 @@ class PantyflixProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val searchUrl = "$mainUrl/search?q=$query"
-        val document = Jsoup.connect(searchUrl).get()
+        val document = app.get(searchUrl).document
         val results = mutableListOf<SearchResponse>()
 
         document.select("a[href*=/movie/], a[href*=/tv/], a[href*=/watch/]").forEach { element ->
@@ -163,7 +212,7 @@ class PantyflixProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = Jsoup.connect(url).get()
+        val document = app.get(url).document
         val title = document.select("meta[property=og:title]").attr("content")
             .ifEmpty { document.title() }
         val poster = document.select("meta[property=og:image]").attr("content")
@@ -190,7 +239,7 @@ class PantyflixProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = Jsoup.connect(data).get()
+        val document = app.get(data).document
         val iframeSrc = document.select("iframe").attr("src")
 
         if (iframeSrc.isNotEmpty()) {
@@ -202,4 +251,3 @@ class PantyflixProvider : MainAPI() {
         return false
     }
 }
-
