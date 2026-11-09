@@ -56,6 +56,7 @@ fun getIndexQuality(str: String?): Int {
 
 suspend fun getLatestBaseUrl(baseUrl: String, source: String): String {
     return try {
+        // Explicit type parameter added here to fix compilation error
         val dynamicUrls = app.get("https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json")
             .parsedSafe>()
         dynamicUrls?.get(source)?.takeIf { it.isNotBlank() } ?: baseUrl
@@ -85,7 +86,6 @@ class GokuHDExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // Direct storage/file links handling
         if (url.contains("gofile.io") || 
             url.contains("1fichier.com") ||
             url.contains("vikingfile") ||
@@ -95,7 +95,6 @@ class GokuHDExtractor : ExtractorApi() {
             return
         }
 
-        // FastDL / 10Gbps direct download page handling
         if (url.contains("fastdl.beer") || url.contains("vglist")) {
             val doc = app.get(url).document
             val directLink = doc.selectFirst("a.btn-download, a#download, a:contains(Download Now)")?.attr("href")
@@ -158,7 +157,6 @@ class GokuHDExtractor : ExtractorApi() {
             }
         }
 
-        // Sabhi download buttons aur redirect elements ko parse karna
         doc.select("h2 a.btn, a.wp-download-btn, a.btn-download, a.btn, div.download-links a, center a").amap {
             val lnk = it.attr("href")
             val text = it.text()
