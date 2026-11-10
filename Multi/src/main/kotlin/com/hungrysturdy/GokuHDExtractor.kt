@@ -14,7 +14,7 @@ class GokuHDExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // GokuHDSource se saare resolved servers ki list nikalenge
+        // Ensure GokuHDSource is properly accessed
         val servers = GokuHDSource.resolve(url)
 
         for (server in servers) {
