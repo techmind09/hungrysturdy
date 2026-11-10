@@ -41,8 +41,8 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                     if (!downloadUrl.isNullOrBlank()) {
                         callback(
                             ExtractorLink(
-                                source = name,
-                                name = "$name (FastCDN)",
+                                source = "FastCDN",
+                                name = "FastCDN (10Gbps)",
                                 url = downloadUrl,
                                 referer = url,
                                 quality = Qualities.P1080.value,
@@ -52,24 +52,12 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                     }
                 } catch (_: Exception) {}
             }
-            
-            val directInput = document.selectFirst("input[value*='http']")?.attr("value")
-            if (!directInput.isNullOrBlank()) {
-                callback(
-                    ExtractorLink(
-                        source = name,
-                        name = "$name (Direct)",
-                        url = directInput,
-                        referer = url,
-                        quality = Qualities.P1080.value,
-                        type = ExtractorLinkType.VIDEO
-                    )
-                )
-            }
         } else {
+            // General external hosts (PixelDrain, Voe, Buzzheavier, FileDitch, etc.)
             val links = document.select("a.btn, a.download-btn, a[href*='http']")
             for (element in links) {
                 val href = element.attr("href") ?: continue
+                val text = element.text().lowercase()
                 if (href.startsWith("http") && !href.contains("dramacool.website")) {
                     try {
                         loadExtractor(href, url, subtitleCallback, callback)
