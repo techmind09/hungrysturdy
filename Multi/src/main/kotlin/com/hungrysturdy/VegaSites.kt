@@ -374,13 +374,13 @@ internal object VegaSites {
         """(?i)vglist|telegram|t\.me|imdb|google\.com/search|whatsapp|share|facebook|twitter|pinterest|report"""
     )
 
-    private fun collectButtons(scope: Element, group: QualityGroup) {
+        private fun collectButtons(scope: Element, group: QualityGroup) {
         for (a in scope.select("a[href]")) {
-            val href = a.attr("href").trim()
+            val href = a.attr("href")?.trim() ?: continue
             if (!href.startsWith("http")) continue
             if (buttonJunk.containsMatchIn(href)) continue
-            val label = a.selectFirst("button")?.text()?.replace(Regex("""\s+"""), " ").trim()
-                ?: a.text().replace(Regex("""\s+"""), " ").trim()
+            val label = a.selectFirst("button")?.text()?.replace(Regex("""\s+"""), " ")?.trim()
+                ?: a.text()?.replace(Regex("""\s+"""), " ")?.trim() ?: continue
             if (label.isBlank()) continue
             if (Regex("""(?i)batch|zip\b|\.rar|\.7z""").containsMatchIn(label)) continue
             if (GokuHDSources.isServerLink(href)) {
@@ -388,4 +388,3 @@ internal object VegaSites {
             }
         }
     }
-}
