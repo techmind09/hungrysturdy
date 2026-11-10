@@ -36,12 +36,13 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 } 
                 else if (href.endsWith(".mp4") || href.endsWith(".mkv")) {
                     callback(
-                        newExtractorLink(
-                            name,
-                            "$name - $title",
-                            href,
-                            url,
-                            getQualityFromName(title)
+                        ExtractorLink(
+                            source = name,
+                            name = "$name - $title",
+                            url = href,
+                            referer = url,
+                            quality = getQualityFromName(title),
+                            type = ExtractorLinkType.VIDEO
                         )
                     )
                 } 
