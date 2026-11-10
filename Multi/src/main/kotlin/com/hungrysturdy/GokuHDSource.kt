@@ -11,7 +11,6 @@ import java.util.concurrent.ConcurrentHashMap
 
 internal object GokuHDSources {
 
-    // megaup serves html, vikingfile sits behind a turnstile
     private val deadHosts = Regex("""(?i)megaup|viking|vik1ng|telegram|t\.me""")
 
     private val buttonJunk = Regex(
@@ -38,7 +37,6 @@ internal object GokuHDSources {
             )
     }
 
-    // the middle hop carries servers or episode sections
     class DrivePage(
         val servers: List<Pair<String, String>>,
         val episodes: Map<Int, List<Pair<String, String>>>
@@ -96,15 +94,39 @@ internal object GokuHDSources {
         return DrivePage(servers.distinctBy { it.second }, episodes)
     }
 
-    // one row per name and quality
     class Server(val name: String, val url: String, val headers: Map<String, String> = emptyMap())
 
-    // every server on the target page comes back named
-    suspend fun resolve(href: String): List<Server> {
+    // Updated resolve supporting episode number filtering for drive pages
+    suspend fun resolve(href: String, episodeNum: Int? = null): List<Server> {
         if (!href.startsWith("http") || deadHosts.containsMatchIn(href)) return emptyList()
         val host = hostOf(href)
         return try {
             when {
+                host.contains("nexdrive") -> {
+                    val page = fetchDrivePage(href) ?: return emptyList()
+                    val out = mutableListOf<Server>()
+                    val targets = if (episodeNum != null) {
+                        page.episodes[episodeNum] ?: page.servers.takeIf { page.episodes.isEmpty() }
+                    } else {
+                        page.servers.ifEmpty { page.episodes.values.flatten() }
+                    }
+                    for ((_, link) in targets.orEmpty()) {
+                        if (link.contains("nexdrive", true)) {
+                            val nested = fetchDrivePage(link)
+                            val innerTargets = if (episodeNum != null) {
+                                nested?.episodes?.get(episodeNum) ?: nested?.servers
+                            } else {
+                                nested?.servers ?: nested?.episodes?.values?.flatten()
+                            }
+                            for ((_, innerLink) in innerTargets.orEmpty()) {
+                                out.addAll(resolve(innerLink, episodeNum))
+                            }
+                        } else {
+                            out.addAll(resolve(link, episodeNum))
+                        }
+                    }
+                    out.distinctBy { it.url }
+                }
                 host.contains("vcloud") -> vcloudServers(href)
                 host.contains("vegadrive") -> listOfNotNull(vegadriveSkydrop(href))
                 host.contains("fastdl") -> fastdlDirect(href)?.let { listOf(Server("G-Direct", it)) } ?: emptyList()
@@ -126,7 +148,6 @@ internal object GokuHDSources {
         ""
     }
 
-    // already the file, just name it
     private fun directServer(href: String): List<Server> {
         val h = href.lowercase()
         return when {
@@ -142,7 +163,6 @@ internal object GokuHDSources {
         return "${VegaNet.originOf(href)}/api/file/$id"
     }
 
-    // vcloud blocks plain clients, this cookie is set on first visit
     private fun vcloudHeaders(referer: String?): Map<String, String> {
         val h = VegaNet.browserHeaders(referer).toMutableMap()
         h["Cookie"] = "xla=s4t"
@@ -152,7 +172,6 @@ internal object GokuHDSources {
     private val vcloudTokenRegex = Regex("""var\s+url\s*=\s*atob\s*\(\s*atob\s*\(\s*['"]([^'"]+)['"]""")
     private val plainUrlRegex = Regex("""var\s+url\s*=\s*['"]([^'"]+)['"]""")
 
-    // token page hides in double base64, it carries every server
     private suspend fun vcloudTarget(url: String): String? {
         val first = VegaNet.fetchWithCf(url, headers = vcloudHeaders(null), timeout = 25L) ?: return null
         val base = VegaNet.originOf(first.url)
@@ -169,7 +188,6 @@ internal object GokuHDSources {
         return target?.takeIf { it.startsWith("http") }
     }
 
-    // name download buttons after their server
     private fun serverNameOf(label: String, href: String): String? {
         val low = label.lowercase()
         val h = href.lowercase()
@@ -211,7 +229,6 @@ internal object GokuHDSources {
             addServer(out, name, href)
         }
 
-        // a second pixeldrain hides in a js var
         Regex("""var\s+pxl\s*=\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1)
             ?.takeIf { it.startsWith("http") && it.contains("pixeldrain") }
             ?.let { addServer(out, "PixelDrain", it) }
@@ -219,7 +236,6 @@ internal object GokuHDSources {
         return out.distinctBy { it.url }
     }
 
-    // named button to its direct file, dead ones stay out
     private suspend fun addServer(out: MutableList<Server>, name: String, href: String) {
         when (name) {
             "10Gbps" -> gpdlDirect(href)?.let { out.add(Server(name, it)) }
@@ -260,7 +276,6 @@ internal object GokuHDSources {
         return out.distinctBy { it.url }
     }
 
-    // vegadrive answers skydrop on the json api only
     private suspend fun vegadriveSkydrop(url: String): Server? {
         val page = try {
             app.get(url, headers = VegaNet.browserHeaders("https://nexdrive.beer/"), timeout = 20L)
@@ -290,7 +305,6 @@ internal object GokuHDSources {
         return null
     }
 
-    // link= param is the file
     private suspend fun fastdlDirect(url: String): String? {
         return try {
             val res = app.get(url, headers = VegaNet.browserHeaders(), timeout = 20L)
@@ -314,12 +328,10 @@ internal object GokuHDSources {
 
     private val filePressId = Regex("""/file/([a-f0-9]{16,40})""")
 
-    // api sits on the short domain
     private suspend fun filepressDirect(url: String): String? {
         val id = filePressId.find(url)?.groupValues?.get(1) ?: return null
         val base = "https://filebee.xyz"
 
-        // dotflix survives, worker hands out expiring links
         val share = filepressTask(id, "dotFlixDownlaod", base)
         if (share != null && share.startsWith("http")) {
             resolveDotFlix(share)?.let { return it }
@@ -387,7 +399,6 @@ internal object GokuHDSources {
         }
     }
 
-    // btoa file code, reversed base64 to the extract endpoint
     private suspend fun resolveDotFlix(shareUrl: String): String? {
         return try {
             val text = app.get(
@@ -425,7 +436,6 @@ internal object GokuHDSources {
         }
     }
 
-    // gofile folders hold samples, biggest child wins
     private suspend fun gofileDirect(url: String): String? {
         val code = url.substringAfterLast("/").substringBefore("#").substringBefore("?")
         if (code.isBlank()) return null
@@ -460,7 +470,6 @@ internal object GokuHDSources {
         }
     }
 
-    // gpdl bounces through a worker and a generator page
     private suspend fun gpdlDirect(url: String): String? {
         var cur = url
         try {
@@ -489,7 +498,6 @@ internal object GokuHDSources {
         pageCache.clear()
     }
 
-    // a ranged get that answers is a file the player can open
     suspend fun alive(url: String, headers: Map<String, String> = emptyMap()): Boolean {
         if (!url.startsWith("http")) return false
         if (url in verified) return true
