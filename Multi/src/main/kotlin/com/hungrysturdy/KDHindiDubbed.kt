@@ -125,15 +125,24 @@ class KDHindiDubbed : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
         
-        val links = document.select("a[href*='momofile'], a[href*='xcloud'], a[href*='tmbcloud'], a[href*='voe'], a[href*='pixeldrain'], a[href*='buzzheavier'], a[href*='fileditch'], a[href*='vikingfile'], a[href*='send.cm'], a.btn, a.button, a.watch-btn, a.download-btn")
+        // Select all download/watch buttons and links on the episode page
+        val links = document.select("a[href], a.btn, a.button, a.watch-btn, a.download-btn")
         
         for (element in links) {
             val link = element.attr("href")?.let { fixUrl(it) } ?: continue
-            if (link.startsWith("http") && !link.contains("dramacool.website")) {
+            if (link.startsWith("http")) {
                 try {
-                    if (link.contains("tmbcloud.dev") || link.contains("tmbcloud.lol") || link.contains("momofile.shop") || link.contains("xcloud.asia")) {
-                        loadExtractor(link, data, subtitleCallback, callback)
-                    } else {
+                    // If it's an internal dramacool redirect page (e.g. /ghkyyugkjyhtj/)
+                    if (link.contains("dramacool.website") && !link.contains("momofile") && !link.contains("xcloud") && !link.contains("tmbcloud")) {
+                        val subDoc = app.get(link).document
+                        val subLinks = subDoc.select("a[href], a.btn, a.download-btn")
+                        for (subEl in subLinks) {
+                            val subHref = subEl.attr("href") ?: continue
+                            if (subHref.startsWith("http") && !subHref.contains("dramacool.website")) {
+                                loadExtractor(subHref, link, subtitleCallback, callback)
+                            }
+                        }
+                    } else if (!link.contains("dramacool.website")) {
                         loadExtractor(link, data, subtitleCallback, callback)
                     }
                 } catch (_: Exception) {}
