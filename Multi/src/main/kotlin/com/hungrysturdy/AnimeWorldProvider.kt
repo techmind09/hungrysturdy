@@ -65,27 +65,12 @@ private const val POLL_INTERVAL_MS = 1000L
 private const val CURSOR_STEP_DP = 10f
 
 object AnimeWorldCFStore {
-    private const val KEY_CF_COOKIES = "ANIMEWORLD_CF_COOKIES"
-    private const val KEY_CF_UA = "ANIMEWORLD_CF_USER_AGENT"
-    private const val KEY_CF_HOST = "ANIMEWORLD_CF_COOKIE_HOST"
-    private const val KEY_CF_TIMESTAMP = "ANIMEWORLD_CF_TIMESTAMP"
-
     @Volatile private var cachedCookies: String? = null
     @Volatile private var cachedUA: String? = null
     @Volatile private var cachedHost: String? = null
     @Volatile private var cachedTimestamp: Long = 0L
-    @Volatile private var initialized = false
 
-    fun init() {
-        if (initialized) return
-        initialized = true
-        try {
-            cachedCookies = CloudStreamApp.getKey<String>(KEY_CF_COOKIES)
-            cachedUA = CloudStreamApp.getKey<String>(KEY_CF_UA)
-            cachedHost = CloudStreamApp.getKey<String>(KEY_CF_HOST)
-            cachedTimestamp = CloudStreamApp.getKey<String>(KEY_CF_TIMESTAMP)?.toLongOrNull() ?: 0L
-        } catch (_: Exception) {}
-    }
+    fun init() {}
 
     fun getCookies(): String? {
         val cookies = cachedCookies
@@ -104,12 +89,6 @@ object AnimeWorldCFStore {
         cachedUA = userAgent
         cachedHost = host
         cachedTimestamp = System.currentTimeMillis()
-        try {
-            CloudStreamApp.setKey(KEY_CF_COOKIES, cookies)
-            CloudStreamApp.setKey(KEY_CF_UA, userAgent)
-            CloudStreamApp.setKey(KEY_CF_HOST, host)
-            CloudStreamApp.setKey(KEY_CF_TIMESTAMP, cachedTimestamp.toString())
-        } catch (_: Exception) {}
     }
 
     fun clear() {
@@ -117,12 +96,6 @@ object AnimeWorldCFStore {
         cachedUA = null
         cachedHost = null
         cachedTimestamp = 0L
-        try {
-            CloudStreamApp.setKey(KEY_CF_COOKIES, "")
-            CloudStreamApp.setKey(KEY_CF_UA, "")
-            CloudStreamApp.setKey(KEY_CF_HOST, "")
-            CloudStreamApp.setKey(KEY_CF_TIMESTAMP, "")
-        } catch (_: Exception) {}
     }
 }
 
