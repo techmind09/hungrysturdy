@@ -118,7 +118,7 @@ class GokuHDProvider : MainAPI() {
                     ?: (index + 1)
 
                 val episodeDataList = listOf(EpisodeLink(epLink, epNum))
-                val jsonEpisodeData = app.toJson(episodeDataList)
+                val jsonEpisodeData = mapper.writeValueAsString(episodeDataList)
 
                 if (episodes.none { it.data == jsonEpisodeData }) {
                     episodes.add(
@@ -134,7 +134,7 @@ class GokuHDProvider : MainAPI() {
         val tvType = if (title.contains("Movie", true)) TvType.AnimeMovie else TvType.Anime
 
         return if (tvType == TvType.AnimeMovie) {
-            val movieData = app.toJson(listOf(EpisodeLink(url, null)))
+            val movieData = mapper.writeValueAsString(listOf(EpisodeLink(url, null)))
             newMovieLoadResponse(title, url, TvType.AnimeMovie, movieData) {
                 this.posterUrl = poster
                 this.plot = description
