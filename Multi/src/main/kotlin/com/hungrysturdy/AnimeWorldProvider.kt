@@ -83,7 +83,7 @@ class AnimeWorldProvider : MainAPI() {
                 val title = el.selectFirst("h2, h3")?.text()?.trim() ?: return@mapNotNull null
                 val poster = el.selectFirst("img")?.let { img ->
                     val src = img.attr("data-src").ifBlank { img.attr("src") }
-                    if (src.startsWith="//")) "https:$src" else src
+                    if (src.startsWith("//")) "https:$src" else src
                 }
                 val tvType = if (link.contains("/movies/")) TvType.AnimeMovie else TvType.Anime
                 newAnimeSearchResponse(title, link, tvType) {
@@ -125,7 +125,7 @@ class AnimeWorldProvider : MainAPI() {
                     val title = el.selectFirst("h2, h3")?.text()?.trim() ?: return@mapNotNull null
                     val poster = el.selectFirst("img")?.let { img ->
                         val src = img.attr("data-src").ifBlank { img.attr("src") }
-                        if (src.startsWith="//")) "https:$src" else src
+                        if (src.startsWith("//")) "https:$src" else src
                     }
                     val tvType = if (link.contains("/movies/")) TvType.AnimeMovie else TvType.Anime
                     newAnimeSearchResponse(title, link, tvType) { this.posterUrl = poster }
@@ -148,11 +148,11 @@ class AnimeWorldProvider : MainAPI() {
             val title = doc.selectFirst("h1")?.text()?.trim() ?: return null
             val poster = doc.selectFirst(".poster img, .post-thumbnail img")?.let { img ->
                 val src = img.attr("data-src").ifBlank { img.attr("src") }
-                if (src.startsWith="//")) "https:$src" else src
+                if (src.startsWith("//")) "https:$src" else src
             }
             val backdrop = doc.selectFirst(".backdrop img, .bg img")?.let { img ->
                 val src = img.attr("data-src").ifBlank { img.attr("src") }
-                if (src.startsWith="//")) "https:$src" else src
+                if (src.startsWith("//")) "https:$src" else src
             }
             val plot = doc.selectFirst(".description, .synopsis, .plot, p")?.text()?.trim()
             val genres = doc.select("a[href*=genre]").map { it.text().trim() }.filter { it.isNotBlank() }
