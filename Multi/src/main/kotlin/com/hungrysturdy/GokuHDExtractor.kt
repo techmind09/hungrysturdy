@@ -14,11 +14,10 @@ class GokuHDExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // Ensure GokuHDSource is properly accessed
-        val servers = GokuHDSource.resolve(url)
+        val servers = GokuHDSources.resolve(url)
 
         for (server in servers) {
-            if (GokuHDSource.alive(server.url, server.headers)) {
+            if (GokuHDSources.alive(server.url, server.headers)) {
                 callback.invoke(
                     newExtractorLink(
                         source = name,
