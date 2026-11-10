@@ -1,5 +1,6 @@
 package com.hungrysturdy
 
+import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
@@ -54,7 +55,6 @@ class KDHindiDubbed : MainAPI() {
         "$mainUrl/category/thailand-drama/page/" to "Thailand Drama",
         "$mainUrl/category/thriller/page/" to "Thriller",
         "$mainUrl/category/youth/page/" to "Youth"
-    )
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
