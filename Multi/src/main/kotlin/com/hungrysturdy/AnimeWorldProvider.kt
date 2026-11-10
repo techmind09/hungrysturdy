@@ -74,7 +74,7 @@ class AnimeWorldProvider : MainAPI() {
                 else -> mainUrl
             }
 
-            val response = app.get(targetUrl)
+            val response = animeWorldGet(targetUrl)
             val doc = Jsoup.parse(response.text)
 
             val allItems = doc.select("li.post, article.post").mapNotNull { el ->
@@ -115,7 +115,7 @@ class AnimeWorldProvider : MainAPI() {
         return try {
             for (pageNum in 1..3) {
                 val encoded = URLEncoder.encode(query, "UTF-8")
-                val response = app.get("$mainUrl/page/$pageNum/?s=$encoded")
+                val response = animeWorldGet("$mainUrl/page/$pageNum/?s=$encoded")
                 val doc = Jsoup.parse(response.text)
                 val items = doc.select("li.post, article.post").mapNotNull { el ->
                     val seriesLink = el.selectFirst("a[href*=/series/]")?.attr("href")
@@ -142,7 +142,7 @@ class AnimeWorldProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         loadFirebaseUrl()
         return try {
-            val response = app.get(url)
+            val response = animeWorldGet(url)
             val doc = Jsoup.parse(response.text)
 
             val title = doc.selectFirst("h1")?.text()?.trim() ?: return null
@@ -248,7 +248,7 @@ class AnimeWorldProvider : MainAPI() {
         if (postId.isBlank()) return emptyList()
         return try {
             val ajaxUrl = "$mainUrl/wp-admin/admin-ajax.php?action=action_select_season&season=$season&post=$postId"
-            val response = app.get(ajaxUrl, headers = mapOf(
+            val response = animeWorldGet(ajaxUrl, headers = mapOf(
                 "Referer" to mainUrl,
                 "X-Requested-With" to "XMLHttpRequest"
             ))
@@ -267,7 +267,7 @@ class AnimeWorldProvider : MainAPI() {
     ): Boolean {
         loadFirebaseUrl()
         return try {
-            val response = app.get(data)
+            val response = animeWorldGet(data)
             val doc = Jsoup.parse(response.text)
 
             val iframes = doc.select("iframe").mapNotNull { el ->
