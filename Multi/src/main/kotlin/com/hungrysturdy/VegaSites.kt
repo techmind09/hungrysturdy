@@ -14,7 +14,6 @@ import org.jsoup.nodes.Element
 
 internal object VegaSites {
 
-    // hosts hop, retired ones stay listed for old urls
     class Site(val id: String, val label: String, val base: String, val aliases: List<String> = emptyList()) {
         val host: String get() = base.substringAfter("://")
         val knownHosts: List<String> get() = listOf(host) + aliases
@@ -177,7 +176,6 @@ internal object VegaSites {
         return parseCards(api, site, html)
     }
 
-    // typesense throws 5xx under load, retry
     suspend fun tsSearch(api: MainAPI, site: Site, query: String, page: Int): List<SearchResponse> {
         val url = "${site.base}/ts-search.php?q=${java.net.URLEncoder.encode(query, "UTF-8")}&page=$page"
         val text = VegaNet.retry(attempts = 3, gapMs = 800L) {
@@ -241,7 +239,6 @@ internal object VegaSites {
             .replace("&quot;", "\"").replace("&lt;", "<").replace("&gt;", ">")
     }
 
-    // proxy host rarely resolves, u= has the poster
     private fun posterFromUrl(raw: String): String? {
         val unescaped = htmlUnescape(raw)
         if (!unescaped.startsWith("http")) return null
@@ -301,7 +298,6 @@ internal object VegaSites {
         val seasons = mutableListOf<SeasonBlock>()
         val movieGroups = mutableListOf<QualityGroup>()
 
-        // season headline then quality headlines with server buttons
         val seasonHeads = content.select("h1, h2").filter { el ->
             Regex("""(?i)season\s*\d+|part\s*\d+""").containsMatchIn(el.text())
         }
@@ -340,7 +336,6 @@ internal object VegaSites {
         }
 
         if (seasons.isEmpty()) {
-            // an h5 quality line followed by a paragraph with the download button
             for (head in content.select("h3, h4, h5")) {
                 val label = head.text().replace(Regex("""\s+"""), " ").trim()
                 if (label.isBlank()) continue
@@ -384,11 +379,11 @@ internal object VegaSites {
             val href = a.attr("href").trim()
             if (!href.startsWith("http")) continue
             if (buttonJunk.containsMatchIn(href)) continue
-            val label = a.selectFirst("button")?.text()?.replace(Regex("""\s+"""), " ")?.trim()
+            val label = a.selectFirst("button")?.text()?.replace(Regex("""\s+"""), " ").trim()
                 ?: a.text().replace(Regex("""\s+"""), " ").trim()
             if (label.isBlank()) continue
             if (Regex("""(?i)batch|zip\b|\.rar|\.7z""").containsMatchIn(label)) continue
-            if (VegaSources.isServerLink(href)) {
+            if (GokuHDSources.isServerLink(href)) {
                 group.links.add(label to href)
             }
         }
