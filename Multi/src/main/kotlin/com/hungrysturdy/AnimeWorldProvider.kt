@@ -10,6 +10,8 @@ import com.lagradost.cloudstream3.app
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
 class AnimeWorldProvider : MainAPI() {
@@ -75,9 +77,9 @@ class AnimeWorldProvider : MainAPI() {
             }
 
             val response = animeWorldGet(targetUrl)
-            val doc = Jsoup.parse(response.text)
+            val doc: Document = Jsoup.parse(response.text)
 
-            val allItems = doc.select("li.post, article.post").mapNotNull { el ->
+            val allItems = doc.select("li.post, article.post").mapNotNull { el: Element ->
                 val link = el.selectFirst("a[href*=/series/], a[href*=/movies/]")?.attr("href") ?: return@mapNotNull null
                 if (link.endsWith("/series/") || link.endsWith("/movies/")) return@mapNotNull null
                 val title = el.selectFirst("h2, h3")?.text()?.trim() ?: return@mapNotNull null
@@ -116,8 +118,8 @@ class AnimeWorldProvider : MainAPI() {
             for (pageNum in 1..3) {
                 val encoded = URLEncoder.encode(query, "UTF-8")
                 val response = animeWorldGet("$mainUrl/page/$pageNum/?s=$encoded")
-                val doc = Jsoup.parse(response.text)
-                val items = doc.select("li.post, article.post").mapNotNull { el ->
+                val doc: Document = Jsoup.parse(response.text)
+                val items = doc.select("li.post, article.post").mapNotNull { el: Element ->
                     val seriesLink = el.selectFirst("a[href*=/series/]")?.attr("href")
                     val movieLink = el.selectFirst("a[href*=/movies/]")?.attr("href")
                     val link = seriesLink ?: movieLink ?: return@mapNotNull null
@@ -143,7 +145,7 @@ class AnimeWorldProvider : MainAPI() {
         loadFirebaseUrl()
         return try {
             val response = animeWorldGet(url)
-            val doc = Jsoup.parse(response.text)
+            val doc: Document = Jsoup.parse(response.text)
 
             val title = doc.selectFirst("h1")?.text()?.trim() ?: return null
             val poster = doc.selectFirst(".poster img, .post-thumbnail img")?.let { img ->
@@ -252,7 +254,7 @@ class AnimeWorldProvider : MainAPI() {
                 "Referer" to mainUrl,
                 "X-Requested-With" to "XMLHttpRequest"
             ))
-            val doc = Jsoup.parse(response.text)
+            val doc: Document = Jsoup.parse(response.text)
             doc.select("a[href*=/episode/]").map { it.attr("href") }.distinct()
         } catch (_: Exception) {
             emptyList()
@@ -268,7 +270,7 @@ class AnimeWorldProvider : MainAPI() {
         loadFirebaseUrl()
         return try {
             val response = animeWorldGet(data)
-            val doc = Jsoup.parse(response.text)
+            val doc: Document = Jsoup.parse(response.text)
 
             val iframes = doc.select("iframe").mapNotNull { el ->
                 val src = el.attr("data-src").ifBlank { el.attr("src") }
