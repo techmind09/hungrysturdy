@@ -3,7 +3,6 @@ package com.hungrysturdy
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.json.JSONObject
-import org.jsoup.Jsoup
 
 class KDHindiDubbedExtractor : ExtractorApi() {
     override val name = "TMBCloud"
@@ -18,7 +17,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
     ) {
         val document = app.get(url, referer = referer).document
         
-        // Check if it's a TMBCloud download page
         if (url.contains("tmbcloud")) {
             val pageId = document.selectFirst("button[data-page]")?.attr("data-page")
             val dataType = document.selectFirst("button[data-page]")?.attr("data-type") ?: "r2"
@@ -28,9 +26,9 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                     val apiRes = app.post(
                         "https://tmbcloud.dev/download/$pageId",
                         headers = mapOf(
-                            "Content-Type"  to "application/x-www-form-urlencoded; charset=UTF-8",
+                            "Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8",
                             "X-Requested-With" to "XMLHttpRequest",
-                            "Referer"       to url
+                            "Referer" to url
                         ),
                         data = mapOf("type" to dataType, "page" to pageId)
                     )
@@ -44,7 +42,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                         callback(
                             ExtractorLink(
                                 source = name,
-                                name = "$name (10Gbps)",
+                                name = "$name (FastCDN)",
                                 url = downloadUrl,
                                 referer = url,
                                 quality = Qualities.P1080.value,
@@ -55,7 +53,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 } catch (_: Exception) {}
             }
             
-            // Fallback: Check if there's any direct input or button link on the page
             val directInput = document.selectFirst("input[value*='http']")?.attr("value")
             if (!directInput.isNullOrBlank()) {
                 callback(
@@ -70,7 +67,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 )
             }
         } else {
-            // General external extractor handling for pixel, voe, buzzheavier, etc.
             val links = document.select("a.btn, a.download-btn, a[href*='http']")
             for (element in links) {
                 val href = element.attr("href") ?: continue
