@@ -1,16 +1,12 @@
 package com.hungrysturdy
 
-import com.lagradost.cloudstream3.ExtractorApi
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.app
-import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.newExtractorLink
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.*
+import org.jsoup.Jsoup
 
-class MomoFileExtractor : ExtractorApi() {
-    override val name = "MomoFile"
-    override val mainUrl = "https://momofile.shop"
+class KDHindiDubbedExtractor : ExtractorApi() {
+    override val name = "KDHindiDubbed"
+    override val mainUrl = "https://dramacool.website"
     override val requiresReferer = true
 
     override suspend fun getUrl(
@@ -19,45 +15,60 @@ class MomoFileExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        // Fetch the page (could be a momofile page or direct watch page)
         val document = app.get(url).document
-        
-        val links = document.select("a.btn, a.btn-success, a[href*='http'], div.dropdown-menu a")
-        
-        // Explicitly casting or iterating safely to avoid ambiguity
+
+        // Select all stream/download buttons or links on the page (PixelDrain, Buzzheavier, FileDitch, xCloud, etc.)
+        val links = document.select("a.btn, a.btn-success, a.button, a[href*='http']")
+
         for (i in 0 until links.size) {
             val link = links[i]
             val href = link.attr("href") ?: continue
-            val title = link.text() ?: "MomoFile Link"
-            
+            val title = link.text().trim().ifEmpty { "Direct Link" }
+
             if (href.startsWith("http")) {
-                if (href.contains("pixeldrain") || href.contains("buzzheavier") || href.contains("fileditch") || href.contains("xcloud")) {
-                    loadExtractor(href, url, subtitleCallback, callback)
-                } else if (href.endsWith(".mp4") || href.endsWith(".mkv")) {
+                // If it points to external supported hosting/extractor sites, route via Cloudstream's loadExtractor
+                if (href.contains("pixeldrain") || 
+                    href.contains("buzzheavier") || 
+                    href.contains("fileditch") || 
+                    href.contains("xcloud") || 
+                    href.contains("vikingfile") || 
+                    href.contains("send.now")) {
+                    try {
+                        loadExtractor(href, url, subtitleCallback, callback)
+                    } catch (_: Exception) {}
+                } 
+                // If it's a direct video file link (.mp4 / .mkv)
+                else if (href.endsWith(".mp4") || href.endsWith(".mkv")) {
                     callback(
                         newExtractorLink(
                             source = name,
                             name = "$name - $title",
                             url = href,
                             referer = url,
-                            quality = Qualities.Unknown.value
+                            quality = getQualityFromName(title)
                         )
                     )
-                } else {
+                } 
+                // For other potential intermediate redirect/embed links, try loading them recursively
+                else if (!href.contains("dramacool.website") && !href.contains("momofile.shop")) {
                     try {
                         loadExtractor(href, url, subtitleCallback, callback)
-                    } catch (e: Exception) {
-                        callback(
-                            newExtractorLink(
-                                source = name,
-                                name = "$name - $title",
-                                url = href,
-                                referer = url,
-                                quality = Qualities.Unknown.value
-                            )
-                        )
-                    }
+                    } catch (_: Exception) {}
                 }
             }
+        }
+    }
+
+    private fun getQualityFromName(title: String): Int {
+        val lower = title.lowercase()
+        return when {
+            lower.contains("2160p") || lower.contains("4k") -> Qualities.P2160.value
+            lower.contains("1080p") -> Qualities.P1080.value
+            lower.contains("720p") -> Qualities.P720.value
+            lower.contains("480p") -> Qualities.P480.value
+            lower.contains("360p") -> Qualities.P360.value
+            else -> Qualities.Unknown.value
         }
     }
 }
