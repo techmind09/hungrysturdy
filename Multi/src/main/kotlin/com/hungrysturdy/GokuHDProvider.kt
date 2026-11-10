@@ -19,41 +19,25 @@ class GokuHDProvider : MainAPI() {
     override val hasMainPage = true
 
     private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36",
-        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language" to "en-US,en;q=0.9"
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 14; HEY2-W09) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language" to "en-US,en;q=0.9",
+        "Referer" to "$mainUrl/"
     )
 
     private val cookies = mapOf(
-        "_ga" to "GA1.1.1334156482.1794195302",
-        "_ga_076NE65BBV" to "GS2.1.s1794205955\$o2\$g0\$t1794205955\$j60\$l0\$h0"
+        "_ga" to "GA1.1.1629448397.1794059276",
+        "domain-alert" to "1",
+        "fpestid" to "qKEJFcR_c3RLFa6Kn--eeRQW2dShUUkgk5lB1Hx76DaGCwYwnn5wDmCy7qWmMUlFPnD5Zw",
+        "_ga_7BWGJ9MXSS" to "GS2.1.s1794059275\$o1\$g1\$t1794059680\$j60\$l0\$h0"
     )
 
     override val mainPage = mainPageOf(
         "$mainUrl/" to "Home / Latest",
-        "$mainUrl/series/hindi-dubbed-series/" to "Series",
-        "$mainUrl/movies/hindi-dubbed-movies/" to "Movies",
+        "$mainUrl/series/hindi-dubbed-series/" to "Hindi Dubbed Series",
+        "$mainUrl/movies/hindi-dubbed-movies/" to "Hindi Dubbed Movies",
         "$mainUrl/ongoing-series/" to "Ongoing Series",
-        "$mainUrl/trending/" to "Trending Anime",
-        "$mainUrl/language/hindi/" to "Language: Hindi",
-        "$mainUrl/language/english/" to "Language: English",
-        "$mainUrl/language/japanese/" to "Language: Japanese",
-        "$mainUrl/genres/action/" to "Genre: Action",
-        "$mainUrl/genres/adventure/" to "Genre: Adventure",
-        "$mainUrl/genres/comedy/" to "Genre: Comedy",
-        "$mainUrl/genres/dark-fantasy/" to "Genre: Dark Fantasy",
-        "$mainUrl/genres/drama/" to "Genre: Drama",
-        "$mainUrl/genres/ecchi/" to "Genre: Ecchi",
-        "$mainUrl/genres/fantasy/" to "Genre: Fantasy",
-        "$mainUrl/genres/harem/" to "Genre: Harem",
-        "$mainUrl/genres/historical/" to "Genre: Historical",
-        "$mainUrl/genres/horror/" to "Genre: Horror",
-        "$mainUrl/genres/isekai/" to "Genre: Isekai",
-        "$mainUrl/genres/magic/" to "Genre: Magic",
-        "$mainUrl/genres/mystery/" to "Genre: Mystery",
-        "$mainUrl/genres/psychological/" to "Genre: Psychological",
-        "$mainUrl/genres/romance/" to "Genre: Romance",
-        "$mainUrl/genres/school/" to "Genre: School"
+        "$mainUrl/trending/" to "Trending Anime"
     )
 
     override suspend fun getMainPage(
@@ -74,7 +58,7 @@ class GokuHDProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val titleEl = this.selectFirst(".entry-title a") ?: this.selectFirst("h2.entry-title a") ?: return null
+        val titleEl = this.selectFirst(".entry-title a") ?: return null
         val title = titleEl.text()
         val href = fixUrl(titleEl.attr("href"))
         val posterUrl = fixUrl(this.selectFirst(".post-image img")?.attr("src") ?: "")
@@ -84,6 +68,7 @@ class GokuHDProvider : MainAPI() {
 
         return newAnimeSearchResponse(title, href, TvType.Anime) {
             this.posterUrl = posterUrl
+            this.posterHeaders = headers
             this.addDubStatus(isDub, isSub)
         }
     }
@@ -91,6 +76,7 @@ class GokuHDProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val searchUrl = "$mainUrl/?s=$query"
         val document = app.get(searchUrl, headers = headers, cookies = cookies).document
+        
         return document.select("article.post").mapNotNull { it.toSearchResult() }
     }
 
@@ -99,12 +85,10 @@ class GokuHDProvider : MainAPI() {
 
         val title = document.selectFirst(".single-post-title")?.text() 
             ?: document.selectFirst("h1.entry-title")?.text() 
-            ?: document.selectFirst("h2.entry-title")?.text() 
             ?: "Anime"
             
         val poster = fixUrl(
-            document.selectFirst("meta[property='og:image']")?.attr("content")
-                ?: document.selectFirst(".single-entry-body img")?.attr("src") 
+            document.selectFirst(".single-entry-body img")?.attr("src") 
                 ?: document.selectFirst(".post-image img")?.attr("src") 
                 ?: ""
         )
@@ -115,20 +99,10 @@ class GokuHDProvider : MainAPI() {
 
         val episodes = ArrayList<Episode>()
 
-        document.select("a.wp-download-btn, a.xp-download-btn, a.btn-download, .single-entry-body a, a.btn, div.btn-danger, button.btn").forEachIndexed { _, element ->
+        document.select("a.wp-download-btn, a.xp-download-btn, a.btn-download, .single-entry-body a, .entry-content a").forEachIndexed { _, element ->
             val epName = element.text()
-            val epLink = element.attr("href").takeIf { it.isNotBlank() } 
-                ?: element.attr("onclick").let { onclick ->
-                    Regex("""openInNewTab\(['"]([^'"]+)['"]\)""").find(onclick)?.groupValues?.get(1)
-                } ?: ""
-
-            if (epLink.startsWith("http") && 
-                !epLink.contains("telegram.dog") && 
-                !epLink.contains("whatsapp") && 
-                !epLink.contains("facebook.com") && 
-                !epLink.contains("twitter.com") &&
-                !epLink.contains("imgbb.fit")
-            ) {
+            val epLink = element.attr("href")
+            if (epLink.startsWith("http") && !epLink.contains("telegram.dog") && !epLink.contains("whatsapp") && !epLink.contains("facebook.com") && !epLink.contains("twitter.com")) {
                 if (episodes.none { it.data == epLink }) {
                     episodes.add(
                         newEpisode(epLink) {
@@ -163,43 +137,41 @@ class GokuHDProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        try {
-            if (data.contains("fastdl.beer") || data.contains("vglist")) {
-                val doc = app.get(data, headers = headers, cookies = cookies).document
-                val directLink = doc.selectFirst("a.btn-download, a#download, a:contains(Download Now), a:contains(Vegadrop)")?.attr("href")
-                    ?: doc.selectFirst("a[href*='googleusercontent']")?.attr("href")
-                if (!directLink.isNullOrBlank()) {
-                    loadExtractor(directLink, data, subtitleCallback, callback)
-                    return true
-                }
-            }
-
-            val document = app.get(data, headers = headers, cookies = cookies).document
-            
-            // Comprehensive selector targeting <a> tags, <button> tags, and <div onclick="..."> elements
-            val elements = document.select("a.wp-download-btn, a.xp-download-btn, .single-entry-body a, a.btn-download, a.btn, div.btn-danger, button.btn, div.download-links a, center a")
-            var found = false
-
-            for (el in elements) {
-                val href = el.attr("href").takeIf { it.isNotBlank() }
-                    ?: el.attr("onclick").let { onclick ->
-                        Regex("""openInNewTab\(['"]([^'"]+)['"]\)""").find(onclick)?.groupValues?.get(1)
-                    } ?: ""
-
-                if (href.startsWith("http")) {
+        // Fetch the target episode/download selection page
+        val document = app.get(data, headers = headers, cookies = cookies).document
+        
+        // Select all download buttons (like G-Direct, Filepress, etc.)
+        val links = document.select("a.wp-download-btn, a.xp-download-btn, a.btn-download, .single-entry-body a, .entry-content a, a[href*='http']")
+        
+        for (linkEl in links) {
+            val href = linkEl.attr("href")
+            if (href.startsWith("http") && !href.contains("telegram.dog") && !href.contains("whatsapp")) {
+                
+                // If it points to an intermediate redirect page (like nexdrive, fastdl, etc.)
+                if (href.contains("gokuhd") || href.contains("nexdrive") || href.contains("fastdl")) {
+                    try {
+                        val subDoc = app.get(href, headers = headers, cookies = cookies).document
+                        // Look for final stream/download links inside the redirected page
+                        subDoc.select("a.btn, a.download-link, a[href*='http'], a.get-link").forEach { subLink ->
+                            val subHref = subLink.attr("href")
+                            if (subHref.startsWith("http") && !subHref.contains("gokuhd") && !subHref.contains("nexdrive")) {
+                                loadExtractor(subHref, href, subtitleCallback, callback)
+                            }
+                        }
+                    } catch (e: Exception) {
+                        // Fallback to direct extractor if sub-request fails
+                        loadExtractor(href, data, subtitleCallback, callback)
+                    }
+                } else {
                     loadExtractor(href, data, subtitleCallback, callback)
-                    found = true
                 }
             }
-            
-            if (!found && data.startsWith("http") && !data.contains("gokuhd.cc")) {
-                loadExtractor(data, data, subtitleCallback, callback)
-                found = true
-            }
-
-            return found
-        } catch (e: Exception) {
-            return false
         }
+        
+        if (data.startsWith("http") && !data.contains("gokuhd.cc")) {
+            loadExtractor(data, data, subtitleCallback, callback)
+        }
+
+        return true
     }
 }
