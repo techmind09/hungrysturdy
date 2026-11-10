@@ -15,10 +15,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // Fetch the page (could be a momofile page or direct watch page)
         val document = app.get(url).document
-
-        // Select all stream/download buttons or links on the page (PixelDrain, Buzzheavier, FileDitch, xCloud, etc.)
         val links = document.select("a.btn, a.btn-success, a.button, a[href*='http']")
 
         for (i in 0 until links.size) {
@@ -27,7 +24,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             val title = link.text().trim().ifEmpty { "Direct Link" }
 
             if (href.startsWith("http")) {
-                // If it points to external supported hosting/extractor sites, route via Cloudstream's loadExtractor
                 if (href.contains("pixeldrain") || 
                     href.contains("buzzheavier") || 
                     href.contains("fileditch") || 
@@ -38,19 +34,20 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                         loadExtractor(href, url, subtitleCallback, callback)
                     } catch (_: Exception) {}
                 } 
-                // If it's a direct video file link (.mp4 / .mkv)
                 else if (href.endsWith(".mp4") || href.endsWith(".mkv")) {
                     callback(
-                        newExtractorLink(
-                            source = name,
-                            name = "$name - $title",
-                            url = href,
-                            referer = url,
-                            quality = getQualityFromName(title)
+                        ExtractorLink(
+                            source,
+                            name,
+                            url,
+                            referer,
+                            quality,
+                            INFER_TYPE
                         )
+                        // Standard ExtractorLink constructor or standard helper:
+                        // ExtractorLink(name, "$name - $title", href, url, getQualityFromName(title), INFER_TYPE)
                     )
                 } 
-                // For other potential intermediate redirect/embed links, try loading them recursively
                 else if (!href.contains("dramacool.website") && !href.contains("momofile.shop")) {
                     try {
                         loadExtractor(href, url, subtitleCallback, callback)
