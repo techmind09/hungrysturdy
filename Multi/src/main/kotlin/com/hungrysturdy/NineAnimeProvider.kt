@@ -7,18 +7,16 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import org.jsoup.Jsoup
 import android.util.Base64
-import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import com.raghav.donation.DonationManager
 
-class GokuHDProvider : MainAPI() {
+class NineAnimeProvider : MainAPI() {
 
     override var mainUrl = "https://9anime.org.lv"
-    override var name = "GokuHD"
+    override var name = "Nine Anime"
     override val hasMainPage = true
-    override var lang = "hi"
+    override var lang = "en"
     override val hasDownloadSupport = false
     override val supportedTypes = setOf(
         TvType.Anime,
@@ -48,18 +46,9 @@ class GokuHDProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        DonationManager.checkAndShow()
-        mainUrl = FirebaseDomainHelper.getDomain("nineanime") ?: mainUrl
-        
         val url = when {
             request.data.isEmpty() -> if (page > 1) "$mainUrl/page/$page/" else "$mainUrl/"
-            request.data.startsWith("genre/") || request.data.startsWith("type/") -> {
-                if (page > 1) "$mainUrl/${request.data}/page/$page/" else "$mainUrl/${request.data}/"
-            }
-            else -> {
-                // For filters like updated, added, ongoing, upcoming if they follow a standard slug pattern
-                if (page > 1) "$mainUrl/${request.data}/page/$page/" else "$mainUrl/${request.data}/"
-            }
+            else -> if (page > 1) "$mainUrl/${request.data}/page/$page/" else "$mainUrl/${request.data}/"
         }
 
         val doc = app.get(url).document
@@ -81,7 +70,6 @@ class GokuHDProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        mainUrl = FirebaseDomainHelper.getDomain("nineanime") ?: mainUrl
         val searchUrl = "$mainUrl/?s=${query.replace(" ", "+")}"
         val doc = app.get(searchUrl).document
         val items = doc.select("article.bs")
@@ -101,7 +89,6 @@ class GokuHDProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        mainUrl = FirebaseDomainHelper.getDomain("nineanime") ?: mainUrl
         var detailUrl = url
         if (!url.contains("/anime/")) {
             val doc = app.get(url).document
@@ -271,18 +258,6 @@ class GokuHDProvider : MainAPI() {
                     } else {
                         false
                     }
-                }
-                embedUrl.contains("megaplay.buzz") -> {
-                    NineAnimeMegaPlay().getUrl(embedUrl, iframeUrl, subtitleCallback, callback)
-                    true
-                }
-                embedUrl.contains("vidmoly.biz") -> {
-                    NineAnimeVidmoly().getUrl(embedUrl, iframeUrl, subtitleCallback, callback)
-                    true
-                }
-                embedUrl.contains("bysesayeveum.com") -> {
-                    NineAnimeMoon().getUrl(embedUrl, iframeUrl, subtitleCallback, callback)
-                    true
                 }
                 else -> {
                     loadExtractor(embedUrl, refererUrl, subtitleCallback, callback)
