@@ -7,7 +7,7 @@ import org.jsoup.nodes.Element
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 
 class GokuHDProvider : MainAPI() {
-    override var mainUrl = "https://gokuhd.cc"
+    override var mainUrl = "https://gokuhd.nl"
     override var name = "GokuHD"
     override val hasMainPage = true
     override var lang = "hi"
@@ -22,18 +22,38 @@ class GokuHDProvider : MainAPI() {
 
     override val mainPage = mainPageOf(
         "$mainUrl/" to "Home / Latest",
-        "$mainUrl/series/hindi-dubbed-series/" to "Series",
-        "$mainUrl/movies/hindi-dubbed-movies/" to "Movies",
+        "$mainUrl/series/" to "Series",
+        "$mainUrl/series/hindi-dubbed-series/" to "Hindi Dubbed Series",
+        "$mainUrl/series/english-dubbed-subbed-series/" to "English Dubbed & Subbed",
+        "$mainUrl/series/hindi-subbed-series/" to "Hindi Subbed Series",
+        "$mainUrl/movies/" to "Movies",
+        "$mainUrl/movies/hindi-dubbed-movies/" to "Hindi Dubbed Movies",
+        "$mainUrl/movies/english-dubbed-subbed-movies/" to "English Dubbed & Subbed Movies",
+        "$mainUrl/movies/hindi-subbed-movies/" to "Hindi Subbed Movies",
         "$mainUrl/ongoing-series/" to "Ongoing Series",
-        "$mainUrl/trending/" to "Trending Anime",
+        "$mainUrl/trending/" to "Trending",
+        // Languages
         "$mainUrl/language/hindi/" to "Language: Hindi",
         "$mainUrl/language/english/" to "Language: English",
         "$mainUrl/language/japanese/" to "Language: Japanese",
+        // Genres
         "$mainUrl/genres/action/" to "Genre: Action",
         "$mainUrl/genres/adventure/" to "Genre: Adventure",
         "$mainUrl/genres/comedy/" to "Genre: Comedy",
+        "$mainUrl/genres/dark-fantasy/" to "Genre: Dark Fantasy",
+        "$mainUrl/genres/drama/" to "Genre: Drama",
+        "$mainUrl/genres/ecchi/" to "Genre: Ecchi",
         "$mainUrl/genres/fantasy/" to "Genre: Fantasy",
-        "$mainUrl/genres/romance/" to "Genre: Romance"
+        "$mainUrl/genres/harem/" to "Genre: Harem",
+        "$mainUrl/genres/historical/" to "Genre: Historical",
+        "$mainUrl/genres/horror/" to "Genre: Horror",
+        "$mainUrl/genres/isekai/" to "Genre: Isekai",
+        "$mainUrl/genres/magic/" to "Genre: Magic",
+        "$mainUrl/genres/mystery/" to "Genre: Mystery",
+        "$mainUrl/genres/psychological/" to "Genre: Psychological",
+        "$mainUrl/genres/romance/" to "Genre: Romance",
+        "$mainUrl/genres/school/" to "Genre: School",
+        "$mainUrl/genres/sci-fi/" to "Genre: Sci-Fi"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -47,20 +67,29 @@ class GokuHDProvider : MainAPI() {
         val html = VegaNet.fetchWithCf(pageUrl, referer = mainUrl)?.text 
             ?: return newHomePageResponse(emptyList(), hasNext = false)
         val doc = Jsoup.parse(html)
-        val home = doc.select("article.post").mapNotNull { it.toSearchResult() }
+        
+        val home = doc.select("a:has(p.poster-title), article, div.post, div.item").mapNotNull { it.toSearchResult() }
 
         return newHomePageResponse(request.name, home, hasNext = home.isNotEmpty())
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val titleEl = this.selectFirst(".entry-title a") ?: this.selectFirst("h2.entry-title a") ?: return null
-        val title = titleEl.text()
-        val href = fixUrl(titleEl.attr("href"))
+        val titleEl = this.selectFirst("p.poster-title") 
+            ?: this.selectFirst(".entry-title a") 
+            ?: this.selectFirst("h2.entry-title a") 
+            ?: this.selectFirst("a[href]")
+            ?: return null
+            
+        val title = titleEl.text().trim()
+        if (title.isBlank()) return null
+        
+        val hrefTag = if (this.tagName() == "a") this else this.selectFirst("a[href]")
+        val href = fixUrl(hrefTag?.attr("href") ?: titleEl.attr("href"))
+        if (href.isBlank()) return null
         
         val posterUrl = fixUrl(
-            this.selectFirst(".post-image img")?.attr("src") 
+            this.selectFirst("img")?.attr("src") 
                 ?: this.selectFirst("img")?.attr("data-src") 
-                ?: this.selectFirst("img")?.attr("src") 
                 ?: ""
         )
 
@@ -74,10 +103,15 @@ class GokuHDProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val searchUrl = "$mainUrl/?s=${query.trim().replace(" ", "+")}"
+        val encodedQuery = java.net.URLEncoder.encode(query.trim(), "UTF-8")
+        val searchUrl = "$mainUrl/?s=$encodedQuery"
+        
         val html = VegaNet.fetchWithCf(searchUrl, referer = mainUrl)?.text ?: return emptyList()
         val doc = Jsoup.parse(html)
-        return doc.select("article.post").mapNotNull { it.toSearchResult() }
+        
+        return doc.select("a:has(p.poster-title), article.post, div.post, div.item, div.result-item")
+            .mapNotNull { it.toSearchResult() }
+            .distinctBy { it.url }
     }
 
     override suspend fun load(url: String): LoadResponse {
