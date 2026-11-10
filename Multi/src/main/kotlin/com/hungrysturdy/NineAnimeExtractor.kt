@@ -1,109 +1,299 @@
 package com.hungrysturdy
 
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.USER_AGENT
-import com.lagradost.cloudstream3.app
-import com.lagradost.cloudstream3.newSubtitleFile
+import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.loadExtractor
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.M3u8Helper
-import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.INFER_TYPE
 import com.lagradost.cloudstream3.utils.getQualityFromName
-import com.google.gson.JsonObject
-import com.google.gson.JsonParser
+import org.jsoup.Jsoup
 import android.util.Base64
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-object MegaPlayCipher {
-    private const val FALLBACK_KEY_SEED = "i?LMTAx0Q6,:}50U"
-    private const val FALLBACK_IV_SEED = "W0;27ToaUpl_P%'c"
+class NineAnime : MainAPI() {
 
-    @Volatile
-    private var cachedSeeds: Pair<String, String>? = null
+    override var mainUrl = "https://9anime.org.lv"
+    override var name = "9anime"
+    override val hasMainPage = true
+    override var lang = "en"
+    override val hasDownloadSupport = false
+    override val supportedTypes = setOf(
+        TvType.Anime,
+        TvType.AnimeMovie,
+        TvType.OVA
+    )
 
-    private val keyPairRegex = Regex("[A-Za-z]\\w*=\"([^\"]{16})\",[A-Za-z]\\w*=\"([^\"]{16})\"")
-    private val fileRegex = Regex("\"file\"\\s*:\\s*\"([^\"]+)\"")
+    override val mainPage = mainPageOf(
+        "" to "Latest Releases",
+        "updated" to "Updated",
+        "added" to "Added",
+        "ongoing" to "Ongoing",
+        "upcoming" to "Upcoming",
+        // Genres
+        "genre/action" to "Action",
+        "genre/avant-garde" to "Avant Garde",
+        "genre/crime" to "Crime",
+        "genre/erotica" to "Erotica",
+        "genre/gourmet" to "Gourmet",
+        "genre/music" to "Music",
+        "genre/sci-fi" to "Sci-Fi",
+        "genre/soap" to "Soap",
+        "genre/thriller" to "Thriller",
+        // Types
+        "type/movie" to "Movie",
+        "type/special" to "Special"
+    )
 
-    private fun fallback() = Pair(FALLBACK_KEY_SEED, FALLBACK_IV_SEED)
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val url = when {
+            request.data.isEmpty() -> if (page > 1) "$mainUrl/page/$page/" else "$mainUrl/"
+            else -> if (page > 1) "$mainUrl/${request.data}/page/$page/" else "$mainUrl/${request.data}/"
+        }
 
-    private suspend fun keySeedCandidates(baseUrl: String): List<Pair<String, String>> {
-        cachedSeeds?.let { return listOf(it, fallback()) }
-        val dynamic = try {
-            val js = app.get("$baseUrl/lib/newclient.min.js", timeout = 10_000L).text
-            keyPairRegex.find(js)?.groupValues?.let { g ->
-                Pair(g[1], g[2]).also { cachedSeeds = it }
+        val doc = app.get(url).document
+        val items = doc.select("article.bs")
+
+        val anime = items.mapNotNull { element ->
+            val a = element.selectFirst("a") ?: return@mapNotNull null
+            val href = a.attr("href")
+            val title = element.selectFirst(".entry-title")?.text()
+                ?: element.selectFirst("h2")?.text()
+                ?: a.text()
+            val posterUrl = element.selectFirst("img")?.attr("src")
+
+            newAnimeSearchResponse(title, href, TvType.Anime) {
+                this.posterUrl = posterUrl
+            }
+        }
+        return newHomePageResponse(request.name, anime, hasNext = anime.isNotEmpty())
+    }
+
+    override suspend fun search(query: String): List<SearchResponse> {
+        val searchUrl = "$mainUrl/?s=${query.replace(" ", "+")}"
+        val doc = app.get(searchUrl).document
+        val items = doc.select("article.bs")
+
+        return items.mapNotNull { element ->
+            val a = element.selectFirst("a") ?: return@mapNotNull null
+            val href = a.attr("href")
+            val title = element.selectFirst(".entry-title")?.text()
+                ?: element.selectFirst("h2")?.text()
+                ?: a.text()
+            val posterUrl = element.selectFirst("img")?.attr("src")
+
+            newAnimeSearchResponse(title, href, TvType.Anime) {
+                this.posterUrl = posterUrl
+            }
+        }
+    }
+
+    override suspend fun load(url: String): LoadResponse? {
+        var detailUrl = url
+        if (!url.contains("/anime/")) {
+            val doc = app.get(url).document
+            val animeLink = doc.select("a[href*=/anime/]").map { it.attr("href") }.firstOrNull { href ->
+                val path = href.substringAfter("/anime/").trim('/')
+                path.isNotEmpty() && !path.contains('/') && !path.contains('?') && !path.contains("page")
+            }
+            if (animeLink != null) {
+                detailUrl = animeLink
+            }
+        }
+
+        val doc = app.get(detailUrl).document
+        val title = doc.selectFirst("h1.entry-title")?.text()
+            ?: doc.selectFirst("h1")?.text()
+            ?: "Unknown"
+
+        val posterUrl = doc.selectFirst(".thumb img")?.attr("src")
+            ?: doc.selectFirst(".poster img")?.attr("src")
+            ?: doc.selectFirst("img")?.attr("src")
+
+        val plot = doc.selectFirst(".entry-content")?.text()
+            ?: doc.selectFirst(".desc")?.text()
+            ?: doc.selectFirst(".story")?.text()
+
+        val tags = doc.select(".genxed a").map { it.text() }
+
+        val statusText = doc.selectFirst(".info-content")?.text() ?: ""
+        val showStatus = when {
+            statusText.contains("Ongoing", ignoreCase = true) -> ShowStatus.Ongoing
+            statusText.contains("Completed", ignoreCase = true) -> ShowStatus.Completed
+            else -> null
+        }
+
+        val typeText = doc.selectFirst(".info-content")?.text() ?: ""
+        val tvType = when {
+            typeText.contains("Movie", ignoreCase = true) -> TvType.AnimeMovie
+            typeText.contains("OVA", ignoreCase = true) || typeText.contains("ONA", ignoreCase = true) -> TvType.OVA
+            else -> TvType.Anime
+        }
+
+        val episodesList = mutableListOf<Episode>()
+        val eplister = doc.select(".eplister li")
+        if (eplister.isNotEmpty()) {
+            eplister.forEach { li ->
+                val a = li.selectFirst("a") ?: return@forEach
+                val epHref = a.attr("href")
+                val epNum = li.selectFirst(".epl-num")?.text()?.toIntOrNull()
+                    ?: Regex("""\d+""").find(li.selectFirst(".epl-num")?.text() ?: "")?.value?.toIntOrNull()
+                    ?: 1
+                val epTitle = li.selectFirst(".epl-title")?.text() ?: "Episode $epNum"
+                val epDate = li.selectFirst(".epl-date")?.text()
+
+                episodesList.add(newEpisode(epHref) {
+                    this.name = epTitle
+                    this.episode = epNum
+                    this.description = epDate
+                })
+            }
+        } else {
+            episodesList.add(newEpisode(detailUrl) {
+                this.name = title
+                this.episode = 1
+            })
+        }
+
+        episodesList.reverse()
+
+        val isDub = title.contains("(Dub)", ignoreCase = true) || detailUrl.contains("-dub", ignoreCase = true)
+
+        return newAnimeLoadResponse(title, detailUrl, tvType) {
+            this.posterUrl = posterUrl
+            this.plot = plot
+            this.tags = tags
+            this.showStatus = showStatus
+
+            if (isDub) {
+                addEpisodes(DubStatus.Dubbed, episodesList)
+            } else {
+                addEpisodes(DubStatus.Subbed, episodesList)
+            }
+        }
+    }
+
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean = coroutineScope {
+        val res = try {
+            app.get(data)
+        } catch (_: Exception) {
+            return@coroutineScope false
+        }
+        val doc = res.document
+
+        val embedUrls = doc.select("select.mirror option").mapNotNull { opt ->
+            val b64Value = opt.attr("value")
+            if (b64Value.isBlank() || b64Value == "...") return@mapNotNull null
+            val decodedIframe = try {
+                String(Base64.decode(b64Value, Base64.DEFAULT), Charsets.UTF_8)
+            } catch (_: Exception) {
+                null
+            } ?: return@mapNotNull null
+            Jsoup.parse(decodedIframe).selectFirst("iframe")?.attr("src")
+        }.flatMap { iframeUrl ->
+            if (iframeUrl.contains("gogoanime.me.uk/newplayer.php")) {
+                val playerHtml = try {
+                    app.get(iframeUrl, headers = mapOf("Referer" to data)).text
+                } catch (_: Exception) {
+                    ""
+                }
+                val innerSrcs = Jsoup.parse(playerHtml).select("iframe")
+                    .map { it.attr("src") }.filter { it.isNotBlank() }
+                if (innerSrcs.isNotEmpty()) innerSrcs else listOf(iframeUrl)
+            } else {
+                listOf(iframeUrl)
+            }
+        }.distinct()
+
+        val results = embedUrls.map { embedUrl ->
+            async {
+                try {
+                    resolveAndExtract(embedUrl, data, subtitleCallback, callback)
+                } catch (_: Exception) {
+                    false
+                }
+            }
+        }
+        results.awaitAll().any { it }
+    }
+
+    private suspend fun resolveAndExtract(
+        iframeUrl: String,
+        refererUrl: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        var embedUrl = iframeUrl
+        if (iframeUrl.contains("gogoanime.me.uk/newplayer.php")) {
+            val playerPage = try {
+                app.get(iframeUrl, headers = mapOf("Referer" to refererUrl)).text
+            } catch (_: Exception) {
+                return false
+            }
+            embedUrl = Jsoup.parse(playerPage).selectFirst("iframe")?.attr("src") ?: return false
+        }
+
+        return try {
+            when {
+                embedUrl.contains("plyr.php#") -> {
+                    val b64 = embedUrl.substringAfter("#").substringBefore("#")
+                    val decodedUrl = String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8)
+                    if (decodedUrl.isNotBlank()) {
+                        callback(
+                            newExtractorLink(
+                                "KiwiK",
+                                "KiwiK",
+                                decodedUrl,
+                                if (decodedUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = "https://gogoanime.me.uk/"
+                            }
+                        )
+                        true
+                    } else {
+                        false
+                    }
+                }
+                embedUrl.contains("megaplay.buzz") -> {
+                    NineAnimeMegaPlay().getUrl(embedUrl, refererUrl, subtitleCallback, callback)
+                    true
+                }
+                embedUrl.contains("vidmoly.biz") -> {
+                    NineAnimeVidmoly().getUrl(embedUrl, refererUrl, subtitleCallback, callback)
+                    true
+                }
+                embedUrl.contains("bysesayeveum.com") -> {
+                    NineAnimeMoon().getUrl(embedUrl, refererUrl, subtitleCallback, callback)
+                    true
+                }
+                else -> {
+                    loadExtractor(embedUrl, refererUrl, subtitleCallback, callback)
+                }
             }
         } catch (_: Exception) {
-            null
+            false
         }
-        return listOfNotNull(dynamic, fallback())
-    }
-
-    private fun decryptToken(enc: String, keySeed: String, ivSeed: String): String? {
-        return try {
-            var b64 = enc.replace('-', '+').replace('_', '/')
-            while (b64.length % 4 != 0) b64 += "="
-            val cipherBytes = Base64.decode(b64, Base64.DEFAULT)
-
-            val seedBytes = keySeed.toByteArray(Charsets.UTF_8)
-            val keyBytes = ByteArray(32)
-            System.arraycopy(seedBytes, 0, keyBytes, 0, minOf(32, seedBytes.size))
-
-            val ivBytes = ByteArray(16)
-            val ivSeedBytes = ivSeed.toByteArray(Charsets.UTF_8)
-            System.arraycopy(ivSeedBytes, 0, ivBytes, 0, minOf(16, ivSeedBytes.size))
-
-            val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
-            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), IvParameterSpec(ivBytes))
-            String(cipher.doFinal(cipherBytes), Charsets.UTF_8)
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    suspend fun resolveEncStreamUrl(enc: String, baseUrl: String): String? {
-        for ((keySeed, ivSeed) in keySeedCandidates(baseUrl)) {
-            val plain = decryptToken(enc, keySeed, ivSeed) ?: continue
-            fileRegex.find(plain)?.groupValues?.get(1)?.let { return it }
-        }
-        return null
     }
 }
 
-open class MegaPlayBaseExtractor(
-    override val name: String,
-    override val mainUrl: String
-) : ExtractorApi() {
+// Extractors without Gson dependency issues
+class NineAnimeMegaPlay : ExtractorApi() {
+    override val name = "MegaPlay"
+    override val mainUrl = "https://megaplay.buzz"
     override val requiresReferer = true
-
-    // legacy imgnex cdn paths carry an /anime prefix the megap hosts dropped
-    private fun migrateLegacyUrl(url: String, cdnOrigin: String?): String {
-        if (!url.contains("https://cdn.imgnex.top/anime")) return url
-        return url.replace("https://cdn.imgnex.top/anime", cdnOrigin ?: "https://megap.norami.top")
-    }
-
-    private fun cdnOriginFor(streamUrl: String): String? {
-        if (streamUrl.contains("cdn.imgnex.top")) return null
-        return Regex("""https?://[^/]+""").find(streamUrl)?.value
-    }
-
-    private suspend fun fetchSourcesRoot(endpoint: String, headers: Map<String, String>): JsonObject? {
-        val text = try {
-            app.get(endpoint, headers = headers).text
-        } catch (_: Exception) {
-            return null
-        }
-        return try {
-            JsonParser.parseString(text).asJsonObject
-        } catch (_: Exception) {
-            null
-        }
-    }
 
     override suspend fun getUrl(
         url: String,
@@ -115,7 +305,6 @@ open class MegaPlayBaseExtractor(
             "User-Agent" to USER_AGENT,
             "Referer" to (referer ?: "https://9anime.org.lv/")
         )
-
         val doc = try {
             app.get(url, headers = pageHeaders).document
         } catch (_: Exception) {
@@ -129,7 +318,6 @@ open class MegaPlayBaseExtractor(
             ?: return
 
         val type = if (url.contains("/dub", ignoreCase = true)) "dub" else "sub"
-
         val ajaxHeaders = mapOf(
             "User-Agent" to USER_AGENT,
             "Accept" to "*/*",
@@ -137,78 +325,26 @@ open class MegaPlayBaseExtractor(
             "Referer" to url,
         )
 
-        // legacy getSources still returns encrypted payloads pinned to the dead imgnex host
-        val root = fetchSourcesRoot("$mainUrl/stream/getSourcesNew?id=$streamId&type=$type", ajaxHeaders)
-            ?: fetchSourcesRoot("$mainUrl/stream/getSources?id=$streamId&type=$type", ajaxHeaders)
-            ?: return
-
-        val resolved = extractStreamUrl(root)
-        if (resolved.isNullOrBlank()) {
-            return
+        val res = try {
+            app.get("$mainUrl/stream/getSourcesNew?id=$streamId&type=$type", headers = ajaxHeaders).text
+        } catch (_: Exception) {
+            try {
+                app.get("$mainUrl/stream/getSources?id=$streamId&type=$type", headers = ajaxHeaders).text
+            } catch (_: Exception) {
+                return
+            }
         }
 
-        val cdnOrigin = cdnOriginFor(resolved)
-        val m3u8 = migrateLegacyUrl(resolved, cdnOrigin)
-
+        val fileMatch = Regex(""""file"\s*:\s*"([^"]+)"""").find(res)?.groupValues?.get(1) ?: return
         val playbackHeaders = mapOf(
             "User-Agent" to USER_AGENT,
             "Accept" to "*/*",
             "Referer" to "$mainUrl/",
         )
 
-        val generated = M3u8Helper.generateM3u8(name, m3u8, mainUrl, headers = playbackHeaders)
-        if (generated.isNotEmpty()) {
-            generated.forEach(callback)
-        } else {
-            callback(
-                newExtractorLink(name, name, m3u8, ExtractorLinkType.M3U8) {
-                    this.referer = "$mainUrl/"
-                    this.headers = playbackHeaders
-                }
-            )
-        }
-
-        emitSubtitles(root, cdnOrigin, playbackHeaders, subtitleCallback)
-    }
-
-    private suspend fun extractStreamUrl(root: JsonObject): String? {
-        val sources = root.get("sources")
-        val legacy = when {
-            sources == null -> null
-            sources.isJsonObject -> sources.asJsonObject.get("file")?.asString
-            sources.isJsonArray -> sources.asJsonArray.firstOrNull()?.asJsonObject?.get("file")?.asString
-            else -> null
-        }
-        if (!legacy.isNullOrBlank()) return legacy
-        val enc = root.get("enc")?.asString ?: return null
-        return MegaPlayCipher.resolveEncStreamUrl(enc, mainUrl)
-    }
-
-    private suspend fun emitSubtitles(
-        root: JsonObject,
-        cdnOrigin: String?,
-        headers: Map<String, String>,
-        subtitleCallback: (SubtitleFile) -> Unit
-    ) {
-        try {
-            val tracks = root.getAsJsonArray("tracks") ?: return
-            for (element in tracks) {
-                val track = element.asJsonObject
-                val kind = track.get("kind")?.asString ?: continue
-                if (kind != "captions" && kind != "subtitles") continue
-                val file = track.get("file")?.asString ?: continue
-                val label = track.get("label")?.asString ?: "Unknown"
-                subtitleCallback(
-                    newSubtitleFile(label, migrateLegacyUrl(file, cdnOrigin)) {
-                        this.headers = headers
-                    }
-                )
-            }
-        } catch (_: Exception) {}
+        M3u8Helper.generateM3u8(name, fileMatch, mainUrl, headers = playbackHeaders).forEach(callback)
     }
 }
-
-class NineAnimeMegaPlay : MegaPlayBaseExtractor("MegaPlay", "https://megaplay.buzz")
 
 class NineAnimeVidmoly : ExtractorApi() {
     override val name = "Vidmoly"
@@ -231,31 +367,15 @@ class NineAnimeVidmoly : ExtractorApi() {
             return
         }
         val html = res.text
-
         val m3u8 = Regex("""file\s*:\s*['"](https?://[^'"]+?\.m3u8[^'"]*)['"]""").find(html)
-            ?.groupValues?.get(1)
-            ?: Regex("""https?://[^'"\s]+?\.m3u8[^'"\s]*""").find(html)?.value
-        if (m3u8 == null) {
-            return
-        }
+            ?.groupValues?.get(1) ?: return
 
         val playbackHeaders = mapOf(
             "User-Agent" to USER_AGENT,
             "Referer" to "$mainUrl/",
             "Origin" to mainUrl
         )
-
-        val generated = M3u8Helper.generateM3u8(name, m3u8, mainUrl, headers = playbackHeaders)
-        if (generated.isNotEmpty()) {
-            generated.forEach(callback)
-        } else {
-            callback(
-                newExtractorLink(name, name, m3u8, ExtractorLinkType.M3U8) {
-                    this.referer = "$mainUrl/"
-                    this.headers = playbackHeaders
-                }
-            )
-        }
+        M3u8Helper.generateM3u8(name, m3u8, mainUrl, headers = playbackHeaders).forEach(callback)
     }
 }
 
@@ -274,9 +394,7 @@ class NineAnimeMoon : ExtractorApi() {
             val resolver = WebViewResolver(
                 interceptUrl = Regex("""(?i)\.(m3u8|mp4)(?:\?|$)"""),
                 additionalUrls = listOf(Regex("""(?i)\.(m3u8|mp4)(?:\?|$)""")),
-                // the byse player mounts in a cross-origin iframe, the outer click forwards to the inner play button
                 script = """document.querySelector('button,[role="button"],.vjs-big-play-button,.jw-icon-display,.vds-play-button,[onclick]')?.click();""",
-                // the moon player handshake routinely takes over a minute to clear
                 useOkhttp = false,
                 timeout = 90_000L
             )
@@ -298,7 +416,6 @@ class NineAnimeMoon : ExtractorApi() {
                     }
                 )
             }
-        }.onFailure { error ->
         }
     }
 }
