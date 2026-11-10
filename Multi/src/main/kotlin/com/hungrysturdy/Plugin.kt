@@ -10,7 +10,6 @@ class Plugin : Plugin() {
         // All providers should be added in this manner. Please don't edit the providers list directly.
         registerMainAPI(PrmoviesProvider())
         registerMainAPI(NineAnimeProvider())
-        registerExtractorAPI(NineAnimeExtractor())
         registerExtractorAPI(NineAnimeMegaPlay())
         registerExtractorAPI(NineAnimeVidmoly())
         registerExtractorAPI(NineAnimeMoon())
