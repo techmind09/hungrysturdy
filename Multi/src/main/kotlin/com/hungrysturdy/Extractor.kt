@@ -36,16 +36,13 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 } 
                 else if (href.endsWith(".mp4") || href.endsWith(".mkv")) {
                     callback(
-                        ExtractorLink(
-                            source,
-                            name,
-                            url,
-                            referer,
-                            quality,
-                            INFER_TYPE
+                        newExtractorLink(
+                            source = name,
+                            name = "$name - $title",
+                            url = href,
+                            referer = url,
+                            quality = getQualityFromName(title)
                         )
-                        // Standard ExtractorLink constructor or standard helper:
-                        // ExtractorLink(name, "$name - $title", href, url, getQualityFromName(title), INFER_TYPE)
                     )
                 } 
                 else if (!href.contains("dramacool.website") && !href.contains("momofile.shop")) {
