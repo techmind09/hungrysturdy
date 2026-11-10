@@ -374,7 +374,7 @@ internal object VegaSites {
         """(?i)vglist|telegram|t\.me|imdb|google\.com/search|whatsapp|share|facebook|twitter|pinterest|report"""
     )
 
-        private fun collectButtons(scope: Element, group: QualityGroup) {
+    private fun collectButtons(scope: Element, group: QualityGroup) {
         for (a in scope.select("a[href]")) {
             val href = a.attr("href")?.trim() ?: continue
             if (!href.startsWith("http")) continue
@@ -388,3 +388,4 @@ internal object VegaSites {
             }
         }
     }
+} // <-- Yeh closing bracket zaroori hai object ko close karne ke liye
