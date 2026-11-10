@@ -66,7 +66,7 @@ class KDHindiDubbed : MainAPI() {
     private fun Element.toSearchResult(): SearchResponse? {
         val title = this.selectFirst("h2 a, h3 a, a.title")?.text() ?: return null
         val href = fixUrl(this.selectFirst("h2 a, h3 a, a.title")?.attr("href") ?: return null)
-        val posterUrl = fixUrl(this.selectFirst("img")?.attr("data-src") ?: this.selectFirst("img")?.attr("src"))
+        val posterUrl = fixUrl(this.selectFirst("img")?.attr("data-src") ?: this.selectFirst("img")?.attr("src") ?: "")
         
         return newMovieSearchResponse(title, href, TvType.TvSeries) {
             this.posterUrl = posterUrl
@@ -81,17 +81,24 @@ class KDHindiDubbed : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
         val title = document.selectFirst("h1, h2.title")?.text()?.trim() ?: "Drama"
-        val poster = fixUrl(document.selectFirst("div.poster img, img.wp-post-image")?.attr("src"))
+        val poster = fixUrl(document.selectFirst("div.poster img, img.wp-post-image")?.attr("src") ?: "")
         val description = document.selectFirst("div.storyline, div.content, .entry-content")?.text()?.trim()
         
         val episodes = document.select("div.episodest, ul.episodelist li, a.btn-eps").mapNotNull { element ->
-            val link = fixUrl(element.selectFirst("a")?.attr("href") ?: element.attr("href"))
+            val link = fixUrl(element.selectFirst("a")?.attr("href") ?: element.attr("href") ?: "")
             val epName = element.text().trim()
             val epNum = epName.filter { it.isDigit() }.toIntOrNull() ?: 1
-            Episode(link, name = epName, episode = epNum)
+            newEpisode(link) {
+                name = epName
+                episode = epNum
+            }
         }.ifEmpty {
-            // If single page movie or direct watch link
-            listOf(Episode(url, name = title, episode = 1))
+            listOf(
+                newEpisode(url) {
+                    name = title
+                    episode = 1
+                }
+            )
         }
 
         return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
@@ -107,9 +114,7 @@ class KDHindiDubbed : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
-        
-        // Find all download / watch links (e.g., pointing to momofile.shop or direct players)
-        val links = document.select("a[href*=\"momofile\"], a.btn, a.button, a[href*=\"xcloud\"]")
+        val links = document.select("a[href*='momofile'], a.btn, a.button, a[href*='xcloud']")
         
         for (element in links) {
             val link = element.attr("href") ?: continue
