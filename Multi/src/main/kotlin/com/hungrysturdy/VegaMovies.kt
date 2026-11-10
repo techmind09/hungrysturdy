@@ -1,300 +1,270 @@
 package com.hungrysturdy
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties
-import com.lagradost.cloudstream3.HomePageResponse
-import com.lagradost.cloudstream3.LoadResponse
-import com.lagradost.cloudstream3.MainAPI
-import com.lagradost.cloudstream3.MainPageData
-import com.lagradost.cloudstream3.MainPageRequest
-import com.lagradost.cloudstream3.Score
-import com.lagradost.cloudstream3.SearchResponse
-import com.lagradost.cloudstream3.SubtitleFile
-import com.lagradost.cloudstream3.TvType
-import com.lagradost.cloudstream3.newEpisode
-import com.lagradost.cloudstream3.newHomePageResponse
-import com.lagradost.cloudstream3.newMovieLoadResponse
-import com.lagradost.cloudstream3.newTvSeriesLoadResponse
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.utils.*
+import org.jsoup.nodes.Element
+import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbUrl
+import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
-import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.raghav.donation.DonationManager
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
-import java.util.concurrent.ConcurrentHashMap
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import java.net.URI
 
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class VegaLinkData(
-    val groups: List<VegaGroup> = emptyList(),
-    val season: Int? = null,
-    val episode: Int? = null
-) {
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    data class VegaGroup(
-        val label: String = "",
-        val urls: List<String> = emptyList()
-    )
-}
-
-class VegaMovies : MainAPI() {
-    override var mainUrl = "https://vegamovies.lease"
+open class VegaMoviesProvider : MainAPI() {
+    override var mainUrl = "https://vegamovies.mq"
     override var name = "VegaMovies"
     override val hasMainPage = true
+    override var lang = "hi"
     override val hasDownloadSupport = true
-    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
-    override var lang = "en"
+    val cinemeta_url = "https://v3-cinemeta.strem.io/meta"
 
-    // keep the burst small for low end devices
-    override var sequentialMainPage = true
-    override var sequentialMainPageDelay = 120L
+    override val supportedTypes = setOf(
+        TvType.Movie,
+        TvType.TvSeries,
+        TvType.AsianDrama,
+        TvType.Anime
+    )
 
-    private val pageRows by lazy { VegaSites.rows() }
+    override val mainPage = mainPageOf(
+        "$mainUrl/page/%d/" to "Home",
+        "$mainUrl/category/web-series/netflix/page/%d/" to "Netflix",
+        "$mainUrl/category/web-series/disney-plus-hotstar/page/%d/" to "Disney Plus Hotstar",
+        "$mainUrl/category/web-series/amazon-prime-video/page/%d/" to "Amazon Prime",
+        "$mainUrl/category/anime-series/page/%d/" to "Anime Series",
+        "$mainUrl/category/korean-series/page/%d/" to "Korean Series"
+    )
 
-    override val mainPage: List<MainPageData>
-        get() = pageRows.map { MainPageData(it.title, "${it.site.id}:${it.path}") }
-
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        DonationManager.checkAndShow()
-        val (siteId, path) = request.data.split(":", limit = 2).let {
-            it[0] to it.getOrElse(1) { "" }
-        }
-        val site = VegaSites.ALL.firstOrNull { it.id == siteId } ?: return emptyPage(request.name)
-        val cards = VegaSites.catalogPage(this, site, path, page)
-            ?: return emptyPage(request.name)
-        return newHomePageResponse(request.name, cards, hasNext = cards.isNotEmpty())
+    override suspend fun getMainPage(
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse {
+        val document = app.get(request.data.format(page)).document
+        val home = document.select("div.movies-grid > a").mapNotNull { it.toSearchResult() }
+        return newHomePageResponse(request.name, home)
     }
 
-    private fun emptyPage(name: String): HomePageResponse =
-        newHomePageResponse(name, emptyList<SearchResponse>(), hasNext = false)
+    private fun Element.toSearchResult(): SearchResponse? {
+        val title = this.select("img").attr("alt").replace("Download ", "")
+        val href = this.attr("href")
+        var posterUrl = this.select("img").attr("src")
+        if (!posterUrl.contains("https:")) posterUrl = this.select("img").attr("data-src")
 
-    override suspend fun search(query: String): List<SearchResponse>? {
-        if (query.isBlank()) return null
-        val api = this
-        val merged = coroutineScope {
-            VegaSites.ALL.map { site ->
-                async(Dispatchers.IO) { VegaSites.tsSearch(api, site, query, 1) }
-            }.flatMap { it.await() }
+        return newMovieSearchResponse(title, URI(href).path, TvType.Movie) {
+            this.posterUrl = posterUrl
         }
-        return merged.distinctBy { it.url }.ifEmpty { null }
+    }
+
+    override suspend fun search(query: String, page: Int): SearchResponseList? {
+        val json = app.get("$mainUrl/search.php?q=$query&page=$page").text
+        val response = tryParseJson<VegaSearchResponse>(json) ?: return null
+        val results = response.hits.map { hit ->
+            val doc = hit.document
+            newMovieSearchResponse(doc.post_title.replace("Download ", ""), doc.permalink, TvType.Movie) {
+                this.posterUrl = doc.post_thumbnail
+            }
+        }
+        return newSearchResponseList(results)
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val site = VegaSites.siteOf(url) ?: return null
-        // old-host urls replay on the live domain
-        val liveUrl = site.knownHosts.filter { it != site.host }
-            .fold(url) { u, old -> u.replace(old, site.host, ignoreCase = true) }
-        val res = VegaNet.retry(attempts = 2) {
-            try {
-                val r = com.lagradost.cloudstream3.app.get(
-                    liveUrl,
-                    headers = VegaNet.browserHeaders("${site.base}/"),
-                    timeout = 25L
-                )
-                if (r.code == 200) r.text else null
-            } catch (_: Exception) {
-                null
-            }
-        } ?: return null
-        val detail = VegaSites.parseDetail(res, liveUrl) ?: return null
+        val document = app.get(fixUrl(url)).document
+        var title = document.select("title").text().replace("Download ", "")
+        var posterUrl = document.select("p > img").attr("src")
+        val imdbUrl = document.select("a[href*=\"imdb\"]").attr("href")
+        val imdbId = imdbUrl.substringAfter("title/").substringBefore("/")
 
-        val score = detail.imdbScore?.let { Score.from10(it) }
+        val tvtype = if (
+            document.selectFirst("h3:matches((?i)Series-SYNOPSIS/PLOT)") != null ||
+            document.selectFirst("h3:matches((?i)Series Info)") != null ||
+            document.selectFirst("h3:matches((?i)Series synopsis/PLOT)") != null
+        ) {
+            "series"
+        } else {
+            "movie"
+        }
 
-        if (detail.isSeries && (detail.seasons.isNotEmpty() || looksSeries(liveUrl, detail.title))) {
-            val episodes = buildEpisodes(detail, urlSeason(liveUrl))
-            if (episodes.isNotEmpty()) {
-                return newTvSeriesLoadResponse(detail.title, url, TvType.TvSeries, episodes) {
-                    this.posterUrl = detail.poster
-                    this.year = detail.year
-                    this.plot = detail.plot
-                    this.score = score
-                    this.tags = detail.infoTags
+        var description = document
+            .selectFirst("h3:has(span:matches((?i)SYNOPSIS/PLOT))")
+            ?.nextElementSibling()
+            ?.text()
+
+        val jsonResponse = app.get("$cinemeta_url/$tvtype/$imdbId.json").text
+        val responseData = tryParseJson<ResponseData>(jsonResponse)
+
+        var cast: List<String> = emptyList()
+        var genre: List<String> = emptyList()
+        var imdbRating: String = ""
+        var year: String = ""
+        var background: String = posterUrl
+
+        if (responseData != null) {
+            description = responseData.meta.description ?: description
+            cast = responseData.meta.cast ?: emptyList()
+            title = responseData.meta.name ?: title
+            genre = responseData.meta.genre ?: emptyList()
+            imdbRating = responseData.meta.imdbRating ?: ""
+            year = responseData.meta.year ?: ""
+            posterUrl = responseData.meta.poster ?: posterUrl
+            background = responseData.meta.background ?: background
+        }
+
+        if (tvtype == "series") {
+            val hTags = document.select("main > h3:matches((?i)(4K|[0-9]*0p)),main > h5:matches((?i)(4K|[0-9]*0p))")
+                .filter { element -> !element.text().contains("Zip", true) }
+
+            val tvSeriesEpisodes = mutableListOf<Episode>()
+            val episodesMap: MutableMap<Pair<Int, Int>, MutableList<String>> = mutableMapOf()
+
+            for (tag in hTags) {
+                val realSeasonRegex = Regex("""(?:Season |S)(\d+)""")
+                val realSeason = realSeasonRegex.find(tag.toString())?.groupValues?.get(1)?.toIntOrNull() ?: 1
+
+                val pTag = tag.nextElementSibling()
+                val aTags: List<Element>? = if (pTag != null && pTag.tagName() == "p") {
+                    pTag.select("a")
+                } else {
+                    tag.select("a")
                 }
-            }
-            if (detail.movieGroups.isEmpty()) return null
-        }
 
-        val groups = detail.movieGroups.map { g ->
-            VegaLinkData.VegaGroup(g.label, g.links.map { it.second })
-        }
-        if (groups.isEmpty()) return null
-        return newMovieLoadResponse(detail.title, url, TvType.Movie, VegaLinkData(groups).toJson()) {
-            this.posterUrl = detail.poster
-            this.year = detail.year
-            this.plot = detail.plot
-            this.score = score
-            this.tags = detail.infoTags
-        }
-    }
+                val unilink = aTags?.find {
+                    it.text().contains("V-Cloud", ignoreCase = true) ||
+                    it.text().contains("Episode", ignoreCase = true) ||
+                    it.text().contains("Download", ignoreCase = true) ||
+                    it.text().contains("G-Direct", ignoreCase = true)
+                }
 
-    private fun looksSeries(url: String, title: String): Boolean {
-        return url.contains("season", true) || VegaSites.looksLikeSeries(title)
-    }
-
-    // single season pages fall back to one block
-    private fun urlSeason(url: String): Int? {
-        return Regex("""(?i)season\s*-?\s*0*(\d{1,2})""").find(url)?.groupValues?.get(1)?.toIntOrNull()
-    }
-
-    // episode lists live behind the nexdrive hop
-    private suspend fun buildEpisodes(
-        detail: VegaSites.Detail,
-        fallbackSeason: Int? = null
-    ): List<com.lagradost.cloudstream3.Episode> {
-        val seasons = detail.seasons.ifEmpty {
-            listOf(
-                VegaSites.SeasonBlock(detail.title, fallbackSeason ?: 1, detail.movieGroups.map {
-                    VegaSites.QualityGroup(it.label, it.links.toMutableList())
-                }.toMutableList())
-            )
-        }
-        return coroutineScope {
-            val gate = Semaphore(3)
-            seasons.map { season ->
-                async(Dispatchers.IO) {
-                    gate.withPermit {
-                        val groups = season.groups.map { g ->
-                            VegaLinkData.VegaGroup(g.label, g.links.map { it.second })
-                        }
-                        if (groups.isEmpty()) return@withPermit emptyList()
-
-                        val probeUrl = groups.asSequence()
-                            .flatMap { it.urls.asSequence() }
-                            .firstOrNull()
-                        val probe = probeUrl?.let {
-                            kotlinx.coroutines.withTimeoutOrNull(12_000L) { VegaSources.fetchDrivePage(it) }
-                        }
-                        val numbers = probe?.episodes?.keys?.sorted()
-
-                        if (numbers.isNullOrEmpty()) {
-                            val data = VegaLinkData(groups, season.number, null)
-                            listOf(
-                                newEpisode(data.toJson()) {
-                                    this.season = season.number
-                                    this.episode = 1
-                                    this.name = "Season ${season.number} Pack"
-                                }
-                            )
+                val Eurl = unilink?.attr("href")
+                Eurl?.let { eurl ->
+                    val document2 = app.get(eurl).document
+                    val vcloudLinks = document2.select("p > a").mapNotNull {
+                        if (it.attr("href").contains("vcloud", true)) {
+                            it.attr("href")
                         } else {
-                            numbers.map { n ->
-                                val data = VegaLinkData(groups, season.number, n)
-                                newEpisode(data.toJson()) {
-                                    this.season = season.number
-                                    this.episode = n
-                                    this.name = "Episode $n"
-                                }
-                            }
+                            null
                         }
                     }
+
+                    vcloudLinks.forEachIndexed { index, vcloudlink ->
+                        val key = Pair(realSeason, index + 1)
+                        episodesMap.getOrPut(key) { mutableListOf() }.add(vcloudlink)
+                    }
                 }
-            }.flatMap { it.await() }
+            }
+
+            for ((key, value) in episodesMap) {
+                val episodeInfo = responseData?.meta?.videos?.find { it.season == key.first && it.episode == key.second }
+                val episodeDataList = value.map { EpisodeLink(it) }
+                val jsonLinks = app.toJson(episodeDataList)
+
+                tvSeriesEpisodes.add(
+                    newEpisode(jsonLinks) {
+                        this.name = episodeInfo?.name ?: episodeInfo?.title ?: "Episode ${key.second}"
+                        this.season = key.first
+                        this.episode = key.second
+                        this.posterUrl = episodeInfo?.thumbnail
+                        this.description = episodeInfo?.overview
+                    }
+                )
+            }
+
+            return newTvSeriesLoadResponse(title, url, TvType.TvSeries, tvSeriesEpisodes) {
+                this.posterUrl = posterUrl
+                this.plot = description
+                this.tags = genre
+                this.score = Score.from10(imdbRating)
+                this.year = year.toIntOrNull() ?: year.substringBefore("–").toIntOrNull()
+                this.backgroundPosterUrl = background
+                addActors(cast)
+                addImdbUrl(imdbUrl)
+            }
+        } else {
+            val buttons = document.select("a:has(button.dwd-button)")
+            val dataList = buttons.mapNotNull { button ->
+                val link = fixUrl(button.attr("href"))
+                val doc = app.get(link).document
+                val source = doc.select("a:contains(V-Cloud)").attr("href") ?: return@mapNotNull null
+                EpisodeLink(source)
+            }
+            val jsonMovieData = app.toJson(dataList)
+
+            return newMovieLoadResponse(title, url, TvType.Movie, jsonMovieData) {
+                this.posterUrl = posterUrl
+                this.plot = description
+                this.tags = genre
+                this.score = Score.from10(imdbRating)
+                this.year = year.toIntOrNull()
+                this.backgroundPosterUrl = background
+                addActors(cast)
+                addImdbUrl(imdbUrl)
+            }
         }
     }
 
-    private fun langTagOf(label: String): String =
-        if (Regex("""(?i)english with subtitles""").containsMatchIn(label)) "English" else ""
-
-    // dolby vision gets its own slot, decoders choke
-    private fun dvEncode(label: String): Boolean =
-        Regex("""(?i)\bDV\b|dolby|hybrid""").containsMatchIn(label)
-
-    // one link per server, quality, language and encode
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val parsed = try {
-            parseJson<VegaLinkData>(data)
-        } catch (_: Exception) {
-            return false
-        }
-        val groups = parsed.groups
-        if (groups.isEmpty()) return false
-        VegaSources.resetSession()
-
-        val claimed = ConcurrentHashMap.newKeySet<String>()
-        val seenUrls = ConcurrentHashMap.newKeySet<String>()
-
-        fun targetsOf(page: VegaSources.DrivePage): List<Pair<String, String>> {
-            return if (parsed.episode != null) {
-                page.episodes[parsed.episode]
-                    ?: page.servers.takeIf { page.episodes.isEmpty() }
+        val sources = tryParseJson<ArrayList<EpisodeLink>>(data) ?: return false
+        sources.amap {
+            val source = it.source
+            if (source.contains("vcloud")) {
+                // Handle vcloud or loadExtractor
+                loadExtractor(source, "", subtitleCallback, callback)
             } else {
-                page.servers
-            }.orEmpty()
-        }
-
-        // a live mirror fills the slot, a dead one waits
-        suspend fun offer(server: VegaSources.Server, tier: Int, lang: String, dv: Boolean) {
-            if (!seenUrls.add(server.url)) return
-            val key = "${server.name}|$tier|$lang|${if (dv) "dv" else ""}"
-            if (key in claimed) return
-            if (!VegaSources.alive(server.url)) return
-            if (claimed.add(key)) {
-                val extras = buildString {
-                    if (lang.isNotBlank()) append(" [").append(lang).append("]")
-                    if (dv) append(" [DV]")
-                }
-                val linkName = if (tier > 0) {
-                    "${server.name} ${tier}p$extras"
-                } else {
-                    server.name + extras
-                }
-                callback(
-                    newExtractorLink(
-                        source = name,
-                        name = linkName,
-                        url = server.url,
-                        type = ExtractorLinkType.VIDEO
-                    ) {
-                        this.quality = tier
-                    }
-                )
-            }
-        }
-
-        coroutineScope {
-            val gate = Semaphore(4)
-            groups.forEach { group ->
-                async(Dispatchers.IO) {
-                    gate.withPermit {
-                        val tier = VegaNet.qualityOf(group.label)
-                        val lang = langTagOf(group.label)
-                        val dv = dvEncode(group.label)
-                        for (url in group.urls.distinct()) {
-                            val page = try {
-                                VegaSources.fetchDrivePage(url)
-                            } catch (_: Exception) {
-                                null
-                            } ?: continue
-                            for ((_label, href) in targetsOf(page)) {
-                                if (href.contains("nexdrive", true)) {
-                                    val nested = try {
-                                        VegaSources.fetchDrivePage(href)
-                                    } catch (_: Exception) {
-                                        null
-                                    } ?: continue
-                                    for ((_innerLabel, innerHref) in targetsOf(nested)) {
-                                        for (server in VegaSources.resolve(innerHref)) {
-                                            offer(server, tier, lang, dv)
-                                        }
-                                    }
-                                } else {
-                                    for (server in VegaSources.resolve(href)) {
-                                        offer(server, tier, lang, dv)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                loadExtractor(source, "", subtitleCallback, callback)
             }
         }
         return true
     }
+
+    data class Meta(
+        val id: String?,
+        val imdb_id: String?,
+        val type: String?,
+        val poster: String?,
+        val background: String?,
+        val moviedb_id: Int?,
+        val name: String?,
+        val description: String?,
+        val genre: List<String>?,
+        val genres: List<String>?,
+        val releaseInfo: String?,
+        val status: String?,
+        val runtime: String?,
+        val cast: List<String>?,
+        val language: String?,
+        val country: String?,
+        val imdbRating: String?,
+        val year: String?,
+        val videos: List<EpisodeDetails>?,
+    )
+
+    data class EpisodeDetails(
+        val id: String?,
+        val name: String?,
+        val title: String?,
+        val season: Int,
+        val episode: Int,
+        val released: String?,
+        val firstAired: String?,
+        val overview: String?,
+        val thumbnail: String?,
+        val moviedb_id: Int?,
+        val imdb_id: String?,
+        val imdbSeason: Int?,
+        val imdbEpisode: Int?,
+    )
+
+    data class ResponseData(val meta: Meta)
+    data class EpisodeLink(val source: String)
+    data class VegaSearchResponse(val hits: List<VegaHit>)
+    data class VegaHit(val document: VegaDocument)
+    data class VegaDocument(
+        val id: String,
+        val imdb_id: String?,
+        val post_title: String,
+        val permalink: String,
+        val post_thumbnail: String
+    )
 }
