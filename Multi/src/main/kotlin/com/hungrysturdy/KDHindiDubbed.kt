@@ -87,8 +87,8 @@ class KDHindiDubbed : MainAPI() {
         val title = document.selectFirst("h1, h2.title")?.text()?.trim() ?: "Drama"
         
         val posterImg = document.selectFirst("div.poster img, img.wp-post-image, .entry-content img")
-        val rawPoster = posterImg?.attr("src")?.takeIf { it.isNotBlank() } ?: posterImg?.attr("data-src") ?: ""
-        val poster = fixUrl(rawPoster)
+        val rawPoster = posterImg?.attr("src")?.takeIf { it.isNotBlank() } ?: posterImg?.attr("data-src")?.then { it } ?: ""
+        val poster = fixUrl(rawPoster.toString())
         
         val description = document.selectFirst("div.storyline, div.content, .entry-content p")?.text()?.trim()
         
@@ -130,13 +130,16 @@ class KDHindiDubbed : MainAPI() {
             val link = element.attr("href")?.let { fixUrl(it) } ?: continue
             if (link.startsWith("http")) {
                 try {
+                    // Handle internal dramacool redirect pages
                     if (link.contains("dramacool.website") && !link.contains("momofile") && !link.contains("xcloud") && !link.contains("tmbcloud")) {
                         val subDoc = app.get(link).document
                         val subLinks = subDoc.select("a[href], a.btn, a.download-btn")
                         for (subEl in subLinks) {
                             val subHref = subEl.attr("href") ?: continue
                             if (subHref.startsWith("http") && !subHref.contains("dramacool.website")) {
-                                loadExtractor(subHref, link, subtitleCallback, callback)
+                                if (subHref.contains("pixeldrain") || subHref.contains("voe") || subHref.contains("buzzheavier") || subHref.contains("fileditch") || subHref.contains("vikingfile") || subHref.contains("send.cm") || subHref.contains("momofile") || subHref.contains("xcloud") || subHref.contains("tmbcloud")) {
+                                    loadExtractor(subHref, link, subtitleCallback, callback)
+                                }
                             }
                         }
                     } else if (!link.contains("dramacool.website")) {
@@ -148,3 +151,4 @@ class KDHindiDubbed : MainAPI() {
         return true
     }
 }
+
