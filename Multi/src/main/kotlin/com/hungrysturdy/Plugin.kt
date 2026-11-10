@@ -13,5 +13,6 @@ class Plugin : Plugin() {
         registerExtractorAPI(NineAnimeMegaPlay())
         registerExtractorAPI(NineAnimeVidmoly())
         registerExtractorAPI(NineAnimeMoon())
+        registerExtractorAPI(AnimeWorldProvider())
     }
 }
