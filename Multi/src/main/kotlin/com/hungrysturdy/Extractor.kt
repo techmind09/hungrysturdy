@@ -1,11 +1,12 @@
-package com.lagradost.cloudstream3.extractors
+package com.hungrysturdy
 
 import com.lagradost.cloudstream3.ExtractorApi
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
-import com.lagradost.cloudstream3.utils.getApp
+import com.lagradost.cloudstream3.utils.app
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.newExtractorLink
 
 class MomoFileExtractor : ExtractorApi() {
     override val name = "MomoFile"
@@ -18,12 +19,13 @@ class MomoFileExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val document = getApp(url).document
+        val document = app.get(url).document
         
-        // Fixed quotes and selector syntax
         val links = document.select("a.btn, a.btn-success, a[href*='http'], div.dropdown-menu a")
         
-        for (link in links) {
+        // Explicitly casting or iterating safely to avoid ambiguity
+        for (i in 0 until links.size) {
+            val link = links[i]
             val href = link.attr("href") ?: continue
             val title = link.text() ?: "MomoFile Link"
             
