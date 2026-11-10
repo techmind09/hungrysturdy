@@ -59,14 +59,18 @@ class KDHindiDubbed : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get("${request.data}$page").document
-        val home = document.select("div.item, div.post-item, article").mapNotNull { it.toSearchResult() }
+        val home = document.select("div.item, div.post-item, article, div.box").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, home)
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = this.selectFirst("h2 a, h3 a, a.title")?.text() ?: return null
-        val href = fixUrl(this.selectFirst("h2 a, h3 a, a.title")?.attr("href") ?: return null)
-        val posterUrl = fixUrl(this.selectFirst("img")?.attr("data-src") ?: this.selectFirst("img")?.attr("src") ?: "")
+        val title = this.selectFirst("h2 a, h3 a, a.title, .entry-title a")?.text() ?: return null
+        val href = fixUrl(this.selectFirst("h2 a, h3 a, a.title, .entry-title a")?.attr("href") ?: return null)
+        
+        val imgElement = this.selectFirst("img")
+        val rawImg = imgElement?.attr("src")?.takeIf { it.isNotBlank() }
+            ?: imgElement?.attr("data-src")?.takeIf { it.isNotBlank() } ?: ""
+        val posterUrl = fixUrl(rawImg)
         
         return newMovieSearchResponse(title, href, TvType.TvSeries) {
             this.posterUrl = posterUrl
@@ -75,24 +79,30 @@ class KDHindiDubbed : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl/?s=$query").document
-        return document.select("div.item, div.post-item, article").mapNotNull { it.toSearchResult() }
+        return document.select("div.item, div.post-item, article, div.box").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
         val title = document.selectFirst("h1, h2.title")?.text()?.trim() ?: "Drama"
-        val poster = fixUrl(document.selectFirst("div.poster img, img.wp-post-image")?.attr("src") ?: "")
-        val description = document.selectFirst("div.storyline, div.content, .entry-content")?.text()?.trim()
         
-        val episodes = document.select("div.episodest, ul.episodelist li, a.btn-eps").mapNotNull { element ->
-            val link = fixUrl(element.selectFirst("a")?.attr("href") ?: element.attr("href") ?: "")
+        val posterImg = document.selectFirst("div.poster img, img.wp-post-image, .entry-content img")
+        val rawPoster = posterImg?.attr("src")?.takeIf { it.isNotBlank() } ?: posterImg?.attr("data-src") ?: ""
+        val poster = fixUrl(rawPoster)
+        
+        val description = document.selectFirst("div.storyline, div.content, .entry-content p")?.text()?.trim()
+        
+        val episodes = document.select("a[href*='episode'], div.episodest a, ul.episodelist li a, a.btn-eps, .eplister a").mapNotNull { element ->
+            val link = fixUrl(element.attr("href") ?: "")
             val epName = element.text().trim()
             val epNum = epName.filter { it.isDigit() }.toIntOrNull() ?: 1
-            newEpisode(link) {
-                name = epName
-                episode = epNum
-            }
-        }.ifEmpty {
+            if (link.isNotBlank() && (epName.contains("Episode", true) || epName.contains("Ep", true) || link.contains("episode"))) {
+                newEpisode(link) {
+                    name = epName
+                    episode = epNum
+                }
+            } else null
+        }.distinctBy { it.data }.ifEmpty {
             listOf(
                 newEpisode(url) {
                     name = title
@@ -114,12 +124,19 @@ class KDHindiDubbed : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
-        val links = document.select("a[href*='momofile'], a.btn, a.button, a[href*='xcloud']")
+        
+        val links = document.select("a[href*='momofile'], a[href*='xcloud'], a[href*='tmbcloud'], a[href*='voe'], a[href*='pixeldrain'], a[href*='buzzheavier'], a[href*='fileditch'], a[href*='vikingfile'], a[href*='send.cm'], a.btn, a.button, a.watch-btn, a.download-btn")
         
         for (element in links) {
-            val link = element.attr("href") ?: continue
-            if (link.startsWith("http")) {
-                loadExtractor(link, data, subtitleCallback, callback)
+            val link = element.attr("href")?.let { fixUrl(it) } ?: continue
+            if (link.startsWith("http") && !link.contains("dramacool.website")) {
+                try {
+                    if (link.contains("tmbcloud.dev") || link.contains("tmbcloud.lol") || link.contains("momofile.shop") || link.contains("xcloud.asia")) {
+                        loadExtractor(link, data, subtitleCallback, callback)
+                    } else {
+                        loadExtractor(link, data, subtitleCallback, callback)
+                    }
+                } catch (_: Exception) {}
             }
         }
         return true
