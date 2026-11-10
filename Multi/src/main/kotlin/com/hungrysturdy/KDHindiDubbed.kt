@@ -124,15 +124,12 @@ class KDHindiDubbed : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
-        
-        // Select all download/watch buttons and links on the episode page
         val links = document.select("a[href], a.btn, a.button, a.watch-btn, a.download-btn")
         
         for (element in links) {
             val link = element.attr("href")?.let { fixUrl(it) } ?: continue
             if (link.startsWith("http")) {
                 try {
-                    // If it's an internal dramacool redirect page (e.g. /ghkyyugkjyhtj/)
                     if (link.contains("dramacool.website") && !link.contains("momofile") && !link.contains("xcloud") && !link.contains("tmbcloud")) {
                         val subDoc = app.get(link).document
                         val subLinks = subDoc.select("a[href], a.btn, a.download-btn")
