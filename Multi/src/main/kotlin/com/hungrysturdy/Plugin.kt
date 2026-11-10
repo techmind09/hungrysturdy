@@ -9,7 +9,10 @@ class Plugin : Plugin() {
     override fun load(context: Context) {
         // All providers should be added in this manner. Please don't edit the providers list directly.
         registerMainAPI(PrmoviesProvider())
-        registerMainAPI(NineanimeProvider())
-        registerExtractorAPI(NineanimeExtractor())
+        registerMainAPI(NineAnimeProvider())
+        registerExtractorAPI(NineAnimeExtractor())
+        registerExtractorAPI(NineAnimeMegaPlay())
+        registerExtractorAPI(NineAnimeVidmoly())
+        registerExtractorAPI(NineAnimeMoon())
     }
 }
