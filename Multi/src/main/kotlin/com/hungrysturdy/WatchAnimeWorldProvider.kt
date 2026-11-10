@@ -15,12 +15,6 @@ import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import com.lagradost.nicehttp.NiceResponse
 
-@CloudstreamPlugin
-class WatchAnimeWorldPlugin : Plugin() {
-    override fun load(context: Context) {
-        registerMainAPI(WatchAnimeWorldProvider())
-    }
-}
 
 class WatchAnimeWorldProvider : MainAPI() {
     override var mainUrl = "https://watchanimeworld.top"
