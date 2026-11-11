@@ -130,7 +130,8 @@ class KDHindiDubbed : MainAPI() {
             val link = element.attr("href")?.let { fixUrl(it) } ?: continue
             if (link.startsWith("http")) {
                 try {
-                    if (link.contains("dramacool.website") && !link.contains("momofile") && !link.contains("xcloud") && !link.contains("tmbcloud")) {
+                    // If it's an intermediate page like momofile.shop, xcloud.asia, or dramacool redirect
+                    if (link.contains("momofile") || link.contains("xcloud") || (link.contains("dramacool.website") && !link.contains("tmbcloud"))) {
                         val subDoc = app.get(link).document
                         val subLinks = subDoc.select("a[href], a.btn, a.download-btn")
                         for (subEl in subLinks) {
