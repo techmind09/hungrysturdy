@@ -227,7 +227,6 @@ class StarfilxProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Parse the JSON list of server links for the selected episode
         val urls: List<String> = try {
             parseJson<List<String>>(data)
         } catch (_: Exception) {
@@ -258,22 +257,22 @@ class StarfilxProvider : MainAPI() {
             }
 
             when {
-                // 3. Handle FileNext links (filenext.in/s/...)
+                // 3. Handle FileNext links (filenext.in/s/...) using newExtractorLink
                 targetUrl.contains("filenext.in") -> {
                     val doc = app.get(targetUrl, referer = mainUrl).document
-                    // Check for direct video/download links or embedded player on FileNext page
                     doc.select("video source[src], a[href*=.mp4], a[href*=.mkv], a.download-button[href]").forEach { el ->
                         val mediaUrl = el.attr("src").ifBlank { el.attr("href") }
                         if (mediaUrl.startsWith("http")) {
                             callback.invoke(
-                                ExtractorLink(
+                                newExtractorLink(
                                     source = this.name,
                                     name = "FileNext",
                                     url = mediaUrl,
-                                    referer = targetUrl,
-                                    quality = Qualities.Unknown.value,
-                                    isM3u8 = mediaUrl.contains(".m3u8")
-                                )
+                                    type = if (mediaUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = targetUrl
+                                    this.quality = Qualities.Unknown.value
+                                }
                             )
                         }
                     }
