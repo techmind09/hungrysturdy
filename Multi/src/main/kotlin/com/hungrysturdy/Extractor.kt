@@ -66,7 +66,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             val links = document.select("a.btn, a.download-btn, a[href*='http']")
             for (element in links) {
                 val href = element.attr("href") ?: continue
-                if (href.startsWith("http") && !href.contains("dramacool.website")) {
+                if (href.startsWith("http") && !href.contains("dramacool.website") && !href.contains("krakenfiles")) {
                     try {
                         loadExtractor(href, url, subtitleCallback, callback)
                     } catch (_: Exception) {}
