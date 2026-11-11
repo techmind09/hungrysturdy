@@ -23,7 +23,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             val uri = URI(finalUrl)
             val baseUrl = "${uri.scheme}://${uri.host}"
 
-            // Page ID extraction from button or URL path (e.g. /download/413Y57 -> 413Y57)
             val pageId = document.selectFirst("button[data-page], a[data-page], div[data-page], input[name='page']")?.attr("data-page")
                 ?: document.selectFirst("input[name='page']")?.attr("value")
                 ?: uri.path.trimEnd('/').substringAfterLast('/').takeIf { it.isNotBlank() && it != "download" && it != "file" }
@@ -76,7 +75,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 }
             }
 
-            // Fallback for direct links / buttons on the page
             if (!foundAny) {
                 val directButtons = document.select("a.btn[href], a.download-btn[href], a.button[href], a[href]")
                 for (btn in directButtons) {
