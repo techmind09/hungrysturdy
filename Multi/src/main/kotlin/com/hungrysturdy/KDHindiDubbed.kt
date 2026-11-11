@@ -117,7 +117,7 @@ class KDHindiDubbed : MainAPI() {
         }
     }
 
-        override suspend fun loadLinks(
+    override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -154,3 +154,4 @@ class KDHindiDubbed : MainAPI() {
         }
         return true
     }
+}
