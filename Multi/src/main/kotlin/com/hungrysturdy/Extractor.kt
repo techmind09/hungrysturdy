@@ -21,11 +21,14 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             val pageId = document.selectFirst("button[data-page]")?.attr("data-page")
             val typesToTry = listOf("fslv2new", "fastcdnv2", "r2", "telegram")
 
+            val uri = java.net.URI(url)
+            val baseUrl = "${uri.scheme}://${uri.host}"
+
             if (!pageId.isNullOrBlank()) {
                 for (dataType in typesToTry) {
                     try {
                         val apiRes = app.post(
-                            "https://tmbcloud.lol/download/$pageId",
+                            "$baseUrl/download/$pageId",
                             headers = mapOf(
                                 "Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8",
                                 "X-Requested-With" to "XMLHttpRequest",
