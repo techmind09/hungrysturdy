@@ -58,13 +58,13 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 return
             }
 
-            // 2. MomoFile PHP JSON endpoints handler
+            // 2. MomoFile PHP JSON endpoints handler (Concurrent / Parallel fetching for speed)
             val fileId = uri.query?.substringAfter("id=")?.takeIf { it.isNotBlank() }
                 ?: targetUrl.trimEnd('/').substringAfterLast('/')
 
             val services = listOf("pixeldrain", "buzzheavier", "fileditch", "vikingfile", "sendnow")
 
-            for (service in services) {
+            services.amap { service ->
                 try {
                     val endpoint = "$baseUrl/$service.php?id=$fileId"
                     val res = app.get(endpoint, referer = targetUrl)
