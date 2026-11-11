@@ -1,7 +1,9 @@
-package com.hungrysturdy
+package com.starfilx
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import org.jsoup.nodes.Element
 
 class StarfilxProvider : MainAPI() {
@@ -17,14 +19,17 @@ class StarfilxProvider : MainAPI() {
 
     override val mainPage = mainPageOf(
         "" to "Latest Updates",
+        "hindi-dub-drama/" to "Hindi Dubbed",
         "k-drama/" to "K-Drama",
         "chinese-dramas/" to "Chinese Dramas",
-        "hindi-dub-drama/" to "Hindi Dubbed",
-        "english-dub-drama/" to "English Dubbed",
         "ongoing/" to "Ongoing",
         "completed-dramas/" to "Completed Dramas",
+        "english-dub-drama/" to "English Dubbed",
         "japanese-drama/" to "Japanese Drama",
-        "thai-drama/" to "Thai Drama"
+        "thai-drama/" to "Thai Drama",
+        "turkish-drama/" to "Turkish Drama",
+        "korean-dub-movies/" to "Korean Dub Movies",
+        "anime-movies-hindi-dubbed/" to "Anime Movies"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -35,11 +40,24 @@ class StarfilxProvider : MainAPI() {
         }
 
         val document = app.get(url).document
-        val home = document.select("ul#posts-container li.post-item").mapNotNull {
+        val homeItems = mutableListOf<SearchResponse>()
+
+        // 1. Parse standard WordPress Jannah post grid
+        document.select("ul#posts-container li.post-item").mapNotNullTo(homeItems) {
             it.toSearchResult()
         }
 
-        return newHomePageResponse(request.name, home)
+        // 2. Fallback: If on homepage page 1, also grab unique items from top carousel (.ams-c)
+        if (page == 1 && request.data.isEmpty()) {
+            document.select("div.ams-tr div.ams-c:not(.clone)").forEach { card ->
+                val item = card.toCarouselSearchResult()
+                if (item != null && homeItems.none { it.url == item.url }) {
+                    homeItems.add(item)
+                }
+            }
+        }
+
+        return newHomePageResponse(request.name, homeItems)
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
@@ -50,7 +68,6 @@ class StarfilxProvider : MainAPI() {
 
         val imgElement = this.selectFirst("a.post-thumb img")
         val posterUrl = imgElement?.let { img ->
-            // Extract the highest resolution image from srcset if available, fallback to src
             val srcset = img.attr("srcset")
             if (srcset.isNotBlank()) {
                 srcset.split(",").lastOrNull()?.trim()?.split(" ")?.firstOrNull()
@@ -62,8 +79,26 @@ class StarfilxProvider : MainAPI() {
         return newAnimeSearchResponse(cleanTitle, href, TvType.AsianDrama) {
             this.posterUrl = posterUrl
             addDubStatus(
-                dubExist = rawTitle.contains("HINDI", ignoreCase = true) || 
-                           rawTitle.contains("DUBBED", ignoreCase = true),
+                dubExist = rawTitle.contains("HINDI", ignoreCase = true) ||
+                           rawTitle.contains("DUB", ignoreCase = true),
+                subExist = true
+            )
+        }
+    }
+
+    private fun Element.toCarouselSearchResult(): SearchResponse? {
+        val onclick = this.attr("onclick")
+        val href = Regex("""window\.location\s*=\s*['"]([^'"]+)['"]""")
+            .find(onclick)?.groupValues?.get(1) ?: return null
+
+        val rawTitle = this.selectFirst("h3.ams-h3")?.text()?.trim() ?: return null
+        val cleanTitle = cleanTitle(rawTitle)
+        val posterUrl = this.selectFirst("div.ams-img img")?.attr("src")
+
+        return newAnimeSearchResponse(cleanTitle, fixUrl(href), TvType.AsianDrama) {
+            this.posterUrl = posterUrl
+            addDubStatus(
+                dubExist = rawTitle.contains("HINDI", ignoreCase = true),
                 subExist = true
             )
         }
@@ -78,7 +113,7 @@ class StarfilxProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val url = "$mainUrl/?s=$query"
+        val url = "$mainUrl/?s=${java.net.URLEncoder.encode(query, "UTF-8")}"
         val document = app.get(url).document
 
         return document.select("ul#posts-container li.post-item").mapNotNull {
@@ -100,39 +135,77 @@ class StarfilxProvider : MainAPI() {
         val description = document.selectFirst("div.entry-content p")?.text()?.trim()
         val tags = document.select("span.post-cat-wrap a, div.post-bottom-meta a").map { it.text() }
 
-        val episodes = mutableListOf<Episode>()
         val contentArea = document.selectFirst("div.entry-content, article")
 
-        // 1. Parse Episode Links / Download Buttons inside the post
-        contentArea?.select("a[href]")?.forEach { a ->
-            val linkText = a.text().trim()
-            val href = a.attr("href")
+        // Map of Episode Number -> List of Server URLs (e.g. ep 1(terabox), ep 1(FileNext App))
+        val episodeMap = linkedMapOf<Int, MutableList<String>>()
+        val unnumberedLinks = mutableListOf<Pair<String, String>>()
 
-            // Skip Telegram, social, or internal navigation links
-            if (href.contains("t.me") || href.contains("starfilx.in/category") || href.startsWith("#")) {
+        contentArea?.select("a.button, a.wp-block-button__link, a[href]")?.forEach { a ->
+            val text = a.text().trim()
+            val href = a.attr("href").trim()
+
+            // Ignore Telegram links, empty anchors, or internal category/tag links
+            if (href.isBlank() ||
+                href.startsWith("#") ||
+                href.contains("t.me/") ||
+                href.contains("starfilx.in/")
+            ) {
                 return@forEach
             }
 
-            if (linkText.contains(Regex("Ep(isode)?\\s*\\d+|Watch|Download|Server|Link", RegexOption.IGNORE_CASE)) ||
-                a.hasClass("button") || a.hasClass("wp-block-button__link")
+            // Match pattern like: "ep 1(terabox)" or "ep 1(FileNext App)" or "Episode 04"
+            val epMatch = Regex("""(?:ep|episode)\s*(\d+)""", RegexOption.IGNORE_CASE).find(text)
+            if (epMatch != null) {
+                val epNum = epMatch.groupValues[1].toIntOrNull()
+                if (epNum != null) {
+                    episodeMap.getOrPut(epNum) { mutableListOf() }.add(href)
+                    return@forEach
+                }
+            }
+
+            // Fallback if button is a direct host link without an "ep X" label
+            if (a.hasClass("button") ||
+                href.contains("terabox") ||
+                href.contains("filenext") ||
+                href.contains("gofile") ||
+                href.contains("hubcloud") ||
+                href.contains("gdflix") ||
+                href.contains("rpmstream")
             ) {
-                val epNum = Regex("(\\d+)").find(linkText)?.groupValues?.get(1)?.toIntOrNull()
+                unnumberedLinks.add(text to href)
+            }
+        }
+
+        val episodes = mutableListOf<Episode>()
+
+        if (episodeMap.isNotEmpty()) {
+            episodeMap.entries.sortedBy { it.key }.forEach { (epNum, urls) ->
                 episodes.add(
-                    newEpisode(href) {
-                        this.name = linkText.ifBlank { "Episode ${epNum ?: (episodes.size + 1)}" }
+                    newEpisode(urls.distinct().toJson()) {
+                        this.name = "Episode $epNum"
                         this.episode = epNum
+                    }
+                )
+            }
+        } else if (unnumberedLinks.isNotEmpty()) {
+            unnumberedLinks.forEachIndexed { index, (label, link) ->
+                episodes.add(
+                    newEpisode(listOf(link).toJson()) {
+                        this.name = label.ifBlank { "Episode ${index + 1}" }
+                        this.episode = index + 1
                     }
                 )
             }
         }
 
-        // 2. Parse direct embedded iframes if episodes aren't listed as buttons
+        // Also check if there are embedded iframes directly inside the post
         if (episodes.isEmpty()) {
             contentArea?.select("iframe[src]")?.forEachIndexed { index, iframe ->
                 val src = iframe.attr("src")
                 if (!src.contains("a-ads.com") && !src.contains("google")) {
                     episodes.add(
-                        newEpisode(fixUrl(src)) {
+                        newEpisode(listOf(fixUrl(src)).toJson()) {
                             this.name = "Episode ${index + 1}"
                             this.episode = index + 1
                         }
@@ -141,19 +214,10 @@ class StarfilxProvider : MainAPI() {
             }
         }
 
-        return if (episodes.size > 1 || rawTitle.contains(Regex("ep\\s*\\d+|complete|season", RegexOption.IGNORE_CASE))) {
-            newTvSeriesLoadResponse(title, url, TvType.AsianDrama, episodes) {
-                this.posterUrl = poster
-                this.plot = description
-                this.tags = tags
-            }
-        } else {
-            val movieData = episodes.firstOrNull()?.data ?: url
-            newMovieLoadResponse(title, url, TvType.AsianDrama, movieData) {
-                this.posterUrl = poster
-                this.plot = description
-                this.tags = tags
-            }
+        return newTvSeriesLoadResponse(title, url, TvType.AsianDrama, episodes) {
+            this.posterUrl = poster
+            this.plot = description
+            this.tags = tags
         }
     }
 
@@ -163,35 +227,81 @@ class StarfilxProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        var targetUrl = data
-
-        // Unwrap startfilx.com / full-page-script Base64 shortener if present
-        if (targetUrl.contains("?url=")) {
-            val encodedPart = targetUrl.substringAfter("?url=").substringBefore("&")
-            try {
-                targetUrl = base64Decode(encodedPart)
-            } catch (_: Exception) {}
+        // Parse the JSON list of server links for the selected episode
+        val urls: List<String> = try {
+            parseJson<List<String>>(data)
+        } catch (_: Exception) {
+            listOf(data)
         }
 
-        // Handle custom streaming/host domains configured in the site's script
-        when {
-            targetUrl.contains("rpmstream.live") -> {
-                val doc = app.get(targetUrl, referer = mainUrl).document
-                doc.select("iframe[src]").forEach {
-                    loadExtractor(fixUrl(it.attr("src")), targetUrl, subtitleCallback, callback)
-                }
-                // Check for direct m3u8 in script tags
-                val scriptData = doc.select("script").html()
-                Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""").findAll(scriptData).forEach { match ->
-                    M3u8Helper.generateM3u8(
-                        this.name,
-                        match.groupValues[1],
-                        targetUrl
-                    ).forEach(callback)
-                }
+        urls.amap { rawUrl ->
+            var targetUrl = rawUrl
+
+            // 1. Unwrap startfilx.com / arolinks.com Base64 shortener if present
+            if (targetUrl.contains("?url=")) {
+                val encodedPart = targetUrl.substringAfter("?url=").substringBefore("&")
+                try {
+                    targetUrl = base64Decode(encodedPart)
+                } catch (_: Exception) {}
             }
-            else -> {
-                loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
+
+            // 2. Normalize 1024terabox.com / teraboxapp.com / freeterabox.com for CloudStream's built-in Terabox extractor
+            if (targetUrl.contains("1024terabox.com") ||
+                targetUrl.contains("teraboxapp.com") ||
+                targetUrl.contains("teraboxlink.com") ||
+                targetUrl.contains("freeterabox.com")
+            ) {
+                targetUrl = targetUrl.replace(
+                    Regex("https?://(www\\.)?(1024terabox|teraboxapp|teraboxlink|freeterabox)\\.com"),
+                    "https://www.terabox.com"
+                )
+            }
+
+            when {
+                // 3. Handle FileNext links (filenext.in/s/...)
+                targetUrl.contains("filenext.in") -> {
+                    val doc = app.get(targetUrl, referer = mainUrl).document
+                    // Check for direct video/download links or embedded player on FileNext page
+                    doc.select("video source[src], a[href*=.mp4], a[href*=.mkv], a.download-button[href]").forEach { el ->
+                        val mediaUrl = el.attr("src").ifBlank { el.attr("href") }
+                        if (mediaUrl.startsWith("http")) {
+                            callback.invoke(
+                                ExtractorLink(
+                                    source = this.name,
+                                    name = "FileNext",
+                                    url = mediaUrl,
+                                    referer = targetUrl,
+                                    quality = Qualities.Unknown.value,
+                                    isM3u8 = mediaUrl.contains(".m3u8")
+                                )
+                            )
+                        }
+                    }
+                    doc.select("iframe[src]").forEach { iframe ->
+                        loadExtractor(fixUrl(iframe.attr("src")), targetUrl, subtitleCallback, callback)
+                    }
+                }
+
+                // 4. Handle Starfilx RPMStream links
+                targetUrl.contains("rpmstream.live") -> {
+                    val doc = app.get(targetUrl, referer = mainUrl).document
+                    doc.select("iframe[src]").forEach {
+                        loadExtractor(fixUrl(it.attr("src")), targetUrl, subtitleCallback, callback)
+                    }
+                    val scriptData = doc.select("script").html()
+                    Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""").findAll(scriptData).forEach { match ->
+                        M3u8Helper.generateM3u8(
+                            "${this.name} RPMStream",
+                            match.groupValues[1],
+                            targetUrl
+                        ).forEach(callback)
+                    }
+                }
+
+                // 5. Pass Terabox, GoFile, GDFlix, HubCloud, Dailymotion, Google Drive to CloudStream extractors
+                else -> {
+                    loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
+                }
             }
         }
 
