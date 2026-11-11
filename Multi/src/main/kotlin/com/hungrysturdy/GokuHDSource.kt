@@ -69,14 +69,29 @@ internal object GokuHDSources {
             servers.add(label to href)
         }
 
-        val episodes = LinkedHashMap<Int, List<Pair<String, String>>>()
-        for (head in scope.select("h3, h4, h5")) {
+        val episodes = LinkedHashMap<Int, MutableList<Pair<String, String>>>()
+        for (head in scope.select("h3, h4, h5, p:has(strong), p:has(b)")) {
             val text = head.text()
-            val num = Regex("""(?i)episodes?\s*:?\s*0*(\d{1,3})""").find(text)?.groupValues?.get(1)?.toIntOrNull()
+            val num = Regex("""(?i)ep(?:isode)?s?\s*:?\s*0*(\d{1,3})""").find(text)?.groupValues?.get(1)?.toIntOrNull()
                 ?: continue
             val links = mutableListOf<Pair<String, String>>()
+            
+            // Agar links usi <p> tag ke andar hain jisme Episode heading hai
+            for (a in head.select("a[href]")) {
+                val href = a.attr("href").trim()
+                val label = a.selectFirst("button")?.text()?.replace(Regex("""\s+"""), " ")?.trim()
+                    ?: a.text().replace(Regex("""\s+"""), " ").trim()
+                if (label.isNotBlank() && isServerLink(href) && !buttonJunk.containsMatchIn(href) && !buttonJunk.containsMatchIn(label)) {
+                    links.add(label to href)
+                }
+            }
+
             var sib = head.nextElementSibling()
             while (sib != null && !listOf("h3", "h4", "h5").contains(sib.tagName())) {
+                // Agar next paragraph mein naya episode number hai toh break karein
+                if (sib.tagName() == "p" && Regex("""(?i)ep(?:isode)?s?\s*:?\s*0*(\d{1,3})""").containsMatchIn(sib.text())) {
+                    break
+                }
                 for (a in sib.select("a[href]")) {
                     val href = a.attr("href").trim()
                     val label = a.selectFirst("button")?.text()?.replace(Regex("""\s+"""), " ")?.trim()
@@ -87,16 +102,17 @@ internal object GokuHDSources {
                 }
                 sib = sib.nextElementSibling()
             }
-            if (links.isNotEmpty() && !episodes.containsKey(num)) {
-                episodes[num] = links
+            if (links.isNotEmpty()) {
+                val list = episodes.getOrPut(num) { mutableListOf() }
+                list.addAll(links)
             }
         }
-        return DrivePage(servers.distinctBy { it.second }, episodes)
+        val finalEpisodes = episodes.mapValues { it.value.distinctBy { pair -> pair.second } }
+        return DrivePage(servers.distinctBy { it.second }, finalEpisodes)
     }
 
     class Server(val name: String, val url: String, val headers: Map<String, String> = emptyMap())
 
-    // Updated resolve supporting episode number filtering for drive pages
     suspend fun resolve(href: String, episodeNum: Int? = null): List<Server> {
         if (!href.startsWith("http") || deadHosts.containsMatchIn(href)) return emptyList()
         val host = hostOf(href)
@@ -132,7 +148,7 @@ internal object GokuHDSources {
                 host.contains("fastdl") -> fastdlDirect(href)?.let { listOf(Server("G-Direct", it)) } ?: emptyList()
                 host.contains("filebee") || host.contains("filepress") || host.contains("fpgo") ->
                     filepressDirect(href)?.let { listOf(Server("Filepress", it)) } ?: emptyList()
-                host.contains("gofile") -> gofileDirect(href)?.let { listOf(Server("GoFile", it)) } ?: emptyList()
+                host.contains("gofile") -> gofileDirect(href)?.let { listOf(it) } ?: emptyList()
                 host.contains("gpdl") -> gpdlDirect(href)?.let { listOf(Server("10Gbps", it)) } ?: emptyList()
                 host.contains("hubcloud") -> hubcloudServers(href)
                 else -> directServer(href)
@@ -239,7 +255,7 @@ internal object GokuHDSources {
     private suspend fun addServer(out: MutableList<Server>, name: String, href: String) {
         when (name) {
             "10Gbps" -> gpdlDirect(href)?.let { out.add(Server(name, it)) }
-            "GoFile" -> gofileDirect(href)?.let { out.add(Server(name, it)) }
+            "GoFile" -> gofileDirect(href)?.let { out.add(it) }
             "PixelDrain" -> out.add(Server(name, pixelApi(href)))
             else -> out.add(Server(name, href))
         }
@@ -436,7 +452,7 @@ internal object GokuHDSources {
         }
     }
 
-    private suspend fun gofileDirect(url: String): String? {
+    private suspend fun gofileDirect(url: String): Server? {
         val code = url.substringAfterLast("/").substringBefore("#").substringBefore("?")
         if (code.isBlank()) return null
         return try {
@@ -464,7 +480,7 @@ internal object GokuHDSources {
                     best = link
                 }
             }
-            best
+            best?.let { Server("GoFile", it, mapOf("Cookie" to "accountToken=$token")) }
         } catch (_: Exception) {
             null
         }
