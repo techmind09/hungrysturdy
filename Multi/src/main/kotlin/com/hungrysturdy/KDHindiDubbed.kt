@@ -59,13 +59,14 @@ class KDHindiDubbed : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get("${request.data}$page").document
-        val home = document.select("div.item, div.post-item, article, div.box").mapNotNull { it.toSearchResult() }
+        val home = document.select("article.herald-lay-c, div.item, div.post-item, article, div.box").mapNotNull { it.toSearchResult() }
         return newHomePageResponse(request.name, home)
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = this.selectFirst("h2 a, h3 a, a.title, .entry-title a")?.text() ?: return null
-        val href = fixUrl(this.selectFirst("h2 a, h3 a, a.title, .entry-title a")?.attr("href") ?: return null)
+        val titleElement = this.selectFirst("h2.entry-title a, h2 a, h3 a, a.title") ?: return null
+        val title = titleElement.text().trim()
+        val href = fixUrl(titleElement.attr("href"))
         
         val imgElement = this.selectFirst("img")
         val rawImg = imgElement?.attr("src")?.takeIf { it.isNotBlank() }
@@ -79,20 +80,20 @@ class KDHindiDubbed : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl/?s=$query").document
-        return document.select("div.item, div.post-item, article, div.box").mapNotNull { it.toSearchResult() }
+        return document.select("article.herald-lay-c, div.item, div.post-item, article, div.box").mapNotNull { it.toSearchResult() }
     }
 
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
-        val title = document.selectFirst("h1, h2.title")?.text()?.trim() ?: "Drama"
+        val title = document.selectFirst("h1, h2.title, .entry-title")?.text()?.trim() ?: "Drama"
         
-        val posterImg = document.selectFirst("div.poster img, img.wp-post-image, .entry-content img")
+        val posterImg = document.selectFirst("div.poster img, img.wp-post-image, .entry-content img, article img")
         val rawPoster = posterImg?.attr("src")?.takeIf { it.isNotBlank() } ?: posterImg?.attr("data-src") ?: ""
         val poster = fixUrl(rawPoster)
         
         val description = document.selectFirst("div.storyline, div.content, .entry-content p")?.text()?.trim()
         
-        val episodes = document.select("a[href*='episode'], div.episodest a, ul.episodelist li a, a.btn-eps, .eplister a").mapNotNull { element ->
+        val episodes = document.select("a[href*='episode'], div.episodest a, ul.episodelist li a, a.btn-eps, .eplister a, .entry-content a[href*='episode']").mapNotNull { element ->
             val link = fixUrl(element.attr("href") ?: "")
             val epName = element.text().trim()
             val epNum = epName.filter { it.isDigit() }.toIntOrNull() ?: 1
@@ -124,32 +125,31 @@ class KDHindiDubbed : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
-        val links = document.select("a[href], a.btn, a.button, a.watch-btn, a.download-btn")
+        val links = document.select("a[href], a.btn, a.button, a.watch-btn, a.download-btn, a.btn2, a.btn-zip")
 
         for (element in links) {
-            val link = element.attr("href")?.let { fixUrl(it) } ?: continue
-            if (link.startsWith("http")) {
+            var link = element.attr("href")?.let { fixUrl(it) } ?: continue
+            if (link.startsWith("http") || link.startsWith("/")) {
                 try {
-                    // Ignore unwanted/dead domains that trigger wrong extractors like krakenfiles
                     if (link.contains("krakenfiles") || link.contains("statcounter") || link.contains("histats")) continue
 
-                    // 1. Handle intermediate pages like momofile.shop, xcloud.asia, or dramacool redirects
+                    if (link.contains("redir2.php") || link.contains("fifa2026.mom")) {
+                        val res = app.get(link, allowRedirects = true)
+                        link = res.url
+                    }
+
                     if (link.contains("momofile") || link.contains("xcloud") || (link.contains("dramacool.website") && !link.contains("tmbcloud"))) {
                         val subDoc = app.get(link).document
-                        val subLinks = subDoc.select("a[href], a.btn, a.download-btn")
+                        val subLinks = subDoc.select("a[href], a.btn, a.button, a.download-btn, a.btn2")
                         for (subEl in subLinks) {
                             val subHref = subEl.attr("href") ?: continue
                             if (subHref.startsWith("http") && !subHref.contains("dramacool.website") && !subHref.contains("krakenfiles")) {
                                 loadExtractor(subHref, link, subtitleCallback, callback)
                             }
                         }
-                    } 
-                    // 2. Handle TMBCloud links directly using our custom extractor
-                    else if (link.contains("tmbcloud")) {
+                    } else if (link.contains("tmbcloud")) {
                         loadExtractor(link, data, subtitleCallback, callback)
-                    } 
-                    // 3. Handle valid direct external hosting links only
-                    else if (!link.contains("dramacool.website")) {
+                    } else if (!link.contains("dramacool.website")) {
                         loadExtractor(link, data, subtitleCallback, callback)
                     }
                 } catch (_: Exception) {}
