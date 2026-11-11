@@ -2,7 +2,6 @@ package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.nodes.Element
 
 class StarfilxProvider : MainAPI() {
@@ -41,12 +40,10 @@ class StarfilxProvider : MainAPI() {
         val document = app.get(url).document
         val homeItems = mutableListOf<SearchResponse>()
 
-        // 1. Parse standard WordPress Jannah post grid
         document.select("ul#posts-container li.post-item").mapNotNullTo(homeItems) {
             it.toSearchResult()
         }
 
-        // 2. If on homepage page 1, also grab unique items from top carousel (.ams-c)
         if (page == 1 && request.data.isEmpty()) {
             document.select("div.ams-tr div.ams-c:not(.clone)").forEach { card ->
                 val item = card.toCarouselSearchResult()
@@ -136,12 +133,11 @@ class StarfilxProvider : MainAPI() {
             .firstOrNull { it.length > 30 && !it.contains("Telegram", ignoreCase = true) }
 
         val tags = document.select("span.post-cat-wrap a, div.post-bottom-meta a").map { it.text() }
-
         val contentArea = document.selectFirst("div.entry-content, article")
 
-        val episodeMap = linkedMapOf<Int, MutableList<String>>()
-        val unnumberedLinks = mutableListOf<Pair<String, String>>()
+        val episodes = mutableListOf<Episode>()
 
+        // Parse all buttons (e.g. "ep 1(terabox)", "ep 1(FileNext App)")
         contentArea?.select("a.button, a.wp-block-button__link, a[href]")?.forEach { a ->
             val text = a.text().trim()
             val href = a.attr("href").trim()
@@ -154,62 +150,41 @@ class StarfilxProvider : MainAPI() {
                 return@forEach
             }
 
+            // Extract episode number and server name from text
             val epMatch = Regex("""(?:ep|episode)\s*(\d+)""", RegexOption.IGNORE_CASE).find(text)
             if (epMatch != null) {
-                val epNum = epMatch.groupValues[1].toIntOrNull()
-                if (epNum != null) {
-                    episodeMap.getOrPut(epNum) { mutableListOf() }.add(href)
-                    return@forEach
+                val epNum = epMatch.groupValues[1].toIntOrNull() ?: 1
+                val serverName = when {
+                    text.contains("terabox", ignoreCase = true) -> "Terabox"
+                    text.contains("filenext", ignoreCase = true) -> "FileNext"
+                    else -> text
                 }
-            }
 
-            if (a.hasClass("button") ||
-                href.contains("terabox", ignoreCase = true) ||
-                href.contains("filenext", ignoreCase = true) ||
-                href.contains("gofile", ignoreCase = true) ||
-                href.contains("hubcloud", ignoreCase = true) ||
-                href.contains("gdflix", ignoreCase = true) ||
-                href.contains("rpmstream", ignoreCase = true) ||
-                href.contains("dailymotion", ignoreCase = true) ||
-                href.contains("dai.ly", ignoreCase = true)
-            ) {
-                unnumberedLinks.add(text to href)
-            }
-        }
-
-        val episodes = mutableListOf<Episode>()
-
-        if (episodeMap.isNotEmpty()) {
-            episodeMap.entries.sortedBy { it.key }.forEach { (epNum, urls) ->
                 episodes.add(
-                    newEpisode(urls.distinct().joinToString("|")) {
-                        this.name = "Episode $epNum"
+                    newEpisode(href) {
+                        this.name = "Ep $epNum ($serverName)"
                         this.episode = epNum
                     }
                 )
-            }
-        } else if (unnumberedLinks.isNotEmpty()) {
-            unnumberedLinks.forEachIndexed { index, (label, link) ->
+            } else if (a.hasClass("button")) {
                 episodes.add(
-                    newEpisode(link) {
-                        this.name = label.ifBlank { "Episode ${index + 1}" }
-                        this.episode = index + 1
+                    newEpisode(href) {
+                        this.name = text.ifBlank { "Stream" }
+                        this.episode = episodes.size + 1
                     }
                 )
             }
         }
 
-        contentArea?.select("iframe[src]")?.forEachIndexed { index, iframe ->
-            val src = iframe.attr("src")
-            if (!src.contains("a-ads.com") && !src.contains("google")) {
-                val epNum = index + 1
-                if (episodeMap.containsKey(epNum)) {
-                    episodeMap[epNum]?.add(fixUrl(src))
-                } else if (episodes.isEmpty()) {
+        // Fallback iframes
+        if (episodes.isEmpty()) {
+            contentArea?.select("iframe[src]")?.forEachIndexed { index, iframe ->
+                val src = iframe.attr("src")
+                if (!src.contains("a-ads.com") && !src.contains("google")) {
                     episodes.add(
                         newEpisode(fixUrl(src)) {
-                            this.name = "Episode $epNum"
-                            this.episode = epNum
+                            this.name = "Episode ${index + 1}"
+                            this.episode = index + 1
                         }
                     )
                 }
@@ -229,46 +204,38 @@ class StarfilxProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val urls = if (data.startsWith("[")) {
-            tryParseJson<List<String>>(data) ?: listOf(data)
-        } else {
-            data.split("|").map { it.trim() }.filter { it.isNotBlank() }
+        var targetUrl = data
+
+        if (targetUrl.contains("?url=")) {
+            val encodedPart = targetUrl.substringAfter("?url=").substringBefore("&")
+            try {
+                targetUrl = base64Decode(encodedPart)
+            } catch (_: Exception) {}
         }
 
-        urls.amap { rawUrl ->
-            var targetUrl = rawUrl
-
-            if (targetUrl.contains("?url=")) {
-                val encodedPart = targetUrl.substringAfter("?url=").substringBefore("&")
-                try {
-                    targetUrl = base64Decode(encodedPart)
-                } catch (_: Exception) {}
+        when {
+            targetUrl.contains("terabox", ignoreCase = true) -> {
+                extractTerabox(targetUrl, subtitleCallback, callback)
             }
-
-            when {
-                targetUrl.contains("terabox", ignoreCase = true) -> {
-                    extractTerabox(targetUrl, subtitleCallback, callback)
+            targetUrl.contains("filenext", ignoreCase = true) -> {
+                extractFileNext(targetUrl, subtitleCallback, callback)
+            }
+            targetUrl.contains("rpmstream.live", ignoreCase = true) -> {
+                val doc = app.get(targetUrl, referer = mainUrl).document
+                doc.select("iframe[src]").forEach {
+                    loadExtractor(fixUrl(it.attr("src")), targetUrl, subtitleCallback, callback)
                 }
-                targetUrl.contains("filenext", ignoreCase = true) -> {
-                    extractFileNext(targetUrl, subtitleCallback, callback)
+                val scriptData = doc.select("script").html()
+                Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""").findAll(scriptData).forEach { match ->
+                    M3u8Helper.generateM3u8(
+                        "${this.name} RPMStream",
+                        match.groupValues[1],
+                        targetUrl
+                    ).forEach(callback)
                 }
-                targetUrl.contains("rpmstream.live", ignoreCase = true) -> {
-                    val doc = app.get(targetUrl, referer = mainUrl).document
-                    doc.select("iframe[src]").forEach {
-                        loadExtractor(fixUrl(it.attr("src")), targetUrl, subtitleCallback, callback)
-                    }
-                    val scriptData = doc.select("script").html()
-                    Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""").findAll(scriptData).forEach { match ->
-                        M3u8Helper.generateM3u8(
-                            "${this.name} RPMStream",
-                            match.groupValues[1],
-                            targetUrl
-                        ).forEach(callback)
-                    }
-                }
-                else -> {
-                    loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
-                }
+            }
+            else -> {
+                loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
             }
         }
 
@@ -320,6 +287,7 @@ class StarfilxProvider : MainAPI() {
             } catch (_: Exception) {}
         }
 
+        // Fallback to CloudStream's built-in extractor
         val normalizedUrl = url.replace(
             Regex("https?://(www\\.)?(1024terabox|teraboxapp|teraboxlink|freeterabox)\\.com"),
             "https://www.terabox.com"
