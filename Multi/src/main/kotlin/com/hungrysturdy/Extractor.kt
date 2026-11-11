@@ -6,8 +6,8 @@ import org.json.JSONObject
 import java.net.URI
 
 class KDHindiDubbedExtractor : ExtractorApi() {
-    override val name = "TMBCloud"
-    override val mainUrl = "https://tmbcloud.lol"
+    override val name = "MomoFile"
+    override val mainUrl = "https://momofile.shop"
     override val requiresReferer = false
 
     override suspend fun getUrl(
@@ -17,86 +17,100 @@ class KDHindiDubbedExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val response = app.get(url, referer = referer ?: mainUrl, allowRedirects = true)
-            val document = response.document
-            val finalUrl = response.url
-            val uri = URI(finalUrl)
+            var targetUrl = url
+            val uri = URI(targetUrl)
             val baseUrl = "${uri.scheme}://${uri.host}"
 
-            val pageId = document.selectFirst("button[data-page], a[data-page], div[data-page], input[name='page']")?.attr("data-page")
-                ?: document.selectFirst("input[name='page']")?.attr("value")
-                ?: uri.path.trimEnd('/').substringAfterLast('/').takeIf { it.isNotBlank() && it != "download" && it != "file" }
-
-            var foundAny = false
-
-            if (!pageId.isNullOrBlank()) {
-                val dynamicTypes = document.select("button[data-type], a[data-type], input[name='type']").mapNotNull {
-                    it.attr("data-type").ifBlank { it.attr("value") }.takeIf { type -> type.isNotBlank() }
-                }
-                val typesToTry = (dynamicTypes + listOf("fslv2new", "fastcdnv2", "r2", "telegram", "fsl", "pixel")).distinct()
-
-                for (dataType in typesToTry) {
-                    try {
-                        val apiRes = app.post(
-                            "$baseUrl/download/$pageId",
-                            headers = mapOf(
-                                "Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8",
-                                "X-Requested-With" to "XMLHttpRequest",
-                                "Origin" to baseUrl,
-                                "Referer" to finalUrl
-                            ),
-                            data = mapOf("type" to dataType, "page" to pageId)
+            // Agar URL tmbcloud ka hai toh use bhi handle karo
+            if (targetUrl.contains("tmbcloud")) {
+                val response = app.get(targetUrl, referer = referer ?: "https://tmbcloud.lol")
+                val doc = response.document
+                val pageId = doc.selectFirst("button[data-page], a[data-page]")?.attr("data-page")
+                    ?: targetUrl.trimEnd('/').substringAfterLast('/')
+                
+                val apiRes = app.post(
+                    "https://tmbcloud.lol/download/$pageId",
+                    headers = mapOf(
+                        "Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8",
+                        "X-Requested-With" => "XMLHttpRequest",
+                        "Referer" to targetUrl
+                    ),
+                    data = mapOf("type" to "fslv2new", "page" to pageId)
+                )
+                if (apiRes.text.trim().startsWith("{")) {
+                    val json = JSONObject(apiRes.text)
+                    val dlUrl = json.optString("url").takeIf { it.startsWith("http") }
+                        ?: json.optString("download_url").takeIf { it.startsWith("http") }
+                    if (!dlUrl.isNullOrBlank()) {
+                        callback.invoke(
+                            ExtractorLink(
+                                source = "TMBCloud",
+                                name = "TMBCloud - Server",
+                                url = dlUrl,
+                                type = ExtractorLinkType.VIDEO
+                            ) {
+                                this.quality = Qualities.P1080.value
+                                this.referer = "https://tmbcloud.lol"
+                            }
                         )
+                    }
+                }
+                return
+            }
 
-                        val text = apiRes.text.trim()
-                        if (text.startsWith("{")) {
-                            val json = JSONObject(text)
-                            val downloadUrl = json.optString("url").takeIf { it.startsWith("http") }
-                                ?: json.optString("download_url").takeIf { it.startsWith("http") }
-                                ?: json.optString("file").takeIf { it.startsWith("http") }
-                                ?: json.optString("link").takeIf { it.startsWith("http") }
+            // Agar URL momofile ya kisi wrapper page ka hai
+            val fileId = uri.query?.substringAfter("id=")?.takeIf { it.isNotBlank() }
+                ?: targetUrl.trimEnd('/').substringAfterLast('/')
 
-                            if (!downloadUrl.isNullOrBlank()) {
-                                foundAny = true
+            val services = listOf("pixeldrain", "buzzheavier", "fileditch", "vikingfile", "sendnow")
+
+            for (service in services) {
+                try {
+                    val endpoint = "$baseUrl/$service.php?id=$fileId"
+                    val res = app.get(endpoint, referer = targetUrl)
+                    val text = res.text.trim()
+
+                    if (text.startsWith("{")) {
+                        val json = JSONObject(text)
+                        val status = json.optString("status")
+                        if (status == "ready" || json.optBoolean("ok")) {
+                            val videoUrl = json.optString("url").takeIf { it.startsWith("http") }
+                            if (!videoUrl.isNullOrBlank()) {
                                 callback.invoke(
-                                    newExtractorLink(
-                                        source = name,
-                                        name = "TMBCloud - ${dataType.uppercase()}",
-                                        url = downloadUrl,
-                                        type = if (downloadUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                 ExtractorLink(
+                                        source = "MomoFile - ${service.replaceFirstChar { it.uppercase() }}",
+                                        name = "Stream (${service.uppercase()})",
+                                        url = videoUrl,
+                                        type = ExtractorLinkType.VIDEO
                                     ) {
-                                        this.quality = getQualityFromName(document.title())
+                                        this.quality = Qualities.P1080.value
                                         this.referer = baseUrl
                                     }
                                 )
                             }
                         }
-                    } catch (_: Exception) {}
-                }
+                    }
+                } catch (_: Exception) {}
             }
 
-            if (!foundAny) {
-                val directButtons = document.select("a.btn[href], a.download-btn[href], a.button[href], a[href]")
-                for (btn in directButtons) {
-                    val href = btn.attr("href").trim()
-                    if (href.startsWith("http") && !href.contains(uri.host)) {
-                        if (href.contains("pixeldrain") || href.contains("buzzheavier") || href.contains("fileditch") || 
-                            href.contains("vikingfile") || href.contains("send.now") || href.contains("workers.dev") || 
-                            href.contains("r2.dev") || href.contains(".mp4") || href.contains(".mkv")) {
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = name,
-                                    name = "TMBCloud - Direct ${btn.text().ifBlank { "Stream" }}",
-                                    url = href,
-                                    type = ExtractorLinkType.VIDEO
-                                ) {
-                                    this.quality = getQualityFromName(document.title())
-                                    this.referer = baseUrl
-                                }
-                            )
-                        } else if (href.contains("tmbcloud")) {
-                            loadExtractor(href, finalUrl, subtitleCallback, callback)
-                        }
+            // Fallback: Parse standard anchors on the page
+            val document = app.get(targetUrl, referer = referer ?: baseUrl).document
+            val links = document.select("a[href]")
+            for (element in links) {
+                val href = element.attr("href").trim()
+                if (href.startsWith("http") && !href.contains("momofile.shop")) {
+                    if (href.contains("pixeldrain") || href.contains("buzzheavier") || href.contains("fileditch") || href.contains("workers.dev") || href.contains("r2.dev")) {
+                        callback.invoke(
+                            ExtractorLink(
+                                source = "MomoFile",
+                                name = "Direct - ${element.text().ifBlank { "Server" }}",
+                                url = href,
+                                type = ExtractorLinkType.VIDEO
+                            ) {
+                                this.quality = Qualities.P1080.value
+                                this.referer = baseUrl
+                            }
+                        )
                     }
                 }
             }
