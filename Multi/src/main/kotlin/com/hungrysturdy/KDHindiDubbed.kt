@@ -15,43 +15,23 @@ class KDHindiDubbed : MainAPI() {
         "$mainUrl/page/" to "Latest",
         "$mainUrl/category/action/page/" to "Action",
         "$mainUrl/category/adventure/page/" to "Adventure",
-        "$mainUrl/category/arabic-subtitle/page/" to "Arabic Subtitle",
-        "$mainUrl/category/business/page/" to "Business",
         "$mainUrl/category/chinese-drama/page/" to "Chinese Drama",
-        "$mainUrl/category/chinese-language/page/" to "Chinese Language",
         "$mainUrl/category/comedy/page/" to "Comedy",
         "$mainUrl/category/crime/page/" to "Crime",
         "$mainUrl/category/drama/page/" to "Drama",
         "$mainUrl/category/english-dubbed/page/" to "English Dubbed",
-        "$mainUrl/category/family/page/" to "Family",
         "$mainUrl/category/fantasy/page/" to "Fantasy",
-        "$mainUrl/category/filipino-language/page/" to "Filipino Language",
-        "$mainUrl/category/food/page/" to "Food",
         "$mainUrl/category/hindi-dubbed/page/" to "Hindi Dubbed",
         "$mainUrl/category/historical/page/" to "Historical",
         "$mainUrl/category/horror/page/" to "Horror",
         "$mainUrl/category/japanese-drama/page/" to "Japanese Drama",
-        "$mainUrl/category/japanese-language/page/" to "Japanese Language",
         "$mainUrl/category/korean-drama/page/" to "Korean Drama",
-        "$mainUrl/category/korean-language/page/" to "Korean Language",
-        "$mainUrl/category/law/page/" to "Law",
-        "$mainUrl/category/life/page/" to "Life",
-        "$mainUrl/category/medical/page/" to "Medical",
-        "$mainUrl/category/military/page/" to "Military",
         "$mainUrl/category/movie/page/" to "Movie",
-        "$mainUrl/category/music/page/" to "Music",
         "$mainUrl/category/mystery/page/" to "Mystery",
-        "$mainUrl/category/philippines-drama/page/" to "Philippines Drama",
-        "$mainUrl/category/political/page/" to "Political",
-        "$mainUrl/category/psychological/page/" to "Psychological",
-        "$mainUrl/category/reality-show/page/" to "Reality Show",
         "$mainUrl/category/romance/page/" to "Romance",
         "$mainUrl/category/school/page/" to "School",
         "$mainUrl/category/sci-fi/page/" to "Sci-Fi",
-        "$mainUrl/category/sports/page/" to "Sports",
         "$mainUrl/category/supernatural/page/" to "Supernatural",
-        "$mainUrl/category/suspense/page/" to "Suspense",
-        "$mainUrl/category/thai-language/page/" to "Thai Language",
         "$mainUrl/category/thailand-drama/page/" to "Thailand Drama",
         "$mainUrl/category/thriller/page/" to "Thriller",
         "$mainUrl/category/youth/page/" to "Youth"
@@ -67,12 +47,13 @@ class KDHindiDubbed : MainAPI() {
         val titleElement = this.selectFirst("h2.entry-title a, h2 a, h3 a, a.title") ?: return null
         val title = titleElement.text().trim()
         val href = fixUrl(titleElement.attr("href"))
-        
+
         val imgElement = this.selectFirst("img")
-        val rawImg = imgElement?.attr("src")?.takeIf { it.isNotBlank() }
-            ?: imgElement?.attr("data-src")?.takeIf { it.isNotBlank() } ?: ""
+        val rawImg = imgElement?.attr("src")?.takeIf { it.isNotBlank() && !it.startsWith("data:") }
+            ?: imgElement?.attr("data-src")?.takeIf { it.isNotBlank() }
+            ?: imgElement?.attr("data-lazy-src")?.takeIf { it.isNotBlank() } ?: ""
         val posterUrl = fixUrl(rawImg)
-        
+
         return newMovieSearchResponse(title, href, TvType.TvSeries) {
             this.posterUrl = posterUrl
         }
@@ -85,48 +66,44 @@ class KDHindiDubbed : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
-        val title = document.selectFirst("h1, h2.title, .entry-title")?.text()?.trim() ?: "Drama"
-        
-        val posterImg = document.selectFirst("div.poster img, img.wp-post-image, .entry-content img, article img")
-        val rawPoster = posterImg?.attr("src")?.takeIf { it.isNotBlank() } ?: posterImg?.attr("data-src") ?: ""
-        val poster = fixUrl(rawPoster)
-        
-        val description = document.selctFirst?.let { document.selectFirst("div.storyline, div.content, .entry-content p")?.text()?.trim() }
-            ?: document.selectFirst(".entry-content p")?.text()?.trim()
-        
-        // Improved Episode parser to catch all format styles (Episode lists, buttons, internal links)
-        val episodes = document.select("a[href*='episode'], div.episodest a, ul.episodelist li a, a.btn-eps, .eplister a, .entry-content a, .entry-content p a").mapNotNull { element ->
-            val link = fixUrl(element.attr("href") ?: "")
-            val epName = element.text().trim()
-            val epNum = epName.filter { it.isDigit() }.toIntOrNull() 
-                ?: link.substringAfterLast("/").filter { it.isDigit() }.toIntOrNull() 
-                ?: 1
+        val title = document.selectFirst("h1.entry-title, h1, h2.title")?.text()?.trim() ?: "Drama"
 
-            if (link.isNotBlank() && (epName.contains("Episode", true) || epName.contains("Ep", true) || link.contains("episode") || epName.any { it.isDigit() })) {
+        val posterImg = document.selectFirst("div.poster img, img.wp-post-image, .entry-content img, article img")
+        val rawPoster = posterImg?.attr("src")?.takeIf { it.isNotBlank() && !it.startsWith("data:") }
+            ?: posterImg?.attr("data-src")?.takeIf { it.isNotBlank() }
+            ?: posterImg?.attr("data-lazy-src")?.takeIf { it.isNotBlank() } ?: ""
+        val poster = fixUrl(rawPoster)
+
+        val description = document.selectFirst("div.storyline, div.content, .entry-content p")?.text()?.trim()
+
+        // Content area ke andar se episodes/download links nikalna
+        val contentLinks = document.select(".entry-content a[href], div.episodest a[href], ul.episodelist li a[href], .eplister a[href]")
+
+        val episodes = contentLinks.mapNotNull { element ->
+            val link = fixUrl(element.attr("href").trim())
+            val epName = element.text().trim()
+
+            // Skip irrelevant links
+            if (link.isBlank() || link.contains("/category/") || link.contains("/tag/") || link.contains("telegram.me") || link.contains("t.me")) {
+                return@mapNotNull null
+            }
+
+            // Agar page par direct Episode 1, Episode 2 ke links hain
+            if (epName.contains("Episode", true) || epName.contains("Ep ", true) || link.contains("episode", true)) {
+                val epNum = Regex("""(?:Episode|Ep)\s*(\d+)""", RegexOption.IGNORE_CASE).find(epName)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: epName.filter { it.isDigit() }.toIntOrNull()
+                    ?: 1
+
                 newEpisode(link) {
                     name = epName.ifBlank { "Episode $epNum" }
                     episode = epNum
                 }
             } else null
         }.distinctBy { it.data }.ifEmpty {
-            // Fallback: If no explicit episode links found, check all anchor tags inside entry content
-            document.select(".entry-content a[href]").mapNotNull { element ->
-                val link = fixUrl(element.attr("href") ?: "")
-                val epName = element.text().trim()
-                if (link.startsWith("http") && !link.contains("dramacool.website") && !link.contains("tmbcloud")) {
-                    null
-                } else if (link.isNotBlank()) {
-                    val epNum = epName.filter { it.isDigit() }.toIntOrNull() ?: 1
-                    newEpisode(link) {
-                        name = epName.ifBlank { "Episode $epNum" }
-                        episode = epNum
-                    }
-                } else null
-            }.distinctBy { it.data }
-        }.ifEmpty {
+            // Agar single movie/drama post hai jisme seedhe download buttons hain, toh post URL ko hi Episode 1 bana do
             listOf(
                 newEpisode(url) {
-                    name = title
+                    name = "Full Movie / All Episodes"
                     episode = 1
                 }
             )
@@ -144,37 +121,81 @@ class KDHindiDubbed : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        // Case 1: Agar episode data khud ek direct external link (e.g., tmbcloud/momofile) hai
+        if (!data.contains(mainUrl.substringAfter("://"))) {
+            processExternalLink(data, mainUrl, subtitleCallback, callback)
+            return true
+        }
+
+        // Case 2: Agar data main site ka post/episode page hai, toh sirf .entry-content ke links check karo
         val document = app.get(data).document
-        val links = document.select("a[href], a.btn, a.button, a.watch-btn, a.download-btn, a.btn2, a.btn-zip")
+        val links = document.select(".entry-content a[href], a.btn[href], a.button[href], a.download-btn[href], a.watch-btn[href], iframe[src]")
 
         for (element in links) {
-            var link = element.attr("href")?.let { fixUrl(it) } ?: continue
-            if (link.startsWith("http") || link.startsWith("/")) {
-                try {
-                    if (link.contains("krakenfiles") || link.contains("statcounter") || link.contains("histats")) continue
+            val rawHref = element.attr("href").ifBlank { element.attr("src") }
+            val link = fixUrl(rawHref.trim())
 
-                    if (link.contains("redir2.php") || link.contains("fifa2026.mom")) {
-                        val res = app.get(link, allowRedirects = true)
-                        link = res.url
-                    }
+            if (!link.startsWith("http")) continue
+            if (link.contains("/category/") || link.contains("/tag/") || link.contains("wp-login") || link.contains("facebook.com") || link.contains("twitter.com")) continue
 
-                    if (link.contains("momofile") || link.contains("xcloud") || (link.contains("dramacool.website") && !link.contains("tmbcloud"))) {
-                        val subDoc = app.get(link).document
-                        val subLinks = subDoc.select("a[href], a.btn, a.button, a.download-btn, a.btn2")
-                        for (subEl in subLinks) {
-                            val subHref = subEl.attr("href") ?: continue
-                            if (subHref.startsWith("http") && !subHref.contains("dramacool.website") && !subHref.contains("krakenfiles")) {
-                                loadExtractor(subHref, link, subtitleCallback, callback)
-                            }
-                        }
-                    } else if (link.contains("tmbcloud")) {
-                        loadExtractor(link, data, subtitleCallback, callback)
-                    } else if (!link.contains("dramacool.website")) {
-                        loadExtractor(link, data, subtitleCallback, callback)
-                    }
-                } catch (_: Exception) {}
-            }
+            processExternalLink(link, data, subtitleCallback, callback)
         }
         return true
+    }
+
+    private suspend fun processExternalLink(
+        initialLink: String,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            var link = initialLink
+            if (link.contains("krakenfiles") || link.contains("statcounter") || link.contains("histats")) return
+
+            // 1. Bypass Redirectors (redir2.php, fifa2026, url shorteners)
+            if (link.contains("redir") || link.contains("fifa") || link.contains("?url=") || link.contains("goto")) {
+                val res = app.get(link, referer = referer, allowRedirects = true)
+                link = res.url
+
+                // Check for Meta Refresh or JS Redirect inside the redirector page
+                val metaRefresh = res.document.selectFirst("meta[http-equiv=refresh]")?.attr("content")
+                if (!metaRefresh.isNullOrBlank() && metaRefresh.contains("url=", true)) {
+                    link = metaRefresh.substringAfter("url=").substringAfter("URL=").trim().removeSurrounding("'").removeSurrounding("\"")
+                } else {
+                    val scriptRedirect = Regex("""window\.location(?:\.href)?\s*=\s*["']([^"']+)["']""").find(res.text)?.groupValues?.get(1)
+                    if (!scriptRedirect.isNullOrBlank()) {
+                        link = scriptRedirect
+                    }
+                }
+            }
+
+            // 2. Handle Intermediate Folder/Link Protectors (momofile, xcloud, or internal sub-pages)
+            if (link.contains("momofile") || link.contains("xcloud") || (link.contains("dramacool.website") && !link.contains("tmbcloud"))) {
+                val subDoc = app.get(link, referer = referer).document
+                val subLinks = subDoc.select(".entry-content a[href], a.btn[href], a.button[href], a.download-btn[href], a[href*='tmbcloud'], a[href*='hubcloud'], a[href*='gdflix'], a[href*='filepress']")
+                for (subEl in subLinks) {
+                    val subHref = subEl.attr("href").trim()
+                    if (subHref.startsWith("http") && !subHref.contains("dramacool.website") && !subHref.contains("krakenfiles")) {
+                        routeToExtractor(subHref, link, subtitleCallback, callback)
+                    }
+                }
+            } else {
+                routeToExtractor(link, referer, subtitleCallback, callback)
+            }
+        } catch (_: Exception) {}
+    }
+
+    private suspend fun routeToExtractor(
+        url: String,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        if (url.contains("tmbcloud") || url.contains("/download/")) {
+            KDHindiDubbedExtractor().getUrl(url, referer, subtitleCallback, callback)
+        } else {
+            loadExtractor(url, referer, subtitleCallback, callback)
+        }
     }
 }
