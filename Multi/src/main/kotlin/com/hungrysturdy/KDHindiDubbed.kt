@@ -20,6 +20,7 @@ class KDHindiDubbed : MainAPI() {
         "$mainUrl/category/crime/page/" to "Crime",
         "$mainUrl/category/drama/page/" to "Drama",
         "$mainUrl/category/english-dubbed/page/" to "English Dubbed",
+        "$mainUrl/category/family/page/" to "Family",
         "$mainUrl/category/fantasy/page/" to "Fantasy",
         "$mainUrl/category/hindi-dubbed/page/" to "Hindi Dubbed",
         "$mainUrl/category/historical/page/" to "Historical",
@@ -76,19 +77,16 @@ class KDHindiDubbed : MainAPI() {
 
         val description = document.selectFirst("div.storyline, div.content, .entry-content p")?.text()?.trim()
 
-        // Content area ke andar se episodes/download links nikalna
         val contentLinks = document.select(".entry-content a[href], div.episodest a[href], ul.episodelist li a[href], .eplister a[href]")
 
         val episodes = contentLinks.mapNotNull { element ->
             val link = fixUrl(element.attr("href").trim())
             val epName = element.text().trim()
 
-            // Skip irrelevant links
             if (link.isBlank() || link.contains("/category/") || link.contains("/tag/") || link.contains("telegram.me") || link.contains("t.me")) {
                 return@mapNotNull null
             }
 
-            // Agar page par direct Episode 1, Episode 2 ke links hain
             if (epName.contains("Episode", true) || epName.contains("Ep ", true) || link.contains("episode", true)) {
                 val epNum = Regex("""(?:Episode|Ep)\s*(\d+)""", RegexOption.IGNORE_CASE).find(epName)?.groupValues?.get(1)?.toIntOrNull()
                     ?: epName.filter { it.isDigit() }.toIntOrNull()
@@ -100,7 +98,6 @@ class KDHindiDubbed : MainAPI() {
                 }
             } else null
         }.distinctBy { it.data }.ifEmpty {
-            // Agar single movie/drama post hai jisme seedhe download buttons hain, toh post URL ko hi Episode 1 bana do
             listOf(
                 newEpisode(url) {
                     name = "Full Movie / All Episodes"
@@ -121,13 +118,11 @@ class KDHindiDubbed : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Case 1: Agar episode data khud ek direct external link (e.g., tmbcloud/momofile) hai
         if (!data.contains(mainUrl.substringAfter("://"))) {
             processExternalLink(data, mainUrl, subtitleCallback, callback)
             return true
         }
 
-        // Case 2: Agar data main site ka post/episode page hai, toh sirf .entry-content ke links check karo
         val document = app.get(data).document
         val links = document.select(".entry-content a[href], a.btn[href], a.button[href], a.download-btn[href], a.watch-btn[href], iframe[src]")
 
@@ -153,12 +148,10 @@ class KDHindiDubbed : MainAPI() {
             var link = initialLink
             if (link.contains("krakenfiles") || link.contains("statcounter") || link.contains("histats")) return
 
-            // 1. Bypass Redirectors (redir2.php, fifa2026, url shorteners)
             if (link.contains("redir") || link.contains("fifa") || link.contains("?url=") || link.contains("goto")) {
                 val res = app.get(link, referer = referer, allowRedirects = true)
                 link = res.url
 
-                // Check for Meta Refresh or JS Redirect inside the redirector page
                 val metaRefresh = res.document.selectFirst("meta[http-equiv=refresh]")?.attr("content")
                 if (!metaRefresh.isNullOrBlank() && metaRefresh.contains("url=", true)) {
                     link = metaRefresh.substringAfter("url=").substringAfter("URL=").trim().removeSurrounding("'").removeSurrounding("\"")
@@ -170,7 +163,6 @@ class KDHindiDubbed : MainAPI() {
                 }
             }
 
-            // 2. Handle Intermediate Folder/Link Protectors (momofile, xcloud, or internal sub-pages)
             if (link.contains("momofile") || link.contains("xcloud") || (link.contains("dramacool.website") && !link.contains("tmbcloud"))) {
                 val subDoc = app.get(link, referer = referer).document
                 val subLinks = subDoc.select(".entry-content a[href], a.btn[href], a.button[href], a.download-btn[href], a[href*='tmbcloud'], a[href*='hubcloud'], a[href*='gdflix'], a[href*='filepress']")
