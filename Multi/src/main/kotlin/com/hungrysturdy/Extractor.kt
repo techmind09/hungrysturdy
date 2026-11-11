@@ -18,9 +18,8 @@ class KDHindiDubbedExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            var targetUrl = unwrapRedirect(url, referer ?: mainUrl)
+            val targetUrl = unwrapRedirect(url, referer ?: mainUrl)
 
-            // Agar page kdhindidubbed.cfd ya intermediate episode list hai
             if (targetUrl.contains("kdhindidubbed") || targetUrl.contains("dramacool")) {
                 val doc = app.get(targetUrl, referer = referer).document
                 val subLinks = doc.select("a[href]").mapNotNull { el ->
@@ -63,7 +62,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
         return current
     }
 
-    // 1. MOMOFILE.SHOP HANDLER (Online Watching Link 2 + PixelDrain + FileDitch + Buzzheavier + VikingFile + SendNow)
+    // 1. MOMOFILE.SHOP HANDLER
     private suspend fun extractMomoFile(
         url: String,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -74,12 +73,10 @@ class KDHindiDubbedExtractor : ExtractorApi() {
         val fileId = uri.query?.substringAfter("id=")?.substringBefore("&")?.takeIf { it.isNotBlank() }
             ?: url.trimEnd('/').substringAfterLast('/')
 
-        // A) Page scrape for "Online Watching Link 2" (susanexpectcare / voe.sx) & embedded video player
         try {
             val pageRes = app.get(url, referer = baseUrl)
             val doc = pageRes.document
 
-            // Direct video/source inside momofile player if any
             doc.select("video source[src], video[src], iframe[src]").forEach { el ->
                 val src = el.attr("src").trim()
                 if (src.startsWith("http")) {
@@ -101,7 +98,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 }
             }
 
-            // "Online Watching Link 2" aur baaki direct anchor buttons
             val pageLinks = doc.select("a[href]")
             for (a in pageLinks) {
                 val href = a.attr("href").trim()
@@ -118,7 +114,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             }
         } catch (_: Exception) {}
 
-        // B) Parallel fetch all MomoFile PHP JSON APIs
         val services = listOf("pixeldrain", "fileditch", "buzzheavier", "vikingfile", "sendnow")
         services.amap { service ->
             try {
@@ -157,8 +152,8 @@ class KDHindiDubbedExtractor : ExtractorApi() {
         }
     }
 
-    // 2. PIXELDRAIN DIRECT STREAM FIX (/u/ID -> /api/file/ID)
-    private fun emitPixelDrain(url: String, callback: (ExtractorLink) -> Unit) {
+    // 2. PIXELDRAIN DIRECT STREAM FIX (Added 'suspend' keyword here)
+    private suspend fun emitPixelDrain(url: String, callback: (ExtractorLink) -> Unit) {
         val fileId = url.trimEnd('/').substringAfterLast('/').substringBefore("?")
         if (fileId.isBlank()) return
         val directVideoUrl = "https://pixeldrain.dev/api/file/$fileId"
@@ -176,7 +171,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
         )
     }
 
-    // 3. FILEDITCH HANDLER (fileditchvids.st -> theditch.st direct mkv/mp4 link)
+    // 3. FILEDITCH HANDLER
     private suspend fun extractFileDitch(url: String, callback: (ExtractorLink) -> Unit) {
         try {
             if (url.contains("theditch.") || url.endsWith(".mkv") || url.endsWith(".mp4")) {
@@ -257,7 +252,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             val res = app.get(url, referer = referer, allowRedirects = true)
             var html = res.text
 
-            // Check if page has JS redirect to another voe domain
             val jsRedirect = Regex("""window\.location\.href\s*=\s*['"](https?://[^'"]+)['"]""").find(html)?.groupValues?.get(1)
             val finalUrl = if (!jsRedirect.isNullOrBlank()) {
                 html = app.get(jsRedirect, referer = url).text
@@ -266,7 +260,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 res.url
             }
 
-            // 1. Direct HLS (.m3u8) or MP4 regex in page source
             val hlsMatch = Regex("""['"]hls['"]\s*:\s*['"]([^'"]+)['"]""").find(html)?.groupValues?.get(1)
             if (!hlsMatch.isNullOrBlank()) {
                 val decodedHls = if (hlsMatch.startsWith("http")) hlsMatch else String(Base64.decode(hlsMatch, Base64.DEFAULT))
@@ -286,7 +279,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 }
             }
 
-            // 2. Direct m3u8 URL in script
             val rawM3u8 = Regex("""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""").find(html)?.value
             if (!rawM3u8.isNullOrBlank()) {
                 callback.invoke(
@@ -303,12 +295,11 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 return
             }
 
-            // Fallback to Cloudstream built-in Voe extractor
             loadExtractor(finalUrl, referer, subtitleCallback, callback)
         } catch (_: Exception) {}
     }
 
-    // 6. XCLOUD.TATTOO -> XCLOUD1.LOL HANDLER (20GBPS, Cloud, 10Gbps, GoFile, Fast)
+    // 6. XCLOUD.TATTOO -> XCLOUD1.LOL HANDLER
     private suspend fun extractXCloud(
         url: String,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -319,7 +310,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             val fileId = uri.path.trimEnd('/').substringAfterLast('/')
             if (fileId.isBlank()) return
 
-            // xcloud.tattoo aur xcloud1.lol dono check karo (kyunki "Generate Direct Download Link" xcloud1.lol par le jata hai)
             val pagesToTry = listOf(
                 "https://xcloud1.lol/$fileId",
                 url
@@ -351,7 +341,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                             if (btnHref.contains("gofile")) {
                                 loadExtractor(btnHref, res.url, subtitleCallback, callback)
                             } else if (btnHref.contains("/apis/")) {
-                                // Follow /apis/ redirect to get the final CDN link (e.g. cdn.stepnestph.com)
                                 val apiRedirect = app.get(btnHref, referer = res.url, allowRedirects = false)
                                 val finalVideoUrl = apiRedirect.headers["location"] ?: apiRedirect.headers["Location"] ?: btnHref
 
