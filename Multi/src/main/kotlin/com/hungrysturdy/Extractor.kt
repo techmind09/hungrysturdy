@@ -17,11 +17,11 @@ class KDHindiDubbedExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            var targetUrl = url
+            val targetUrl = url
             val uri = URI(targetUrl)
             val baseUrl = "${uri.scheme}://${uri.host}"
 
-            // Agar URL tmbcloud ka hai toh use bhi handle karo
+            // Agar URL tmbcloud ka hai
             if (targetUrl.contains("tmbcloud")) {
                 val response = app.get(targetUrl, referer = referer ?: "https://tmbcloud.lol")
                 val doc = response.document
@@ -32,10 +32,10 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                     "https://tmbcloud.lol/download/$pageId",
                     headers = mapOf(
                         "Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8",
-                        "X-Requested-With" => "XMLHttpRequest",
+                        "X-Requested-With" to "XMLHttpRequest",
                         "Referer" to targetUrl
                     ),
-                    data = mapOf("type" to "fslv2new", "page" to pageId)
+                    data = mapOf("type" to "fslv2new", "page" to (pageId ?: ""))
                 )
                 if (apiRes.text.trim().startsWith("{")) {
                     val json = JSONObject(apiRes.text)
@@ -58,7 +58,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 return
             }
 
-            // Agar URL momofile ya kisi wrapper page ka hai
+            // MomoFile PHP JSON endpoints handler
             val fileId = uri.query?.substringAfter("id=")?.takeIf { it.isNotBlank() }
                 ?: targetUrl.trimEnd('/').substringAfterLast('/')
 
@@ -77,7 +77,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                             val videoUrl = json.optString("url").takeIf { it.startsWith("http") }
                             if (!videoUrl.isNullOrBlank()) {
                                 callback.invoke(
-                                 ExtractorLink(
+                                    ExtractorLink(
                                         source = "MomoFile - ${service.replaceFirstChar { it.uppercase() }}",
                                         name = "Stream (${service.uppercase()})",
                                         url = videoUrl,
@@ -93,7 +93,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 } catch (_: Exception) {}
             }
 
-            // Fallback: Parse standard anchors on the page
+            // Fallback anchors parser
             val document = app.get(targetUrl, referer = referer ?: baseUrl).document
             val links = document.select("a[href]")
             for (element in links) {
