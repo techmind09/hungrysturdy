@@ -3,7 +3,7 @@ package com.hungrysturdy
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.nodes.Element
 
 class StarfilxProvider : MainAPI() {
@@ -47,7 +47,7 @@ class StarfilxProvider : MainAPI() {
             it.toSearchResult()
         }
 
-        // 2. Fallback: If on homepage page 1, also grab unique items from top carousel (.ams-c)
+        // 2. If on homepage page 1, also grab unique items from top carousel (.ams-c)
         if (page == 1 && request.data.isEmpty()) {
             document.select("div.ams-tr div.ams-c:not(.clone)").forEach { card ->
                 val item = card.toCarouselSearchResult()
@@ -132,12 +132,15 @@ class StarfilxProvider : MainAPI() {
         val poster = document.selectFirst("meta[property=og:image]")?.attr("content")
             ?: document.selectFirst("div.single-big-img img, figure.single-featured-image img")?.attr("src")
 
-        val description = document.selectFirst("div.entry-content p")?.text()?.trim()
+        val description = document.select("div.entry-content p")
+            .map { it.text().trim() }
+            .firstOrNull { it.length > 30 && !it.contains("Telegram", ignoreCase = true) }
+
         val tags = document.select("span.post-cat-wrap a, div.post-bottom-meta a").map { it.text() }
 
         val contentArea = document.selectFirst("div.entry-content, article")
 
-        // Map of Episode Number -> List of Server URLs (e.g. ep 1(terabox), ep 1(FileNext App))
+        // Map of Episode Number -> List of Server URLs
         val episodeMap = linkedMapOf<Int, MutableList<String>>()
         val unnumberedLinks = mutableListOf<Pair<String, String>>()
 
@@ -145,7 +148,6 @@ class StarfilxProvider : MainAPI() {
             val text = a.text().trim()
             val href = a.attr("href").trim()
 
-            // Ignore Telegram links, empty anchors, or internal category/tag links
             if (href.isBlank() ||
                 href.startsWith("#") ||
                 href.contains("t.me/") ||
@@ -154,7 +156,6 @@ class StarfilxProvider : MainAPI() {
                 return@forEach
             }
 
-            // Match pattern like: "ep 1(terabox)" or "ep 1(FileNext App)" or "Episode 04"
             val epMatch = Regex("""(?:ep|episode)\s*(\d+)""", RegexOption.IGNORE_CASE).find(text)
             if (epMatch != null) {
                 val epNum = epMatch.groupValues[1].toIntOrNull()
@@ -164,14 +165,15 @@ class StarfilxProvider : MainAPI() {
                 }
             }
 
-            // Fallback if button is a direct host link without an "ep X" label
             if (a.hasClass("button") ||
-                href.contains("terabox") ||
-                href.contains("filenext") ||
-                href.contains("gofile") ||
-                href.contains("hubcloud") ||
-                href.contains("gdflix") ||
-                href.contains("rpmstream")
+                href.contains("terabox", ignoreCase = true) ||
+                href.contains("filenext", ignoreCase = true) ||
+                href.contains("gofile", ignoreCase = true) ||
+                href.contains("hubcloud", ignoreCase = true) ||
+                href.contains("gdflix", ignoreCase = true) ||
+                href.contains("rpmstream", ignoreCase = true) ||
+                href.contains("dailymotion", ignoreCase = true) ||
+                href.contains("dai.ly", ignoreCase = true)
             ) {
                 unnumberedLinks.add(text to href)
             }
@@ -179,10 +181,11 @@ class StarfilxProvider : MainAPI() {
 
         val episodes = mutableListOf<Episode>()
 
+        // Store multiple links separated by "|" to avoid any JSON deserialization issues
         if (episodeMap.isNotEmpty()) {
             episodeMap.entries.sortedBy { it.key }.forEach { (epNum, urls) ->
                 episodes.add(
-                    newEpisode(urls.distinct().toJson()) {
+                    newEpisode(urls.distinct().joinToString("|")) {
                         this.name = "Episode $epNum"
                         this.episode = epNum
                     }
@@ -191,7 +194,7 @@ class StarfilxProvider : MainAPI() {
         } else if (unnumberedLinks.isNotEmpty()) {
             unnumberedLinks.forEachIndexed { index, (label, link) ->
                 episodes.add(
-                    newEpisode(listOf(link).toJson()) {
+                    newEpisode(link) {
                         this.name = label.ifBlank { "Episode ${index + 1}" }
                         this.episode = index + 1
                     }
@@ -199,15 +202,18 @@ class StarfilxProvider : MainAPI() {
             }
         }
 
-        // Also check if there are embedded iframes directly inside the post
-        if (episodes.isEmpty()) {
-            contentArea?.select("iframe[src]")?.forEachIndexed { index, iframe ->
-                val src = iframe.attr("src")
-                if (!src.contains("a-ads.com") && !src.contains("google")) {
+        // Check if there are embedded iframes directly inside the post
+        contentArea?.select("iframe[src]")?.forEachIndexed { index, iframe ->
+            val src = iframe.attr("src")
+            if (!src.contains("a-ads.com") && !src.contains("google")) {
+                val epNum = index + 1
+                if (episodeMap.containsKey(epNum)) {
+                    episodeMap[epNum]?.add(fixUrl(src))
+                } else if (episodes.isEmpty()) {
                     episodes.add(
-                        newEpisode(listOf(fixUrl(src)).toJson()) {
-                            this.name = "Episode ${index + 1}"
-                            this.episode = index + 1
+                        newEpisode(fixUrl(src)) {
+                            this.name = "Episode $epNum"
+                            this.episode = epNum
                         }
                     )
                 }
@@ -227,10 +233,10 @@ class StarfilxProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val urls: List<String> = try {
-            parseJson<List<String>>(data)
-        } catch (_: Exception) {
-            listOf(data)
+        val urls = if (data.startsWith("[")) {
+            tryParseJson<List<String>>(data) ?: listOf(data)
+        } else {
+            data.split("|").map { it.trim() }.filter { it.isNotBlank() }
         }
 
         urls.amap { rawUrl ->
@@ -244,45 +250,19 @@ class StarfilxProvider : MainAPI() {
                 } catch (_: Exception) {}
             }
 
-            // 2. Normalize 1024terabox.com / teraboxapp.com / freeterabox.com for CloudStream's built-in Terabox extractor
-            if (targetUrl.contains("1024terabox.com") ||
-                targetUrl.contains("teraboxapp.com") ||
-                targetUrl.contains("teraboxlink.com") ||
-                targetUrl.contains("freeterabox.com")
-            ) {
-                targetUrl = targetUrl.replace(
-                    Regex("https?://(www\\.)?(1024terabox|teraboxapp|teraboxlink|freeterabox)\\.com"),
-                    "https://www.terabox.com"
-                )
-            }
-
             when {
-                // 3. Handle FileNext links (filenext.in/s/...) using newExtractorLink
-                targetUrl.contains("filenext.in") -> {
-                    val doc = app.get(targetUrl, referer = mainUrl).document
-                    doc.select("video source[src], a[href*=.mp4], a[href*=.mkv], a.download-button[href]").forEach { el ->
-                        val mediaUrl = el.attr("src").ifBlank { el.attr("href") }
-                        if (mediaUrl.startsWith("http")) {
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = this.name,
-                                    name = "FileNext",
-                                    url = mediaUrl,
-                                    type = if (mediaUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                ) {
-                                    this.referer = targetUrl
-                                    this.quality = Qualities.Unknown.value
-                                }
-                            )
-                        }
-                    }
-                    doc.select("iframe[src]").forEach { iframe ->
-                        loadExtractor(fixUrl(iframe.attr("src")), targetUrl, subtitleCallback, callback)
-                    }
+                // 2. Terabox (1024terabox.com, terabox.com, teraboxapp.com, freeterabox.com)
+                targetUrl.contains("terabox", ignoreCase = true) -> {
+                    extractTerabox(targetUrl, subtitleCallback, callback)
                 }
 
-                // 4. Handle Starfilx RPMStream links
-                targetUrl.contains("rpmstream.live") -> {
+                // 3. FileNext (filenext.in/s/...)
+                targetUrl.contains("filenext", ignoreCase = true) -> {
+                    extractFileNext(targetUrl, subtitleCallback, callback)
+                }
+
+                // 4. Starfilx RPMStream
+                targetUrl.contains("rpmstream.live", ignoreCase = true) -> {
                     val doc = app.get(targetUrl, referer = mainUrl).document
                     doc.select("iframe[src]").forEach {
                         loadExtractor(fixUrl(it.attr("src")), targetUrl, subtitleCallback, callback)
@@ -297,7 +277,7 @@ class StarfilxProvider : MainAPI() {
                     }
                 }
 
-                // 5. Pass Terabox, GoFile, GDFlix, HubCloud, Dailymotion, Google Drive to CloudStream extractors
+                // 5. All other hosts (Dailymotion, GoFile, GDFlix, HubCloud, GDrive)
                 else -> {
                     loadExtractor(targetUrl, mainUrl, subtitleCallback, callback)
                 }
@@ -306,4 +286,173 @@ class StarfilxProvider : MainAPI() {
 
         return true
     }
+
+    private suspend fun extractTerabox(
+        url: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        // Extract shorturl ID from https://1024terabox.com/s/1PKoqq36ErZjchAlVlWyjig
+        val shortId = Regex("""/s/1?([A-Za-z0-9_-]+)""").find(url)?.groupValues?.get(1)
+        val fullShortId = Regex("""/s/([A-Za-z0-9_-]+)""").find(url)?.groupValues?.get(1) ?: shortId
+
+        // Method A: Try Terabox HNN Worker API (public Terabox direct link resolver)
+        if (!fullShortId.isNullOrBlank()) {
+            try {
+                val infoUrl = "https://terabox.hnn.workers.dev/api/get-info?shorturl=$fullShortId&pwd="
+                val infoRes = app.get(
+                    infoUrl,
+                    headers = mapOf(
+                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        "Referer" to "https://terabox.hnn.workers.dev/"
+                    )
+                ).parsedSafe<TeraboxInfoResponse>()
+
+                if (infoRes?.ok == true && !infoRes.list.isNullOrEmpty()) {
+                    val file = infoRes.list.first()
+                    val postBody = mapOf(
+                        "shareid" to infoRes.shareid.toString(),
+                        "uk" to infoRes.uk.toString(),
+                        "sign" to (infoRes.sign ?: ""),
+                        "timestamp" to infoRes.timestamp.toString(),
+                        "fs_id" to file.fs_id.toString()
+                    )
+
+                    listOf("get-download", "get-downloadp").forEach { endpoint ->
+                        try {
+                            val dlRes = app.post(
+                                "https://terabox.hnn.workers.dev/api/$endpoint",
+                                headers = mapOf(
+                                    "Content-Type" to "application/json",
+                                    "Origin" to "https://terabox.hnn.workers.dev",
+                                    "Referer" to "https://terabox.hnn.workers.dev/"
+                                ),
+                                json = postBody
+                            ).parsedSafe<TeraboxDownloadResponse>()
+
+                            val streamUrl = dlRes?.downloadLink
+                            if (!streamUrl.isNullOrBlank()) {
+                                callback.invoke(
+                                    newExtractorLink(
+                                        source = this.name,
+                                        name = "Terabox (${if (endpoint.endsWith("p")) "Fast" else "Direct"})",
+                                        url = streamUrl,
+                                        type = ExtractorLinkType.VIDEO
+                                    ) {
+                                        this.referer = "https://www.terabox.com/"
+                                        this.quality = Qualities.P720.value
+                                    }
+                                )
+                            }
+                        } catch (_: Exception) {}
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        // Method B: Also pass normalized URL to CloudStream's built-in Terabox extractor as fallback
+        val normalizedUrl = url.replace(
+            Regex("https?://(www\\.)?(1024terabox|teraboxapp|teraboxlink|freeterabox)\\.com"),
+            "https://www.terabox.com"
+        )
+        loadExtractor(normalizedUrl, mainUrl, subtitleCallback, callback)
+    }
+
+    private suspend fun extractFileNext(
+        url: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val response = app.get(url, referer = mainUrl)
+            val html = response.text
+            val doc = response.document
+
+            // 1. Check for direct video/source/download links in DOM
+            doc.select("video source[src], video[src], a[href*=.mp4], a[href*=.mkv], a[href*=.m3u8], a[href*=download]").forEach { el ->
+                val mediaUrl = el.attr("src").ifBlank { el.attr("href") }
+                if (mediaUrl.startsWith("http") && !mediaUrl.contains("filenext.in/s/")) {
+                    callback.invoke(
+                        newExtractorLink(
+                            source = this.name,
+                            name = "FileNext",
+                            url = mediaUrl,
+                            type = if (mediaUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = url
+                            this.quality = Qualities.Unknown.value
+                        }
+                    )
+                }
+            }
+
+            // 2. Scan raw HTML / inline scripts for direct media URLs (.mp4, .m3u8, .mkv, worker/r2/cdn links)
+            val mediaRegex = Regex("""https?://[^\s"'<>\\]+?\.(?:mp4|m3u8|mkv)(?:\?[^\s"'<>\\]*)?""", RegexOption.IGNORE_CASE)
+            mediaRegex.findAll(html).map { it.value.replace("\\/", "/") }.distinct().forEach { streamUrl ->
+                callback.invoke(
+                    newExtractorLink(
+                        source = this.name,
+                        name = "FileNext Direct",
+                        url = streamUrl,
+                        type = if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = url
+                        this.quality = Qualities.Unknown.value
+                    }
+                )
+            }
+
+            // 3. Check if FileNext has an API endpoint for the share ID (/s/<id>)
+            val fileId = url.substringAfter("/s/").substringBefore("/").substringBefore("?")
+            if (fileId.isNotBlank()) {
+                listOf(
+                    "https://filenext.in/api/file/$fileId",
+                    "https://filenext.in/api/s/$fileId",
+                    "https://filenext.in/api/v1/file/$fileId"
+                ).forEach { apiUrl ->
+                    try {
+                        val apiText = app.get(apiUrl, referer = url).text
+                        mediaRegex.findAll(apiText).map { it.value.replace("\\/", "/") }.distinct().forEach { streamUrl ->
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = this.name,
+                                    name = "FileNext API",
+                                    url = streamUrl,
+                                    type = if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = url
+                                    this.quality = Qualities.Unknown.value
+                                }
+                            )
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+
+            // 4. Check embedded iframes
+            doc.select("iframe[src]").forEach { iframe ->
+                loadExtractor(fixUrl(iframe.attr("src")), url, subtitleCallback, callback)
+            }
+        } catch (_: Exception) {}
+    }
+
+    data class TeraboxFile(
+        val fs_id: String? = null,
+        val filename: String? = null,
+        val size: String? = null
+    )
+
+    data class TeraboxInfoResponse(
+        val ok: Boolean? = null,
+        val shareid: Long? = null,
+        val uk: Long? = null,
+        val sign: String? = null,
+        val timestamp: Long? = null,
+        val list: List<TeraboxFile>? = null
+    )
+
+    data class TeraboxDownloadResponse(
+        val ok: Boolean? = null,
+        val downloadLink: String? = null
+    )
 }
