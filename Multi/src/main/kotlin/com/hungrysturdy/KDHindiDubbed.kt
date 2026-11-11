@@ -91,19 +91,39 @@ class KDHindiDubbed : MainAPI() {
         val rawPoster = posterImg?.attr("src")?.takeIf { it.isNotBlank() } ?: posterImg?.attr("data-src") ?: ""
         val poster = fixUrl(rawPoster)
         
-        val description = document.selectFirst("div.storyline, div.content, .entry-content p")?.text()?.trim()
+        val description = document.selctFirst?.let { document.selectFirst("div.storyline, div.content, .entry-content p")?.text()?.trim() }
+            ?: document.selectFirst(".entry-content p")?.text()?.trim()
         
-        val episodes = document.select("a[href*='episode'], div.episodest a, ul.episodelist li a, a.btn-eps, .eplister a, .entry-content a[href*='episode']").mapNotNull { element ->
+        // Improved Episode parser to catch all format styles (Episode lists, buttons, internal links)
+        val episodes = document.select("a[href*='episode'], div.episodest a, ul.episodelist li a, a.btn-eps, .eplister a, .entry-content a, .entry-content p a").mapNotNull { element ->
             val link = fixUrl(element.attr("href") ?: "")
             val epName = element.text().trim()
-            val epNum = epName.filter { it.isDigit() }.toIntOrNull() ?: 1
-            if (link.isNotBlank() && (epName.contains("Episode", true) || epName.contains("Ep", true) || link.contains("episode"))) {
+            val epNum = epName.filter { it.isDigit() }.toIntOrNull() 
+                ?: link.substringAfterLast("/").filter { it.isDigit() }.toIntOrNull() 
+                ?: 1
+
+            if (link.isNotBlank() && (epName.contains("Episode", true) || epName.contains("Ep", true) || link.contains("episode") || epName.any { it.isDigit() })) {
                 newEpisode(link) {
-                    name = epName
+                    name = epName.ifBlank { "Episode $epNum" }
                     episode = epNum
                 }
             } else null
         }.distinctBy { it.data }.ifEmpty {
+            // Fallback: If no explicit episode links found, check all anchor tags inside entry content
+            document.select(".entry-content a[href]").mapNotNull { element ->
+                val link = fixUrl(element.attr("href") ?: "")
+                val epName = element.text().trim()
+                if (link.startsWith("http") && !link.contains("dramacool.website") && !link.contains("tmbcloud")) {
+                    null
+                } else if (link.isNotBlank()) {
+                    val epNum = epName.filter { it.isDigit() }.toIntOrNull() ?: 1
+                    newEpisode(link) {
+                        name = epName.ifBlank { "Episode $epNum" }
+                        episode = epNum
+                    }
+                } else null
+            }.distinctBy { it.data }
+        }.ifEmpty {
             listOf(
                 newEpisode(url) {
                     name = title
