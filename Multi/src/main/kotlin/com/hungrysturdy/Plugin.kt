@@ -16,7 +16,6 @@ class Plugin : Plugin() {
         registerExtractorAPI(NineAnimeMegaPlay())
         registerExtractorAPI(NineAnimeVidmoly())
         registerExtractorAPI(NineAnimeMoon())
-        registerMainAPI(WatchAnimeWorldProvider())
         registerMainAPI(GokuHDProvider())
         registerExtractorAPI(GokuHDExtractor())
     }
