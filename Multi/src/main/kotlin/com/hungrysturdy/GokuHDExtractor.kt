@@ -17,20 +17,18 @@ class GokuHDExtractor : ExtractorApi() {
         val servers = GokuHDSources.resolve(url)
 
         for (server in servers) {
-            if (GokuHDSources.alive(server.url, server.headers)) {
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = server.name,
-                        url = server.url,
-                        type = ExtractorLinkType.VIDEO
-                    ) {
-                        this.quality = Qualities.Unknown.value
-                        this.headers = server.headers
-                        this.referer = referer ?: mainUrl
-                    }
-                )
-            }
+            callback.invoke(
+                newExtractorLink(
+                    source = name,
+                    name = server.name,
+                    url = server.url,
+                    type = ExtractorLinkType.VIDEO
+                ) {
+                    this.quality = Qualities.Unknown.value
+                    this.headers = server.headers
+                    this.referer = referer ?: mainUrl
+                }
+            )
         }
     }
 }
