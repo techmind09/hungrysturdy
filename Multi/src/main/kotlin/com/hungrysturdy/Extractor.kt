@@ -23,12 +23,10 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             val uri = URI(response.url)
             val baseUrl = "${uri.scheme}://${uri.host}"
 
-            // 1. Page ID button se ya URL path se extract karein
             val pageId = document.selectFirst("button[data-page], a[data-page], div[data-page]")?.attr("data-page")
                 ?.takeIf { it.isNotBlank() }
                 ?: uri.path.trimEnd('/').substringAfterLast('/').takeIf { it.isNotBlank() && it != "download" && it != "file" }
 
-            // 2. Types dynamic nikalo ya default list use karo
             val dynamicTypes = document.select("button[data-type], a[data-type]").mapNotNull {
                 it.attr("data-type").takeIf { type -> type.isNotBlank() }
             }
@@ -83,7 +81,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 }
             }
 
-            // 3. Fallback: Agar TMBCloud page par direct <a href> download buttons hain (non-AJAX)
             if (!foundAnyLink) {
                 val directButtons = document.select("a.btn[href], a.download-btn[href], a.button[href], a[href*='.mp4'], a[href*='.mkv'], a[href*='workers.dev'], a[href*='r2.dev'], a[href*='hubcloud'], a[href*='gdflix']")
                 for (btn in directButtons) {
