@@ -19,7 +19,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
         try {
             val response = app.get(url, referer = referer ?: mainUrl)
             val document = response.document
-
             val uri = URI(response.url)
             val baseUrl = "${uri.scheme}://${uri.host}"
 
@@ -31,8 +30,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 it.attr("data-type").takeIf { type -> type.isNotBlank() }
             }
             val typesToTry = (dynamicTypes + listOf("fslv2new", "fastcdnv2", "r2", "telegram", "fsl", "pixel")).distinct()
-
-            var foundAnyLink = false
 
             if (!pageId.isNullOrBlank()) {
                 for (dataType in typesToTry) {
@@ -56,19 +53,10 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                                 ?: json.optString("link").takeIf { it.startsWith("http") }
 
                             if (!downloadUrl.isNullOrBlank()) {
-                                foundAnyLink = true
-                                val serverName = when (dataType) {
-                                    "fslv2new", "fsl" -> "TMBCloud - Instant FSL [10GBPS]"
-                                    "fastcdnv2" -> "TMBCloud - FastCDN V2"
-                                    "r2" -> "TMBCloud - FastCloud R2"
-                                    "telegram" -> "TMBCloud - Telegram"
-                                    else -> "TMBCloud - ${dataType.uppercase()}"
-                                }
-
                                 callback(
                                     ExtractorLink(
                                         source = "TMBCloud",
-                                        name = serverName,
+                                        name = "TMBCloud - ${dataType.uppercase()}",
                                         url = downloadUrl,
                                         referer = baseUrl,
                                         quality = getQualityFromName(document.title()),
@@ -81,26 +69,11 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 }
             }
 
-            if (!foundAnyLink) {
-                val directButtons = document.select("a.btn[href], a.download-btn[href], a.button[href], a[href*='.mp4'], a[href*='.mkv'], a[href*='workers.dev'], a[href*='r2.dev'], a[href*='hubcloud'], a[href*='gdflix']")
-                for (btn in directButtons) {
-                    val href = btn.attr("href").trim()
-                    if (href.startsWith("http") && !href.contains(uri.host)) {
-                        if (href.contains(".mkv") || href.contains(".mp4") || href.contains("workers.dev") || href.contains("r2.dev") || href.contains("pixeldrain")) {
-                            callback(
-                                ExtractorLink(
-                                    source = "TMBCloud",
-                                    name = "TMBCloud - Direct ${btn.text().trim()}",
-                                    url = href,
-                                    referer = baseUrl,
-                                    quality = getQualityFromName(document.title()),
-                                    type = ExtractorLinkType.VIDEO
-                                )
-                            )
-                        } else {
-                            loadExtractor(href, response.url, subtitleCallback, callback)
-                        }
-                    }
+            val directButtons = document.select("a.btn[href], a.download-btn[href], a.button[href]")
+            for (btn in directButtons) {
+                val href = btn.attr("href").trim()
+                if (href.startsWith("http") && !href.contains(uri.host)) {
+                    loadExtractor(href, response.url, subtitleCallback, callback)
                 }
             }
         } catch (_: Exception) {}
