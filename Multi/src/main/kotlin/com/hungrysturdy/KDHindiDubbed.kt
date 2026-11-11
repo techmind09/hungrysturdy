@@ -117,7 +117,7 @@ class KDHindiDubbed : MainAPI() {
         }
     }
 
-    override suspend fun loadLinks(
+        override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -125,12 +125,12 @@ class KDHindiDubbed : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
         val links = document.select("a[href], a.btn, a.button, a.watch-btn, a.download-btn")
-        
+
         for (element in links) {
             val link = element.attr("href")?.let { fixUrl(it) } ?: continue
             if (link.startsWith("http")) {
                 try {
-                    // If it's an intermediate page like momofile.shop, xcloud.asia, or dramacool redirect
+                    // 1. Handle intermediate pages like momofile.shop, xcloud.asia, or dramacool redirects
                     if (link.contains("momofile") || link.contains("xcloud") || (link.contains("dramacool.website") && !link.contains("tmbcloud"))) {
                         val subDoc = app.get(link).document
                         val subLinks = subDoc.select("a[href], a.btn, a.download-btn")
@@ -140,7 +140,13 @@ class KDHindiDubbed : MainAPI() {
                                 loadExtractor(subHref, link, subtitleCallback, callback)
                             }
                         }
-                    } else if (!link.contains("dramacool.website")) {
+                    } 
+                    // 2. Handle TMBCloud links directly using our custom extractor
+                    else if (link.contains("tmbcloud")) {
+                        loadExtractor(link, data, subtitleCallback, callback)
+                    } 
+                    // 3. Handle all other direct external links (PixelDrain, Voe, Buzzheavier, etc.)
+                    else if (!link.contains("dramacool.website")) {
                         loadExtractor(link, data, subtitleCallback, callback)
                     }
                 } catch (_: Exception) {}
@@ -148,4 +154,3 @@ class KDHindiDubbed : MainAPI() {
         }
         return true
     }
-}
