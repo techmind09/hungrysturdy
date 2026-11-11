@@ -181,69 +181,99 @@ class GokuHDProvider : MainAPI() {
         }
     }
 
-    override suspend fun loadLinks(
-        data: String,
-        isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        try {
-            val sources = tryParseJson<ArrayList<EpisodeLink>>(data)
-            if (!sources.isNullOrEmpty()) {
-                var found = false
-                sources.amap { sourceObj ->
-                    val servers = GokuHDSources.resolve(sourceObj.source, sourceObj.episode)
-                    for (server in servers) {
-                        if (GokuHDSources.alive(server.url, server.headers)) {
-                            found = true
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = name,
-                                    name = server.name,
-                                    url = server.url,
-                                    type = ExtractorLinkType.VIDEO
-                                ) {
-                                    this.quality = VegaNet.qualityOf(server.name)
-                                    this.headers = server.headers
-                                    this.referer = mainUrl
-                                }
-                            )
+        override suspend fun load(url: String): LoadResponse {
+        val html = VegaNet.fetchWithCf(url, referer = mainUrl)?.text 
+            ?: throw ErrorLoadingException("Failed to load page")
+        val doc = Jsoup.parse(html)
+
+        val title = doc.selectFirst(".single-post-title")?.text() 
+            ?: doc.selectFirst("h1.entry-title")?.text() 
+            ?: doc.selectFirst("h2.entry-title")?.text() 
+            ?: "Anime"
+            
+        val poster = fixUrl(
+            doc.selectFirst("meta[property='og:image']")?.attr("content")
+                ?: doc.selectFirst(".single-entry-body img")?.attr("src") 
+                ?: doc.selectFirst(".post-image img")?.attr("src") 
+                ?: doc.selectFirst("div.post-thumbnail img")?.attr("src")
+                ?: ""
+        )
+        
+        val description = doc.selectFirst(".xp-plot-box")?.text() 
+            ?: doc.selectFirst(".entry-content")?.text()
+            ?: doc.selectFirst("div.entry-summary")?.text()
+            ?: "No Plot Found"
+
+        val tvType = if (title.contains("Movie", true)) TvType.AnimeMovie else TvType.Anime
+
+        // Episode number ke hisaab se saare links group karein
+        val episodeMap = LinkedHashMap<Int, MutableList<EpisodeLink>>()
+        val allLinksForMovie = mutableListOf<EpisodeLink>()
+
+        doc.select("a.wp-download-btn, a.xp-download-btn, a.btn-download, a.btn, .single-entry-body a, .entry-content a, div.btn-danger, button.btn").forEach { element ->
+            val epLink = element.attr("href").takeIf { it.isNotBlank() } 
+                ?: element.attr("onclick").let { onclick ->
+                    Regex("""openInNewTab\(['"]([^'"]+)['"]\)""").find(onclick)?.groupValues?.get(1)
+                } ?: ""
+
+            val epName = element.text().trim()
+            // Heading ya parent text se bhi episode/quality info check karein
+            val parentText = element.parent()?.previousElementSibling()?.text().orEmpty()
+
+            if (epLink.startsWith("http") && GokuHDSources.isServerLink(epLink)) {
+                allLinksForMovie.add(EpisodeLink(epLink, null))
+
+                val epNum = Regex("""(?i)ep(?:isode)?\.?\s*0*(\d{1,3})""").find(epName)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: Regex("""(?i)ep(?:isode)?\.?\s*0*(\d{1,3})""").find(parentText)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: 1
+
+                episodeMap.getOrPut(epNum) { mutableListOf() }.add(EpisodeLink(epLink, epNum))
+            }
+        }
+
+        return if (tvType == TvType.AnimeMovie) {
+            val movieData = mapper.writeValueAsString(allLinksForMovie.distinctBy { it.source })
+            newMovieLoadResponse(title, url, TvType.AnimeMovie, movieData) {
+                this.posterUrl = poster
+                this.plot = description
+            }
+        } else {
+            val episodes = if (episodeMap.size <= 1 && episodeMap[1]?.any { it.source.contains("nexdrive", true) } == true) {
+                // Agar main page par sirf NexDrive ke Season/Quality pack links hain (Episode 1, 2 NexDrive ke andar hain)
+                val nexLinks = episodeMap[1].orEmpty()
+                val detectedEps = mutableSetOf<Int>()
+                nexLinks.forEach { linkObj ->
+                    GokuHDSources.fetchDrivePage(linkObj.source)?.episodes?.keys?.let { detectedEps.addAll(it) }
+                }
+                if (detectedEps.isNotEmpty()) {
+                    detectedEps.sorted().map { epNum ->
+                        val epLinks = nexLinks.map { EpisodeLink(it.source, epNum) }
+                        newEpisode(mapper.writeValueAsString(epLinks)) {
+                            this.name = "Episode $epNum"
+                            this.episode = epNum
                         }
                     }
+                } else {
+                    listOf(
+                        newEpisode(mapper.writeValueAsString(nexLinks)) {
+                            this.name = "Episode 1"
+                            this.episode = 1
+                        }
+                    )
                 }
-                return found
-            }
-
-            if (data.startsWith("http")) {
-                val servers = GokuHDSources.resolve(data, null)
-                var found = false
-                for (server in servers) {
-                    if (GokuHDSources.alive(server.url, server.headers)) {
-                        found = true
-                        callback.invoke(
-                            newExtractorLink(
-                                source = name,
-                                name = server.name,
-                                url = server.url,
-                                type = ExtractorLinkType.VIDEO
-                            ) {
-                                this.quality = VegaNet.qualityOf(server.name)
-                                this.headers = server.headers
-                                this.referer = mainUrl
-                            }
-                        )
+            } else {
+                episodeMap.map { (epNum, links) ->
+                    val distinctLinks = links.distinctBy { it.source }
+                    newEpisode(mapper.writeValueAsString(distinctLinks)) {
+                        this.name = "Episode $epNum"
+                        this.episode = epNum
                     }
                 }
-                return found
             }
-            return false
-        } catch (e: Exception) {
-            return false
+
+            newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
+                this.posterUrl = poster
+                this.plot = description
+            }
         }
     }
-
-    data class EpisodeLink(
-        val source: String,
-        val episode: Int? = null
-    )
-}
