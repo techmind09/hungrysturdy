@@ -130,13 +130,16 @@ class KDHindiDubbed : MainAPI() {
             val link = element.attr("href")?.let { fixUrl(it) } ?: continue
             if (link.startsWith("http")) {
                 try {
+                    // Ignore unwanted/dead domains that trigger wrong extractors like krakenfiles
+                    if (link.contains("krakenfiles") || link.contains("statcounter") || link.contains("histats")) continue
+
                     // 1. Handle intermediate pages like momofile.shop, xcloud.asia, or dramacool redirects
                     if (link.contains("momofile") || link.contains("xcloud") || (link.contains("dramacool.website") && !link.contains("tmbcloud"))) {
                         val subDoc = app.get(link).document
                         val subLinks = subDoc.select("a[href], a.btn, a.download-btn")
                         for (subEl in subLinks) {
                             val subHref = subEl.attr("href") ?: continue
-                            if (subHref.startsWith("http") && !subHref.contains("dramacool.website")) {
+                            if (subHref.startsWith("http") && !subHref.contains("dramacool.website") && !subHref.contains("krakenfiles")) {
                                 loadExtractor(subHref, link, subtitleCallback, callback)
                             }
                         }
@@ -145,7 +148,7 @@ class KDHindiDubbed : MainAPI() {
                     else if (link.contains("tmbcloud")) {
                         loadExtractor(link, data, subtitleCallback, callback)
                     } 
-                    // 3. Handle all other direct external links (PixelDrain, Voe, Buzzheavier, etc.)
+                    // 3. Handle valid direct external hosting links only
                     else if (!link.contains("dramacool.website")) {
                         loadExtractor(link, data, subtitleCallback, callback)
                     }
