@@ -19,12 +19,48 @@ class KDHindiDubbed : MainAPI() {
 
     override val mainPage = mainPageOf(
         "$mainUrl/page/" to "Latest",
-        "$mainUrl/category/hindi-dubbed/page/" to "Hindi Dubbed",
-        "$mainUrl/category/korean-drama/page/" to "Korean Drama",
-        "$mainUrl/category/chinese-drama/page/" to "Chinese Drama",
         "$mainUrl/category/action/page/" to "Action",
+        "$mainUrl/category/adventure/page/" to "Adventure",
+        "$mainUrl/category/arabic-subtitle/page/" to "Arabic Subtitle",
+        "$mainUrl/category/business/page/" to "Business",
+        "$mainUrl/category/chinese-drama/page/" to "Chinese Drama",
+        "$mainUrl/category/chinese-language/page/" to "Chinese Language",
+        "$mainUrl/category/comedy/page/" to "Comedy",
+        "$mainUrl/category/crime/page/" to "Crime",
+        "$mainUrl/category/drama/page/" to "Drama",
+        "$mainUrl/category/english-dubbed/page/" to "English Dubbed",
+        "$mainUrl/category/family/page/" to "Family",
+        "$mainUrl/category/fantasy/page/" to "Fantasy",
+        "$mainUrl/category/filipino-language/page/" to "Filipino Language",
+        "$mainUrl/category/food/page/" to "Food",
+        "$mainUrl/category/hindi-dubbed/page/" to "Hindi Dubbed",
+        "$mainUrl/category/historical/page/" to "Historical",
+        "$mainUrl/category/horror/page/" to "Horror",
+        "$mainUrl/category/japanese-drama/page/" to "Japanese Drama",
+        "$mainUrl/category/japanese-language/page/" to "Japanese Language",
+        "$mainUrl/category/korean-drama/page/" to "Korean Drama",
+        "$mainUrl/category/korean-language/page/" to "Korean Language",
+        "$mainUrl/category/law/page/" to "Law",
+        "$mainUrl/category/life/page/" to "Life",
+        "$mainUrl/category/medical/page/" to "Medical",
+        "$mainUrl/category/military/page/" to "Military",
+        "$mainUrl/category/movie/page/" to "Movie",
+        "$mainUrl/category/music/page/" to "Music",
+        "$mainUrl/category/mystery/page/" to "Mystery",
+        "$mainUrl/category/philippines-drama/page/" to "Philippines Drama",
+        "$mainUrl/category/political/page/" to "Political",
+        "$mainUrl/category/psychological/page/" to "Psychological",
+        "$mainUrl/category/reality-show/page/" to "Reality Show",
         "$mainUrl/category/romance/page/" to "Romance",
-        "$mainUrl/category/movie/page/" to "Movie"
+        "$mainUrl/category/school/page/" to "School",
+        "$mainUrl/category/sci-fi/page/" to "Sci-Fi",
+        "$mainUrl/category/sports/page/" to "Sports",
+        "$mainUrl/category/supernatural/page/" to "Supernatural",
+        "$mainUrl/category/suspense/page/" to "Suspense",
+        "$mainUrl/category/thai-language/page/" to "Thai Language",
+        "$mainUrl/category/thailand-drama/page/" to "Thailand Drama",
+        "$mainUrl/category/thriller/page/" to "Thriller",
+        "$mainUrl/category/youth/page/" to "Youth"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -73,24 +109,53 @@ class KDHindiDubbed : MainAPI() {
         val episodeMap = LinkedHashMap<Int, MutableList<EpisodeLink>>()
         val allLinksForMovie = mutableListOf<EpisodeLink>()
 
-        // Post page ke saare download/watch links ko target karo
-        val linksElements = document.select(".entry-content a[href], div.episodest a[href], ul.episodelist li a[href], .eplister a[href], a.btn[href], a.button[href]")
+        // Post ke andar ke saare blocks aur elements ko scan karo jo episodes ya links contain karte hain
+        val episodeContainers = document.select(".entry-content p, .entry-content div, div.episodest, ul.episodelist li, .eplister")
 
-        for (element in linksElements) {
-            val href = fixUrl(element.attr("href").trim())
-            val name = element.text().trim()
+        if (episodeContainers.isNotEmpty()) {
+            var epIndex = 1
+            for (container in episodeContainers) {
+                val links = container.select("a[href]")
+                if (links.isEmpty()) continue
 
-            if (href.isBlank() || href.contains("/category/") || href.contains("/tag/") || href.contains("t.me") || href.contains("facebook.com")) continue
+                val containerText = container.text()
+                val explicitEpNum = Regex("""(?i)(?:episode|ep)\.?\s*0*(\d{1,3})""").find(containerText)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: epIndex
 
-            if (href.startsWith("http")) {
-                allLinksForMovie.add(EpisodeLink(href, null))
+                val linksList = mutableListOf<EpisodeLink>()
+                for (linkEl in links) {
+                    val href = fixUrl(linkEl.attr("href").trim())
+                    if (href.isBlank() || href.contains("/category/") || href.contains("/tag/") || href.contains("t.me")) continue
+                    if (href.startsWith("http")) {
+                        linksList.add(EpisodeLink(href, explicitEpNum))
+                        allLinksForMovie.add(EpisodeLink(href, null))
+                    }
+                }
 
-                // Episode number extract karna
-                val epNum = Regex("""(?i)(?:episode|ep)\.?\s*0*(\d{1,3})""").find(name)?.groupValues?.get(1)?.toIntOrNull()
-                    ?: Regex("""(?i)(?:episode|ep)\.?\s*0*(\d{1,3})""").find(href)?.groupValues?.get(1)?.toIntOrNull()
-                    ?: 1
+                if (linksList.isNotEmpty()) {
+                    episodeMap.getOrPut(explicitEpNum) { mutableListOf() }.addAll(linksList)
+                    epIndex++
+                }
+            }
+        }
 
-                episodeMap.getOrPut(epNum) { mutableListOf() }.add(EpisodeLink(href, epNum))
+        // Fallback agar containers se match na ho
+        if (episodeMap.isEmpty()) {
+            val allLinks = document.select(".entry-content a[href], a.btn[href], a.button[href]")
+            var fallbackEp = 1
+            for (element in allLinks) {
+                val href = fixUrl(element.attr("href").trim())
+                val name = element.text().trim()
+                if (href.isBlank() || href.contains("/category/") || href.contains("/tag/") || href.contains("t.me")) continue
+
+                if (href.startsWith("http")) {
+                    val foundEp = Regex("""(?i)(?:episode|ep)\.?\s*0*(\d{1,3})""").find(name)?.groupValues?.get(1)?.toIntOrNull()
+                        ?: fallbackEp
+
+                    episodeMap.getOrPut(foundEp) { mutableListOf() }.add(EpisodeLink(href, foundEp))
+                    allLinksForMovie.add(EpisodeLink(href, null))
+                    fallbackEp++
+                }
             }
         }
 
@@ -134,7 +199,7 @@ class KDHindiDubbed : MainAPI() {
             var found = false
 
             if (!sources.isNullOrEmpty()) {
-                sources.amap { sourceObj ->
+                for (sourceObj in sources) {
                     resolveAndCallback(sourceObj.source, data, subtitleCallback, callback) {
                         found = true
                     }
@@ -164,7 +229,6 @@ class KDHindiDubbed : MainAPI() {
             var targetUrl = url
             if (targetUrl.contains("krakenfiles") || targetUrl.contains("statcounter") || targetUrl.contains("histats")) return
 
-            // Bypassing shorteners/redirects
             if (targetUrl.contains("redir") || targetUrl.contains("fifa") || targetUrl.contains("?url=") || targetUrl.contains("goto")) {
                 val res = app.get(targetUrl, referer = referer, allowRedirects = true)
                 targetUrl = res.url
@@ -172,6 +236,12 @@ class KDHindiDubbed : MainAPI() {
                 if (!metaRefresh.isNullOrBlank() && metaRefresh.contains("url=", true)) {
                     targetUrl = metaRefresh.substringAfter("url=").substringAfter("URL=").trim().removeSurrounding("'").removeSurrounding("\"")
                 }
+            }
+
+            if (targetUrl.contains("tmbcloud") || targetUrl.contains("/download/")) {
+                onFound()
+                KDHindiDubbedExtractor().getUrl(targetUrl, referer, subtitleCallback, callback)
+                return
             }
 
             val doc = app.get(targetUrl, referer = referer).document
@@ -187,11 +257,20 @@ class KDHindiDubbed : MainAPI() {
                     href.contains("r2.dev") || href.contains(".mp4") || href.contains(".mkv")) {
                     hasDirect = true
                     onFound()
-                    loadExtractor(href, targetUrl, subtitleCallback, callback)
-                } else if (href.contains("momofile") || href.contains("xcloud") || href.contains("tmbcloud")) {
+                    callback.invoke(
+                        ExtractorLink(
+                            source = name,
+                            name = "Direct - ${element.text().ifBlank { "Stream" }}",
+                            url = href,
+                            referer = targetUrl,
+                            quality = Qualities.P1080.value,
+                            type = ExtractorLinkType.VIDEO
+                        )
+                    )
+                } else if (href.contains("tmbcloud") || href.contains("momofile") || href.contains("xcloud")) {
                     hasDirect = true
                     onFound()
-                    loadExtractor(href, targetUrl, subtitleCallback, callback)
+                    KDHindiDubbedExtractor().getUrl(href, targetUrl, subtitleCallback, callback)
                 }
             }
 
