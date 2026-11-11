@@ -1,4 +1,4 @@
-package com.starfilx
+package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
