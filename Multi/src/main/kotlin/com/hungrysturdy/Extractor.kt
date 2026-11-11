@@ -7,7 +7,7 @@ import java.net.URI
 
 class KDHindiDubbedExtractor : ExtractorApi() {
     override val name = "TMBCloud"
-    override val mainUrl = "https://tmbcloud.dev"
+    override val mainUrl = "https://tmbcloud.lol"
     override val requiresReferer = false
 
     override suspend fun getUrl(
@@ -23,13 +23,13 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             val uri = URI(finalUrl)
             val baseUrl = "${uri.scheme}://${uri.host}"
 
+            // Page ID extraction from button or URL path (e.g. /download/413Y57 -> 413Y57)
             val pageId = document.selectFirst("button[data-page], a[data-page], div[data-page], input[name='page']")?.attr("data-page")
                 ?: document.selectFirst("input[name='page']")?.attr("value")
                 ?: uri.path.trimEnd('/').substringAfterLast('/').takeIf { it.isNotBlank() && it != "download" && it != "file" }
 
             var foundAny = false
 
-            // 1. Try AJAX POST if pageId exists
             if (!pageId.isNullOrBlank()) {
                 val dynamicTypes = document.select("button[data-type], a[data-type], input[name='type']").mapNotNull {
                     it.attr("data-type").ifBlank { it.attr("value") }.takeIf { type -> type.isNotBlank() }
@@ -76,31 +76,30 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 }
             }
 
-            // 2. Fallback: Parse all anchor tags on the page directly
-            val allLinks = document.select("a[href]")
-            for (element in allLinks) {
-                val href = element.attr("href").trim()
-                val text = element.text().lowercase()
-
-                if (!href.startsWith("http") || href.contains(uri.host)) continue
-
-                if (href.contains("pixeldrain") || href.contains("buzzheavier") || href.contains("fileditch") ||
-                    href.contains("vikingfile") || href.contains("send.now") || href.contains("workers.dev") ||
-                    href.contains("r2.dev") || href.contains(".mp4") || href.contains(".mkv")) {
-                    foundAny = true
-                    callback.invoke(
-                        newExtractorLink(
-                            source = name,
-                            name = "TMBCloud - ${element.text().ifBlank { "Direct" }}",
-                            url = href,
-                            type = ExtractorLinkType.VIDEO
-                        ) {
-                            this.quality = getQualityFromName(document.title())
-                            this.referer = baseUrl
+            // Fallback for direct links / buttons on the page
+            if (!foundAny) {
+                val directButtons = document.select("a.btn[href], a.download-btn[href], a.button[href], a[href]")
+                for (btn in directButtons) {
+                    val href = btn.attr("href").trim()
+                    if (href.startsWith("http") && !href.contains(uri.host)) {
+                        if (href.contains("pixeldrain") || href.contains("buzzheavier") || href.contains("fileditch") || 
+                            href.contains("vikingfile") || href.contains("send.now") || href.contains("workers.dev") || 
+                            href.contains("r2.dev") || href.contains(".mp4") || href.contains(".mkv")) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = name,
+                                    name = "TMBCloud - Direct ${btn.text().ifBlank { "Stream" }}",
+                                    url = href,
+                                    type = ExtractorLinkType.VIDEO
+                                ) {
+                                    this.quality = getQualityFromName(document.title())
+                                    this.referer = baseUrl
+                                }
+                            )
+                        } else if (href.contains("tmbcloud")) {
+                            loadExtractor(href, finalUrl, subtitleCallback, callback)
                         }
-                    )
-                } else if (text.contains("download") || text.contains("watch") || text.contains("server") || text.contains("link")) {
-                    loadExtractor(href, finalUrl, subtitleCallback, callback)
+                    }
                 }
             }
         } catch (_: Exception) {}
