@@ -1,7 +1,6 @@
 package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import org.jsoup.nodes.Element
 
@@ -25,10 +24,11 @@ class KatDrama : MainAPI() {
         val document = app.get(request.data).document
         val homePageList = mutableListOf<HomePageList>()
         val rows = document.select(".cineapse-row-wrapper")
-        
+
         if (rows.isNotEmpty()) {
             rows.forEach { row ->
-                val title = row.selectFirst("h3.cineapse-row-title")?.text()?.replace(" Explore all →", "")?.trim() ?: return@forEach
+                val title = row.selectFirst("h3.cineapse-row-title")?.text()
+                    ?.replace(" Explore all →", "")?.trim() ?: return@forEach
                 val elements = row.select(".cineapse-row-track .cineapse-card")
                 val searchResponses = elements.mapNotNull { toSearchResult(it) }
 
@@ -39,13 +39,12 @@ class KatDrama : MainAPI() {
         } else {
             val elements = document.select(".cineapse-card")
             val searchResponses = elements.mapNotNull { toSearchResult(it) }
-            
+
             if (searchResponses.isNotEmpty()) {
                 homePageList.add(HomePageList(request.name, searchResponses))
             }
         }
 
-        // FIX 1: Use direct newHomePageResponse method with list
         return newHomePageResponse(homePageList)
     }
 
@@ -77,10 +76,10 @@ class KatDrama : MainAPI() {
             val title = item.name ?: item.title ?: return@mapNotNull null
             val isMovie = item.media_type == "movie" || (item.title != null && item.name == null)
             val id = item.id
-            
+
             val slugBase = title.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')
             val slug = "$slugBase-$id"
-            
+
             val url = if (isMovie) "$mainUrl/detail/movie/$slug" else "$mainUrl/detail/tv/$slug"
             val poster = item.poster_path?.let { "https://image.tmdb.org/t/p/w500$it" }
 
@@ -107,11 +106,11 @@ class KatDrama : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
-        
+
         val title = document.selectFirst("h1, .cineapse-title")?.text() ?: "Unknown"
         val poster = document.selectFirst("img.poster, .detail-poster")?.attr("src")
         val plot = document.selectFirst(".plot, .synopsis, p.description")?.text()
-        
+
         val isMovie = url.contains("/movie/")
 
         if (isMovie) {
@@ -124,26 +123,24 @@ class KatDrama : MainAPI() {
         } else {
             val episodes = mutableListOf<Episode>()
             val slug = url.substringAfterLast("/")
-            
+
             val episodeElements = document.select(".episode-btn, .ep-list button, a[href*='-episode-']")
-            
+
             if (episodeElements.isNotEmpty()) {
                 episodeElements.forEach { epElement ->
                     val epNumText = epElement.text()
                     val epNum = epNumText.filter { it.isDigit() }.toIntOrNull()
                     val epUrl = "$mainUrl/watch/$slug-episode-$epNum"
-                    
+
                     if (epNum != null) {
-                        // FIX 2: newEpisode method
                         episodes.add(newEpisode(epUrl) { this.episode = epNum })
                     }
                 }
             } else {
                 val totalEpsText = document.selectFirst(".total-episodes")?.text() ?: "10"
                 val totalEps = totalEpsText.filter { it.isDigit() }.toIntOrNull() ?: 1
-                
+
                 for (i in 1..totalEps) {
-                    // FIX 2: newEpisode method
                     episodes.add(newEpisode("$mainUrl/watch/$slug-episode-$i") { this.episode = i })
                 }
             }
@@ -155,16 +152,14 @@ class KatDrama : MainAPI() {
         }
     }
 
-    // FIX 3: Corrected parameter order (subtitleCallback comes BEFORE callback)
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
+        subtitleCallback: suspend (SubtitleFile) -> Unit,
+        callback: suspend (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
-        
-        // FIX 4: UniversalExtractors will work now provided Extractor.kt shares the exact same package name.
+
         document.select(".server-btn, button[data-server]").forEach { serverBtn ->
             val serverUrl = serverBtn.attr("data-url")
             if (serverUrl.isNotBlank()) {
@@ -178,7 +173,7 @@ class KatDrama : MainAPI() {
                 UniversalExtractors.invoke(src, data, subtitleCallback, callback)
             }
         }
-        
+
         return true
     }
 }
