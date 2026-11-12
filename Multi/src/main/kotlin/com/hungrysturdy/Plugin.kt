@@ -9,6 +9,7 @@ class Plugin : Plugin() {
     override fun load(context: Context) {
         // All providers should be added in this manner. Please don't edit the providers list directly.
         registerMainAPI(PrmoviesProvider())
+        registerMainAPI(KatDrama())
         registerMainAPI(GhostflixProvider())
         registerMainAPI(AllSiteHubProvider())
         registerMainAPI(StarfilxProvider())
