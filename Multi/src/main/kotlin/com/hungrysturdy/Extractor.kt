@@ -25,7 +25,9 @@ open class VidhideExtractor : ExtractorApi() {
     override var name = "Vidhide"
     override var mainUrl = "https://vidhide.com"
     override val requiresReferer = false
-    override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {}
+    
+    // FIX: Added 'suspend' to callbacks
+    override suspend fun getUrl(url: String, referer: String?, subtitleCallback: suspend (SubtitleFile) -> Unit, callback: suspend (ExtractorLink) -> Unit) {}
 }
 
 class Vidsp : VidhideExtractor() { override var mainUrl = "https://vidsp.lol" }
@@ -45,11 +47,12 @@ open class LuluStream : ExtractorApi() {
     override var name = "Lulustream"
     override var mainUrl = "https://lulustream.com"
     override val requiresReferer = false
-    override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {}
+    
+    // FIX: Added 'suspend' to callbacks
+    override suspend fun getUrl(url: String, referer: String?, subtitleCallback: suspend (SubtitleFile) -> Unit, callback: suspend (ExtractorLink) -> Unit) {}
 }
 
 class Luluvid : LuluStream() {
-    // FIX 1: Changed 'val' to 'var' so it overrides properly
     override var name = "Lulustream"
     override var mainUrl = "https://luluvid.com"
 }
@@ -61,7 +64,9 @@ class Filemoon : ExtractorApi() {
     override var name = "Filemoon"
     override var mainUrl = "https://filemoon.sx"
     override val requiresReferer = false
-    override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {}
+    
+    // FIX: Added 'suspend' to callbacks
+    override suspend fun getUrl(url: String, referer: String?, subtitleCallback: suspend (SubtitleFile) -> Unit, callback: suspend (ExtractorLink) -> Unit) {}
 }
 
 // ==========================================
@@ -72,13 +77,15 @@ class KDHindiDubbedExtractor : ExtractorApi() {
     override val mainUrl = "https://momofile.shop"
     override val requiresReferer = false
 
+    // DHYAN RAHE: Apne asli code mein bhi callbacks ke aage 'suspend' zaroor likhna
     override suspend fun getUrl(
         url: String,
         referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
+        subtitleCallback: suspend (SubtitleFile) -> Unit,
+        callback: suspend (ExtractorLink) -> Unit
     ) {
-        // Aapne jo KDHindiDubbedExtractor ka code diya tha wo pura yaha aayega
+        // Aapne jo KDHindiDubbedExtractor ka code diya tha wo pura yaha aayega.
+        // Make sure usme bhi subtitleCallback aur callback 'suspend' functions define kiye gaye hon.
     }
 }
 
@@ -89,22 +96,24 @@ object UniversalExtractors {
     suspend fun invoke(
         href: String,
         data: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
+        subtitleCallback: suspend (SubtitleFile) -> Unit, // FIX: Added suspend
+        callback: suspend (ExtractorLink) -> Unit // FIX: Added suspend
     ) {
         val host = href.lowercase()
 
-        fun pushDirect(name: String, directUrl: String) {
-            // FIX 3: ExtractorLink() is deprecated. Using newExtractorLink() instead.
+        // FIX: Nested function ko bhi suspend banaya
+        suspend fun pushDirect(name: String, directUrl: String) {
+            // FIX: newExtractorLink builder pattern updated for Cloudstream 3
             callback.invoke(
                 newExtractorLink(
                     source = name,
                     name = name,
                     url = directUrl,
-                    referer = href,
-                    quality = Qualities.Unknown.value,
-                    isM3u8 = directUrl.contains(".m3u8")
-                )
+                    type = if (directUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.referer = href
+                    this.quality = Qualities.Unknown.value
+                }
             )
         }
 
