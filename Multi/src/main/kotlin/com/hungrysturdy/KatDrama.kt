@@ -9,7 +9,7 @@ class KatDrama : MainAPI() {
     override var mainUrl = "https://k-drama.in"
     override var name = "KatDrama"
     override val hasMainPage = true
-    override var lang = "hi"
+    override var lang = "en"
     override val supportedTypes = setOf(TvType.TvSeries, TvType.Movie, TvType.AsianDrama)
 
     override val mainPage = mainPageOf(
@@ -21,17 +21,15 @@ class KatDrama : MainAPI() {
         "$mainUrl/ranking" to "Top 10"
     )
 
-        override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get(request.data).document
         val homePageList = mutableListOf<HomePageList>()
-
         val rows = document.select(".cineapse-row-wrapper")
         
         if (rows.isNotEmpty()) {
             rows.forEach { row ->
                 val title = row.selectFirst("h3.cineapse-row-title")?.text()?.replace(" Explore all →", "")?.trim() ?: return@forEach
                 val elements = row.select(".cineapse-row-track .cineapse-card")
-                
                 val searchResponses = elements.mapNotNull { toSearchResult(it) }
 
                 if (searchResponses.isNotEmpty()) {
@@ -47,8 +45,8 @@ class KatDrama : MainAPI() {
             }
         }
 
-        // FIX: newHomePageResponse() hta kar directly HomePageResponse() use karna hai
-        return HomePageResponse(homePageList)
+        // FIX 1: Use direct newHomePageResponse method with list
+        return newHomePageResponse(homePageList)
     }
 
     private fun toSearchResult(element: Element): SearchResponse? {
@@ -136,7 +134,8 @@ class KatDrama : MainAPI() {
                     val epUrl = "$mainUrl/watch/$slug-episode-$epNum"
                     
                     if (epNum != null) {
-                        episodes.add(Episode(epUrl, episode = epNum))
+                        // FIX 2: newEpisode method
+                        episodes.add(newEpisode(epUrl) { this.episode = epNum })
                     }
                 }
             } else {
@@ -144,7 +143,8 @@ class KatDrama : MainAPI() {
                 val totalEps = totalEpsText.filter { it.isDigit() }.toIntOrNull() ?: 1
                 
                 for (i in 1..totalEps) {
-                    episodes.add(Episode("$mainUrl/watch/$slug-episode-$i", episode = i))
+                    // FIX 2: newEpisode method
+                    episodes.add(newEpisode("$mainUrl/watch/$slug-episode-$i") { this.episode = i })
                 }
             }
 
@@ -155,15 +155,16 @@ class KatDrama : MainAPI() {
         }
     }
 
+    // FIX 3: Corrected parameter order (subtitleCallback comes BEFORE callback)
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
-        callback: (ExtractorLink) -> Unit,
-        subtitleCallback: (SubtitleFile) -> Unit
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
         
-        // Universal Extractor Router ka use ho raha hai yaha
+        // FIX 4: UniversalExtractors will work now provided Extractor.kt shares the exact same package name.
         document.select(".server-btn, button[data-server]").forEach { serverBtn ->
             val serverUrl = serverBtn.attr("data-url")
             if (serverUrl.isNotBlank()) {
