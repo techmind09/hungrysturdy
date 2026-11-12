@@ -21,15 +21,17 @@ class KatDrama : MainAPI() {
         "$mainUrl/ranking" to "Top 10"
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val document = app.get(request.data).document
         val homePageList = mutableListOf<HomePageList>()
+
         val rows = document.select(".cineapse-row-wrapper")
         
         if (rows.isNotEmpty()) {
             rows.forEach { row ->
                 val title = row.selectFirst("h3.cineapse-row-title")?.text()?.replace(" Explore all →", "")?.trim() ?: return@forEach
                 val elements = row.select(".cineapse-row-track .cineapse-card")
+                
                 val searchResponses = elements.mapNotNull { toSearchResult(it) }
 
                 if (searchResponses.isNotEmpty()) {
@@ -45,7 +47,8 @@ class KatDrama : MainAPI() {
             }
         }
 
-        return newHomePageResponse(request.name, homePageList)
+        // FIX: newHomePageResponse() hta kar directly HomePageResponse() use karna hai
+        return HomePageResponse(homePageList)
     }
 
     private fun toSearchResult(element: Element): SearchResponse? {
