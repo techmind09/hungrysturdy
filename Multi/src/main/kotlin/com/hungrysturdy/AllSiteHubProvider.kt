@@ -1,29 +1,30 @@
 package com.hungrysturdy
 
+import com.lagradost.cloudstream3.*
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
-data class SiteItem(
-    val title: String,
-    val url: String,
-    val domain: String,
-    val logoUrl: String,
-    val badge: String?,
-    val category: String
-)
+class AllSiteHubProvider : MainAPI() {
+    override var mainUrl = "https://www.allsitehub.site"
+    override var name = "AllSiteHub"
+    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
 
-data class CategorySection(
-    val id: String,
-    val name: String,
-    val items: List<SiteItem>
-)
+    private data class SiteItem(
+        val title: String,
+        val url: String,
+        val domain: String,
+        val logoUrl: String,
+        val badge: String?,
+        val category: String
+    )
 
-class AllSiteHubProvider(
-    private val mainUrl: String = "https://www.allsitehub.site"
-) {
+    private data class CategorySection(
+        val id: String,
+        val name: String,
+        val items: List<SiteItem>
+    )
 
-    // Tumhari custom sites ki list yahan hai
     private val customDirectoryList = listOf(
         SiteItem("Arrow TV", "https://arrowtv.net/", "arrowtv.net", "", "FEATURED", "Movies & Shows"),
         SiteItem("RED FLIX", "https://redflix.club/", "redflix.club", "", "TRUSTED", "Movies & Shows"),
@@ -37,39 +38,40 @@ class AllSiteHubProvider(
         SiteItem("FilmyFly", "https://filmyfly.info/", "filmyfly.info", "", "NEW", "Movies & Shows")
     )
 
-    fun parseDirectory(html: String): List<CategorySection> {
-        val document: Document = Jsoup.parse(html, mainUrl)
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val document = app.get(mainUrl).document
         val scrapedSections = parseDocument(document).toMutableList()
         
-        return injectCustomSites(scrapedSections)
+        val finalSections = injectCustomSites(scrapedSections)
+        
+        val homePageLists = finalSections.map { section ->
+            val searchResponses = section.items.map { item ->
+                newMovieSearchResponse(item.title, item.url, TvType.Movie) {
+                    this.posterUrl = item.logoUrl
+                }
+            }
+            HomePageList(section.name, searchResponses)
+        }
+        
+        return newHomePageResponse(homePageLists, hasNext = false)
     }
 
     private fun parseDocument(document: Document): List<CategorySection> {
         val sections = mutableListOf<CategorySection>()
-        
-        // HTML se section.category-section-anchor ko select karta hai[span_1](start_span)[span_1](end_span)
         val sectionElements = document.select("section.category-section-anchor")
 
         for (section in sectionElements) {
             val sectionId = section.id()
             val categoryName = section.selectFirst("h2")?.text()?.trim() ?: "Unknown"
 
-            // HTML se div.sites-grid > a.sc-card ko select karta hai[span_2](start_span)[span_2](end_span)
             val siteItems = section.select("div.sites-grid > a.sc-card").mapNotNull { card ->
                 parseCard(card, categoryName)
             }
 
             if (siteItems.isNotEmpty()) {
-                sections.add(
-                    CategorySection(
-                        id = sectionId,
-                        name = categoryName,
-                        items = siteItems
-                    )
-                )
+                sections.add(CategorySection(sectionId, categoryName, siteItems))
             }
         }
-
         return sections
     }
 
@@ -97,23 +99,14 @@ class AllSiteHubProvider(
 
         val badge = card.selectFirst("span.sc-badge")?.text()?.trim()?.takeIf { it.isNotEmpty() }
 
-        return SiteItem(
-            title = title,
-            url = href,
-            domain = domainText,
-            logoUrl = logoUrl,
-            badge = badge,
-            category = categoryName
-        )
+        return SiteItem(title, href, domainText, logoUrl, badge, categoryName)
     }
 
     private fun injectCustomSites(scrapedSections: MutableList<CategorySection>): List<CategorySection> {
         val existingUrls = scrapedSections.flatMap { it.items }.map { it.url }.toSet()
 
         for (customSite in customDirectoryList) {
-            // Check karega ki URL already exist karta hai ya nahi
             if (!existingUrls.contains(customSite.url)) {
-                
                 val sectionIndex = scrapedSections.indexOfFirst { it.name == customSite.category }
                 
                 if (sectionIndex != -1) {
@@ -132,16 +125,5 @@ class AllSiteHubProvider(
             }
         }
         return scrapedSections
-    }
-
-    fun searchSites(sections: List<CategorySection>, query: String): List<SiteItem> {
-        val cleanQuery = query.trim().lowercase()
-        if (cleanQuery.isEmpty()) return sections.flatMap { it.items }
-
-        return sections.flatMap { it.items }.filter { item ->
-            item.title.lowercase().contains(cleanQuery) ||
-            item.domain.lowercase().contains(cleanQuery) ||
-            item.category.lowercase().contains(cleanQuery)
-        }
     }
 }
