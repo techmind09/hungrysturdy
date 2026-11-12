@@ -9,7 +9,7 @@ class KatDrama : MainAPI() {
     override var mainUrl = "https://k-drama.in"
     override var name = "KatDrama"
     override val hasMainPage = true
-    override var lang = "hi"
+    override var lang = "en"
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(
         TvType.TvSeries,
@@ -27,14 +27,15 @@ class KatDrama : MainAPI() {
         "$mainUrl/ranking?page=" to "Top 10"
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val url = if (request.data == "$mainUrl/") {
-            mainUrl
-        } else {
-            "${request.data}$page"
-        }
+    private val headers = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+        "Cookie" to "_ga=GA1.1.583239637.1794483658; _ga_0TNV9GL2DB=GS2.1.s1794492289$o2$g1$t1794492315$j34$l0$h0",
+        "Referer" to "$mainUrl/"
+    )
 
-        val document = app.get(url).document
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val url = if (request.data == "$mainUrl/") mainUrl else "${request.data}$page"
+        val document = app.get(url, headers = headers).document
         val homePageList = mutableListOf<HomePageList>()
         val rows = document.select(".cineapse-row-wrapper")
 
@@ -74,9 +75,7 @@ class KatDrama : MainAPI() {
         val title = this.selectFirst(".cineapse-card-title, h4")?.text()?.trim() ?: return null
         if (title.equals("x", ignoreCase = true)) return null
 
-        val posterUrl = fixUrlNull(
-            this.selectFirst("img.cineapse-poster-img, img")?.attr("src")
-        )
+        val posterUrl = fixUrlNull(this.selectFirst("img.cineapse-poster-img, img")?.attr("src"))
         val year = this.selectFirst(".cineapse-card-meta span")?.text()?.trim()?.toIntOrNull()
         val fullUrl = fixUrl(urlPath)
 
@@ -99,7 +98,7 @@ class KatDrama : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
         val apiUrl = "$mainUrl/api.php?action=search&q=$encodedQuery"
-        val response = app.get(apiUrl).parsedSafe<SearchApiResponse>() ?: return emptyList()
+        val response = app.get(apiUrl, headers = headers).parsedSafe<SearchApiResponse>() ?: return emptyList()
 
         return response.results.mapNotNull { item ->
             val title = item.name ?: item.title ?: return@mapNotNull null
@@ -139,7 +138,7 @@ class KatDrama : MainAPI() {
     )
 
     override suspend fun load(url: String): LoadResponse? {
-        val document = app.get(url).document
+        val document = app.get(url, headers = headers).document
 
         val title = document.selectFirst("h1, .cineapse-title, .detail-title")?.text()?.trim() ?: return null
         val poster = fixUrlNull(
@@ -186,7 +185,7 @@ class KatDrama : MainAPI() {
                 val totalEpsText = document.selectFirst(".total-episodes")?.text() ?: "1"
                 val totalEps = totalEpsText.filter { it.isDigit() }.toIntOrNull() ?: 1
 
-                for (i in 1..totalEps) {
+                for (i in t..totalEps) {
                     episodes.add(
                         newEpisode("$mainUrl/watch/$slug-episode-$i") {
                             this.name = "Episode $i"
@@ -209,8 +208,18 @@ class KatDrama : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data).document
+        val document = app.get(data, headers = headers).document
 
+        // Extract server links from onclick attributes (e.g. switchServer('serverX', 'https://...'))
+        document.select("button[onclick*='switchServer']").forEach { btn ->
+            val onclick = btn.attr("onclick")
+            val serverUrl = onclick.substringAfter("'", "").substringAfter("'", "").substringAfter("', '").substringBefore("'")
+            if (serverUrl.isNotBlank() && serverUrl.startsWith("http")) {
+                loadExtractor(fixUrl(serverUrl), data, subtitleCallback, callback)
+            }
+        }
+
+        // Generic server elements / data attributes / iframes
         document.select(".server-btn, button[data-server], [data-url], [data-src]").forEach { serverBtn ->
             val serverUrl = serverBtn.attr("data-url").ifBlank { serverBtn.attr("data-src") }
             if (serverUrl.isNotBlank()) {
