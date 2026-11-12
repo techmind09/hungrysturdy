@@ -9,7 +9,7 @@ class KatDrama : MainAPI() {
     override var mainUrl = "https://k-drama.in"
     override var name = "KatDrama"
     override val hasMainPage = true
-    override var lang = "en"
+    override var lang = "hi"
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(
         TvType.TvSeries,
@@ -29,7 +29,7 @@ class KatDrama : MainAPI() {
 
     private val headers = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-        "Cookie" to "_ga=GA1.1.583239637.1794483658; _ga_0TNV9GL2DB=GS2.1.s1794492289$o2$g1$t1794492315$j34$l0$h0",
+        "Cookie" to "_ga=GA1.1.583239637.1794483658; _ga_0TNV9GL2DB=GS2.1.s1794492289\$o2\$g1\$t1794492315\$j34\$l0\$h0",
         "Referer" to "$mainUrl/"
     )
 
@@ -185,7 +185,7 @@ class KatDrama : MainAPI() {
                 val totalEpsText = document.selectFirst(".total-episodes")?.text() ?: "1"
                 val totalEps = totalEpsText.filter { it.isDigit() }.toIntOrNull() ?: 1
 
-                for (i in t..totalEps) {
+                for (i in 1..totalEps) {
                     episodes.add(
                         newEpisode("$mainUrl/watch/$slug-episode-$i") {
                             this.name = "Episode $i"
@@ -210,7 +210,6 @@ class KatDrama : MainAPI() {
     ): Boolean {
         val document = app.get(data, headers = headers).document
 
-        // Extract server links from onclick attributes (e.g. switchServer('serverX', 'https://...'))
         document.select("button[onclick*='switchServer']").forEach { btn ->
             val onclick = btn.attr("onclick")
             val serverUrl = onclick.substringAfter("'", "").substringAfter("'", "").substringAfter("', '").substringBefore("'")
@@ -219,7 +218,6 @@ class KatDrama : MainAPI() {
             }
         }
 
-        // Generic server elements / data attributes / iframes
         document.select(".server-btn, button[data-server], [data-url], [data-src]").forEach { serverBtn ->
             val serverUrl = serverBtn.attr("data-url").ifBlank { serverBtn.attr("data-src") }
             if (serverUrl.isNotBlank()) {
