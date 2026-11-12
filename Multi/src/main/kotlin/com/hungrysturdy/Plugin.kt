@@ -10,6 +10,7 @@ class Plugin : Plugin() {
         // All providers should be added in this manner. Please don't edit the providers list directly.
         registerMainAPI(PrmoviesProvider())
         registerMainAPI(GhostflixProvider())
+        registerMainAPI(AllSiteHubProvider())
         registerMainAPI(StarfilxProvider())
         registerMainAPI(KDHindiDubbed())
         registerExtractorAPI(KDHindiDubbedExtractor())
