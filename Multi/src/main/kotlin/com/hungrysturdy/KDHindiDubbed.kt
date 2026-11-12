@@ -77,22 +77,31 @@ class KDHindiDubbed : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val pageUrl = "${request.data}$page"
         val document = fetchDoc(pageUrl)
-        val home = document.select("article.herald-lay-c, div.item, div.post-item, article, div.box").mapNotNull { it.toSearchResult() }
+        
+        // Selector modified to properly isolate individual movie/series cards
+        val home = document.select("article.post, article.item, div.post-item, div.herald-lay-c").mapNotNull { it.toSearchResult() }
+        
         return newHomePageResponse(request.name, home, hasNext = home.isNotEmpty())
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val titleElement = this.selectFirst("h2.entry-title a, h2 a, h3 a, a.title") ?: return null
+        // Find title and link within the specific article/div
+        val titleElement = this.selectFirst("h2.entry-title a, h2 a, h3 a, a.title, h2.title a") ?: return null
         val title = titleElement.text().trim()
         val href = fixUrl(titleElement.attr("href"))
+        
         if (title.isBlank() || href.isBlank()) return null
 
+        // Find image within the specific article/div
         val imgElement = this.selectFirst("img")
-        val rawImg = imgElement?.attr("src")?.takeIf { it.isNotBlank() && !it.startsWith("data:") }
-            ?: imgElement?.attr("data-src")?.takeIf { it.isNotBlank() } ?: ""
-        val posterUrl = fixUrl(rawImg)
+        val posterUrl = fixUrl(
+            imgElement?.attr("src")?.takeIf { it.isNotBlank() && !it.startsWith("data:") }
+                ?: imgElement?.attr("data-src")?.takeIf { it.isNotBlank() } 
+                ?: ""
+        )
 
         val type = if (title.contains("Movie", true)) TvType.Movie else TvType.TvSeries
+        
         return newMovieSearchResponse(title, href, type) {
             this.posterUrl = posterUrl
         }
@@ -101,7 +110,9 @@ class KDHindiDubbed : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val encoded = java.net.URLEncoder.encode(query.trim(), "UTF-8")
         val document = fetchDoc("$mainUrl/?s=$encoded")
-        return document.select("article.herald-lay-c, div.item, div.post-item, article, div.box")
+        
+        // Search selector modified to match main page selector
+        return document.select("article.post, article.item, div.post-item, div.herald-lay-c")
             .mapNotNull { it.toSearchResult() }
             .distinctBy { it.url }
     }
