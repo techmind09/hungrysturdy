@@ -202,36 +202,29 @@ class KatDrama : MainAPI() {
         }
     }
 
-    override suspend fun loadLinks(
+        override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data, headers = headers).document
+        val document = app.get(data).document
 
-        document.select("button[onclick*='switchServer']").forEach { btn ->
-            val onclick = btn.attr("onclick")
-            val serverUrl = onclick.substringAfter("'", "").substringAfter("'", "").substringAfter("', '").substringBefore("'")
-            if (serverUrl.isNotBlank() && serverUrl.startsWith("http")) {
-                loadExtractor(fixUrl(serverUrl), data, subtitleCallback, callback)
-            }
-        }
-
-        document.select(".server-btn, button[data-server], [data-url], [data-src]").forEach { serverBtn ->
-            val serverUrl = serverBtn.attr("data-url").ifBlank { serverBtn.attr("data-src") }
+        // FIX: Replaced .forEach with a standard Kotlin for loop
+        for (serverBtn in document.select(".server-btn, button[data-server]")) {
+            val serverUrl = serverBtn.attr("data-url")
             if (serverUrl.isNotBlank()) {
-                loadExtractor(fixUrl(serverUrl), data, subtitleCallback, callback)
+                UniversalExtractors.invoke(serverUrl, data, subtitleCallback, callback)
             }
         }
 
-        document.select("iframe[src], video source[src]").forEach { el ->
-            val src = el.attr("src")
+        // FIX: Replaced .forEach with a standard Kotlin for loop
+        for (iframe in document.select("iframe")) {
+            val src = iframe.attr("src")
             if (src.isNotBlank()) {
-                loadExtractor(fixUrl(src), data, subtitleCallback, callback)
+                UniversalExtractors.invoke(src, data, subtitleCallback, callback)
             }
         }
 
         return true
     }
-}
