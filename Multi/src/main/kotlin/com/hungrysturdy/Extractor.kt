@@ -5,28 +5,14 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
-import com.lagradost.cloudstream3.utils.INFER_TYPE
-import com.lagradost.cloudstream3.utils.M3u8Helper
 import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.getQualityFromName
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
-import com.lagradost.cloudstream3.network.CloudflareKiller
-import com.lagradost.cloudstream3.network.WebViewResolver
-import com.lagradost.nicehttp.NiceResponse
-import org.json.JSONObject
-import java.net.URI
-import android.util.Base64
 
-// ==========================================
-// 1. Vidhide & Clones
-// ==========================================
 open class VidhideExtractor : ExtractorApi() {
     override var name = "Vidhide"
     override var mainUrl = "https://vidhide.com"
     override val requiresReferer = false
-    
-    // FIX: Removed 'suspend' from callback parameters
     override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {}
 }
 
@@ -40,15 +26,10 @@ class Xtapes : VidhideExtractor() {
     override var name = "Xtapes"
 }
 
-// ==========================================
-// 2. Lulustream & Clones
-// ==========================================
 open class LuluStream : ExtractorApi() {
     override var name = "Lulustream"
     override var mainUrl = "https://lulustream.com"
     override val requiresReferer = false
-    
-    // FIX: Removed 'suspend' from callback parameters
     override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {}
 }
 
@@ -57,53 +38,39 @@ class Luluvid : LuluStream() {
     override var mainUrl = "https://luluvid.com"
 }
 
-// ==========================================
-// 3. Filemoon
-// ==========================================
 class Filemoon : ExtractorApi() {
     override var name = "Filemoon"
     override var mainUrl = "https://filemoon.sx"
     override val requiresReferer = false
-    
-    // FIX: Removed 'suspend' from callback parameters
     override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {}
 }
 
-// ==========================================
-// 4. KDHindiDubbed Extractor
-// ==========================================
 class KDHindiDubbedExtractor : ExtractorApi() {
     override val name = "KDHindiDubbed"
     override val mainUrl = "https://momofile.shop"
     override val requiresReferer = false
 
-    // FIX: Removed 'suspend' from callback parameters
     override suspend fun getUrl(
         url: String,
         referer: String?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // Aapne jo KDHindiDubbedExtractor ka code diya tha wo pura yaha aayega.
-        // Make sure usme bhi subtitleCallback aur callback parameter se 'suspend' hata hua ho.
+        // Your KDHindiDubbed logic here
     }
 }
 
-// ==========================================
-// 5. Universal Extractor Router
-// ==========================================
 object UniversalExtractors {
     suspend fun invoke(
         href: String,
         data: String,
-        // FIX: Removed 'suspend' from callback parameters
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
         val host = href.lowercase()
 
-        // FIX: Removed 'suspend' from pushDirect as callback is no longer suspending
-        fun pushDirect(name: String, directUrl: String) {
+        // FIX: Made pushDirect a suspend function because callback.invoke is a suspend function in CS3
+        suspend fun pushDirect(name: String, directUrl: String) {
             callback.invoke(
                 newExtractorLink(
                     source = name,
@@ -118,27 +85,13 @@ object UniversalExtractors {
         }
 
         when {
-            host.contains("vcloud") -> {
-                // vcloudServers(href).forEach { pushDirect(it.name, it.url) }
-            }
-            host.contains("vegadrive") -> {
-                // vegadriveSkydrop(href)?.let { pushDirect("VegaDrive", it) }
-            }
-            host.contains("fastdl") -> {
-                // fastdlDirect(href)?.let { pushDirect("G-Direct", it) }
-            }
-            host.contains("filebee") || host.contains("filepress") || host.contains("fpgo") -> {
-                // filepressDirect(href)?.let { pushDirect("Filepress", it) }
-            }
-            host.contains("gofile") -> {
-                // gofileDirect(href)?.let { pushDirect("Gofile", it) }
-            }
-            host.contains("gpdl") -> {
-                // gpdlDirect(href)?.let { pushDirect("10Gbps", it) }
-            }
-            host.contains("hubcloud") -> {
-                // hubcloudServers(href).forEach { pushDirect(it.name, it.url) }
-            }
+            host.contains("vcloud") -> {}
+            host.contains("vegadrive") -> {}
+            host.contains("fastdl") -> {}
+            host.contains("filebee") || host.contains("filepress") || host.contains("fpgo") -> {}
+            host.contains("gofile") -> {}
+            host.contains("gpdl") -> {}
+            host.contains("hubcloud") -> {}
             else -> {
                 if (href.startsWith("http")) {
                     loadExtractor(href, data, subtitleCallback, callback)
