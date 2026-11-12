@@ -155,8 +155,8 @@ class KatDrama : MainAPI() {
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
-        subtitleCallback: suspend (SubtitleFile) -> Unit,
-        callback: suspend (ExtractorLink) -> Unit
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
 
@@ -176,4 +176,3 @@ class KatDrama : MainAPI() {
 
         return true
     }
-}
