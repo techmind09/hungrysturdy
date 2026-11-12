@@ -11,15 +11,25 @@ class Plugin : Plugin() {
         registerMainAPI(PrmoviesProvider())
         registerMainAPI(KatDrama())
         registerMainAPI(GhostflixProvider())
-        registerMainAPI(AllSiteHubProvider())
-        registerMainAPI(StarfilxProvider())
         registerMainAPI(KDHindiDubbed())
-        registerExtractorAPI(KDHindiDubbedExtractor())
         registerMainAPI(NineAnimeProvider())
+        registerMainAPI(GokuHDProvider())
+
+        // Extractors Registration
+        registerExtractorAPI(KDHindiDubbedExtractor())
         registerExtractorAPI(NineAnimeMegaPlay())
         registerExtractorAPI(NineAnimeVidmoly())
         registerExtractorAPI(NineAnimeMoon())
-        registerMainAPI(GokuHDProvider())
         registerExtractorAPI(GokuHDExtractor())
+
+        // Universal & Custom Video Extractors (Vidhide clones, Luluvid, Filemoon)
+        registerExtractorAPI(Vidsp())
+        registerExtractorAPI(VidHideplus())
+        registerExtractorAPI(VidHidedht())
+        registerExtractorAPI(Vidhidehub())
+        registerExtractorAPI(Vidhidetoul())
+        registerExtractorAPI(Xtapes())
+        registerExtractorAPI(Luluvid())
+        registerExtractorAPI(Filemoon())
     }
 }
