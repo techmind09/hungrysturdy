@@ -197,14 +197,12 @@ class GhostflixProvider : MainAPI() {
             val streamUrl = match.value.replace("\\u0026", "&")
             callback.invoke(
                 newExtractorLink(
-                    source = name,
-                    name = "$name Direct (Bolt)",
-                    url = streamUrl,
-                    referer = "$mainUrl/",
-                    quality = Qualities.Unknown.value
-                ) {
-                    this.isM3u8 = streamUrl.contains(".m3u8")
-                }
+                    name,
+                    "$name Direct (Bolt)",
+                    streamUrl,
+                    "$mainUrl/",
+                    Qualities.Unknown.value
+                )
             )
         }
 
