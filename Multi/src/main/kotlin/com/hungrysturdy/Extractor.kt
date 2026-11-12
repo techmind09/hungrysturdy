@@ -26,8 +26,8 @@ open class VidhideExtractor : ExtractorApi() {
     override var mainUrl = "https://vidhide.com"
     override val requiresReferer = false
     
-    // FIX: Added 'suspend' to callbacks
-    override suspend fun getUrl(url: String, referer: String?, subtitleCallback: suspend (SubtitleFile) -> Unit, callback: suspend (ExtractorLink) -> Unit) {}
+    // FIX: Removed 'suspend' from callback parameters
+    override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {}
 }
 
 class Vidsp : VidhideExtractor() { override var mainUrl = "https://vidsp.lol" }
@@ -48,8 +48,8 @@ open class LuluStream : ExtractorApi() {
     override var mainUrl = "https://lulustream.com"
     override val requiresReferer = false
     
-    // FIX: Added 'suspend' to callbacks
-    override suspend fun getUrl(url: String, referer: String?, subtitleCallback: suspend (SubtitleFile) -> Unit, callback: suspend (ExtractorLink) -> Unit) {}
+    // FIX: Removed 'suspend' from callback parameters
+    override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {}
 }
 
 class Luluvid : LuluStream() {
@@ -65,8 +65,8 @@ class Filemoon : ExtractorApi() {
     override var mainUrl = "https://filemoon.sx"
     override val requiresReferer = false
     
-    // FIX: Added 'suspend' to callbacks
-    override suspend fun getUrl(url: String, referer: String?, subtitleCallback: suspend (SubtitleFile) -> Unit, callback: suspend (ExtractorLink) -> Unit) {}
+    // FIX: Removed 'suspend' from callback parameters
+    override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {}
 }
 
 // ==========================================
@@ -77,15 +77,15 @@ class KDHindiDubbedExtractor : ExtractorApi() {
     override val mainUrl = "https://momofile.shop"
     override val requiresReferer = false
 
-    // DHYAN RAHE: Apne asli code mein bhi callbacks ke aage 'suspend' zaroor likhna
+    // FIX: Removed 'suspend' from callback parameters
     override suspend fun getUrl(
         url: String,
         referer: String?,
-        subtitleCallback: suspend (SubtitleFile) -> Unit,
-        callback: suspend (ExtractorLink) -> Unit
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
     ) {
         // Aapne jo KDHindiDubbedExtractor ka code diya tha wo pura yaha aayega.
-        // Make sure usme bhi subtitleCallback aur callback 'suspend' functions define kiye gaye hon.
+        // Make sure usme bhi subtitleCallback aur callback parameter se 'suspend' hata hua ho.
     }
 }
 
@@ -96,14 +96,14 @@ object UniversalExtractors {
     suspend fun invoke(
         href: String,
         data: String,
-        subtitleCallback: suspend (SubtitleFile) -> Unit, // FIX: Added suspend
-        callback: suspend (ExtractorLink) -> Unit // FIX: Added suspend
+        // FIX: Removed 'suspend' from callback parameters
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
     ) {
         val host = href.lowercase()
 
-        // FIX: Nested function ko bhi suspend banaya
-        suspend fun pushDirect(name: String, directUrl: String) {
-            // FIX: newExtractorLink builder pattern updated for Cloudstream 3
+        // FIX: Removed 'suspend' from pushDirect as callback is no longer suspending
+        fun pushDirect(name: String, directUrl: String) {
             callback.invoke(
                 newExtractorLink(
                     source = name,
