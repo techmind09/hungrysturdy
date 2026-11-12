@@ -39,7 +39,6 @@ class GhostflixProvider : MainAPI() {
         val document = app.get(url).document
         val homePageList = mutableListOf<HomePageList>()
 
-        // 1. Parse static HTML rows
         document.select("div.nx-row").forEach { row ->
             val title = row.selectFirst("h2")?.text()?.trim() ?: return@forEach
             if (title.contains("Continue Watching", ignoreCase = true)) return@forEach
@@ -52,7 +51,6 @@ class GhostflixProvider : MainAPI() {
             }
         }
 
-        // 2. Parse Next.js Flight payload (`initialTrending`)
         val trendingItems = extractNextFlightTrending(document)
         if (trendingItems.isNotEmpty()) {
             val sectionTitle = if (request.data.isEmpty()) "Trending" else request.name
@@ -157,21 +155,20 @@ class GhostflixProvider : MainAPI() {
         val poster = document.selectFirst("meta[property='og:image']")?.attr("content")
 
         return if (isTv) {
-            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "tv", season = 1, episode = 1))
+            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = 1, episode = 1))
             val episodes = listOf(
-                Episode(
-                    data = playData,
-                    name = "Episode 1",
-                    season = 1,
-                    episode = 1
-                )
+                newEpisode(playData) {
+                    this.name = "Episode 1"
+                    this.season = 1
+                    this.episode = 1
+                }
             )
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.plot = description
             }
         } else {
-            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "movie"))
+            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "movie"))
             newMovieLoadResponse(title, url, TvType.Movie, playData) {
                 this.posterUrl = poster
                 this.plot = description
@@ -199,14 +196,15 @@ class GhostflixProvider : MainAPI() {
         Regex("""https?://[^\s"'\\]+\.(?:m3u8|mp4)[^\s"'\\]*""").findAll(pageText).forEach { match ->
             val streamUrl = match.value.replace("\\u0026", "&")
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = name,
                     name = "$name Direct (Bolt)",
                     url = streamUrl,
                     referer = "$mainUrl/",
-                    quality = Qualities.Unknown.value,
-                    isM3u8 = streamUrl.contains(".m3u8")
-                )
+                    quality = Qualities.Unknown.value
+                ) {
+                    this.isM3u8 = streamUrl.contains(".m3u8")
+                }
             )
         }
 
@@ -240,4 +238,3 @@ class GhostflixProvider : MainAPI() {
         @JsonProperty("vote_average") val voteAverage: Double? = null
     )
 }
-
