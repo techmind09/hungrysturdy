@@ -297,7 +297,8 @@ object UniversalExtractors {
     ) {
         val host = href.lowercase()
 
-        fun pushDirect(name: String, directUrl: String, type: ExtractorLinkType? = null) {
+        // FIX: Added 'suspend' to pushDirect because newExtractorLink is a suspending function in the CS3 builder API
+        suspend fun pushDirect(name: String, directUrl: String, type: ExtractorLinkType? = null) {
             val linkType = type ?: if (directUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
             callback.invoke(
                 newExtractorLink(source = name, name = name, url = directUrl, type = linkType) {
@@ -335,8 +336,6 @@ object UniversalExtractors {
             host.contains("vcloud") || host.contains("vegadrive") || host.contains("fastdl") || 
             host.contains("filebee") || host.contains("filepress") || host.contains("fpgo") || 
             host.contains("gofile") || host.contains("gpdl") || host.contains("hubcloud") -> {
-                // If you have custom scraping logic for these, add them here.
-                // Otherwise let standard loadExtractor handle it.
                 loadExtractor(href, data, subtitleCallback, callback)
             }
             
