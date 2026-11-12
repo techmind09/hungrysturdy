@@ -107,43 +107,86 @@ class KatDrama : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
+        val html = document.html()
 
-        val title = document.selectFirst("h1, .cineapse-title")?.text() ?: "Unknown"
-        val poster = document.selectFirst("img.poster, .detail-poster")?.attr("src")
-        val plot = document.selectFirst(".plot, .synopsis, p.description")?.text()
+        val title = document.selectFirst("h1, .cineapse-title, h2.text-2xl, .text-3xl")?.text() 
+            ?: document.title().substringBefore("-").trim() 
+            ?: "Unknown"
+
+        // 1. Aggressive Poster Scraper
+        var poster = document.selectFirst("img.poster, .detail-poster, img[alt*='poster' i]")?.attr("src")
+        if (poster.isNullOrBlank()) {
+            // Find any image sourced from TMDB if exact classes fail
+            poster = document.select("img").mapNotNull { it.attr("src") }.firstOrNull { it.contains("tmdb.org") }
+        }
+        if (poster.isNullOrBlank()) {
+            // Last resort: search raw HTML for a TMDB URL
+            poster = Regex("""https?://image\.tmdb\.org/t/p/[^"'\s\\]+""").find(html)?.value?.replace("\\", "")
+        }
+
+        // 2. Aggressive Plot Scraper
+        var plot = document.selectFirst(".plot, .synopsis, p.description, .text-gray-300, .text-sm")?.text()
+        if (plot.isNullOrBlank() || plot.length < 20) {
+            // Fallback: Just find the <p> tag with the most text in it
+            plot = document.select("p").maxByOrNull { it.text().length }?.text()
+        }
 
         val isMovie = url.contains("/movie/")
+        val slug = url.substringAfterLast("/")
 
         if (isMovie) {
-            val slug = url.substringAfterLast("/")
-            val watchUrl = "$mainUrl/watch/movie-$slug"
+            // Corrected movie watch URL
+            val watchUrl = "$mainUrl/watch/movie/$slug"
             return newMovieLoadResponse(title, url, TvType.Movie, watchUrl) {
                 this.posterUrl = poster
                 this.plot = plot
             }
         } else {
             val episodes = mutableListOf<Episode>()
-            val slug = url.substringAfterLast("/")
+            val epMap = mutableMapOf<Int, String>()
 
-            val episodeElements = document.select(".episode-btn, .ep-list button, a[href*='-episode-']")
+            // Approach A: Find actual links
+            val episodeLinks = document.select("a[href*='-episode-'], a[href*='/watch/tv/']")
+            for (link in episodeLinks) {
+                val epHref = link.attr("href")
+                val epNum = Regex("""episode-(\d+)""").find(epHref)?.groupValues?.get(1)?.toIntOrNull()
+                if (epNum != null) {
+                    epMap[epNum] = fixUrl(epHref)
+                }
+            }
 
-            if (episodeElements.isNotEmpty()) {
-                for (epElement in episodeElements) {
-                    val epNumText = epElement.text()
-                    val epNum = epNumText.filter { it.isDigit() }.toIntOrNull()
-                    val epUrl = "$mainUrl/watch/$slug-episode-$epNum"
-
+            // Approach B: Search raw HTML for the watch patterns
+            if (epMap.isEmpty()) {
+                val matches = Regex("""/watch/tv/([^"'\s\\]+-episode-(\d+))""").findAll(html)
+                for (match in matches) {
+                    val fullPath = match.groupValues[1]
+                    val epNum = match.groupValues[2].toIntOrNull()
                     if (epNum != null) {
-                        episodes.add(newEpisode(epUrl) { this.episode = epNum })
+                        epMap[epNum] = "$mainUrl/watch/tv/$fullPath"
                     }
                 }
-            } else {
-                val totalEpsText = document.selectFirst(".total-episodes")?.text() ?: "10"
-                val totalEps = totalEpsText.filter { it.isDigit() }.toIntOrNull() ?: 1
+            }
+
+            // Approach C: Ultimate Fallback - Find highest episode number in text and auto-generate URLs
+            if (epMap.isEmpty()) {
+                val maxEpFromRegex = Regex("""episode-(\d+)""").findAll(html).mapNotNull { it.groupValues[1].toIntOrNull() }.maxOrNull()
+                val totalEpsText = document.selectFirst(".total-episodes")?.text()
+                val totalEpsFromText = totalEpsText?.filter { it.isDigit() }?.toIntOrNull()
+                
+                val totalEps = maxEpFromRegex ?: totalEpsFromText ?: 1
 
                 for (i in 1..totalEps) {
-                    episodes.add(newEpisode("$mainUrl/watch/$slug-episode-$i") { this.episode = i })
+                    // Corrected TV watch URL (added /tv/)
+                    epMap[i] = "$mainUrl/watch/tv/$slug-episode-$i"
                 }
+            }
+
+            // Add to Episode list in correct order
+            epMap.toSortedMap().forEach { (epNum, epUrl) ->
+                episodes.add(newEpisode(epUrl) { 
+                    this.episode = epNum 
+                    this.name = "Episode $epNum"
+                })
             }
 
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
@@ -160,25 +203,23 @@ class KatDrama : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val document = app.get(data).document
+        val html = document.html()
 
-        // Check all possible button attributes
+        // 1. Check all standard buttons
         for (serverBtn in document.select("[data-url], [data-link], [data-src], [data-server], .server-btn, .server-item")) {
             var serverUrl = serverBtn.attr("data-url").ifBlank { serverBtn.attr("data-link") }.ifBlank { serverBtn.attr("data-src") }
             if (serverUrl.isNotBlank()) {
-                // Handle Base64 encoded urls if any
                 if (!serverUrl.startsWith("http") && !serverUrl.startsWith("//")) {
                     try { serverUrl = String(Base64.decode(serverUrl, Base64.DEFAULT)) } catch (_: Exception) {}
                 }
-                
                 if (serverUrl.startsWith("//")) serverUrl = "https:$serverUrl"
-                
                 if (serverUrl.startsWith("http")) {
                     UniversalExtractors.invoke(serverUrl, data, subtitleCallback, callback)
                 }
             }
         }
 
-        // Check iframes directly
+        // 2. Check iframes directly
         for (iframe in document.select("iframe")) {
             var src = iframe.attr("src").ifBlank { iframe.attr("data-src") }
             if (src.isNotBlank()) {
@@ -187,6 +228,13 @@ class KatDrama : MainAPI() {
                     UniversalExtractors.invoke(src, data, subtitleCallback, callback)
                 }
             }
+        }
+
+        // 3. Last Resort Fallback: Scan raw HTML/JS for our known server domains
+        val serverRegex = Regex("""(https?://[^"'\s\\]+(?:hakunaymatata|devcorp\.me|modiplay\.xyz|rozgarlelo|fvibuxer|vidmoly|staticmoly|xcloud1\.lol|tmbcloud)[^"'\s\\]*)""")
+        for (match in serverRegex.findAll(html)) {
+            val cleanUrl = match.value.replace("\\", "")
+            UniversalExtractors.invoke(cleanUrl, data, subtitleCallback, callback)
         }
 
         return true
