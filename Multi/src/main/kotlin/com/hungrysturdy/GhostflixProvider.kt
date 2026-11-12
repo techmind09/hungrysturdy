@@ -195,15 +195,16 @@ class GhostflixProvider : MainAPI() {
 
         Regex("""https?://[^\s"'\\]+\.(?:m3u8|mp4)[^\s"'\\]*""").findAll(pageText).forEach { match ->
             val streamUrl = match.value.replace("\\u0026", "&")
+            val linkType = if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
             callback.invoke(
                 newExtractorLink(
                     source = name,
                     name = "$name Direct (Bolt)",
                     url = streamUrl,
-                    quality = Qualities.Unknown.value
+                    type = linkType
                 ) {
                     this.referer = "$mainUrl/"
-                    this.isM3u8 = streamUrl.contains(".m3u8")
+                    this.quality = Qualities.Unknown.value
                 }
             )
         }
