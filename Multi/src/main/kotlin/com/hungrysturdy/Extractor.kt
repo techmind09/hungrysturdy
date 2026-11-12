@@ -9,7 +9,7 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.network.CloudflareKiller
-import com.lagradost.nicehttp.NiceResponse // FIX 1: Corrected import to nicehttp
+import com.lagradost.nicehttp.NiceResponse
 import org.json.JSONObject
 import java.net.URI
 import android.util.Base64
@@ -60,7 +60,7 @@ class Filemoon : ExtractorApi() {
 }
 
 // ==========================================
-// 4. KDHindiDubbed Extractor
+// 4. KDHindiDubbed Extractor (With Fallbacks)
 // ==========================================
 class KDHindiDubbedExtractor : ExtractorApi() {
     override val name = "KDHindiDubbed"
@@ -84,40 +84,21 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                body.contains("cf-turnstile", true)
     }
 
-    private suspend fun cfGet(
-        url: String,
-        referer: String? = null,
-        headers: Map<String, String> = emptyMap(),
-        cookies: Map<String, String> = emptyMap(),
-        allowRedirects: Boolean = true
-    ): NiceResponse {
+    private suspend fun cfGet(url: String, referer: String? = null, headers: Map<String, String> = emptyMap(), cookies: Map<String, String> = emptyMap(), allowRedirects: Boolean = true): NiceResponse {
         val reqHeaders = mutableMapOf("User-Agent" to USER_AGENT)
         reqHeaders.putAll(cfKiller.getCookieHeaders(url).toMap())
         reqHeaders.putAll(headers)
-
         val res = app.get(url, referer = referer, headers = reqHeaders, cookies = cookies, allowRedirects = allowRedirects)
-        if (isCloudflareChallenge(res)) {
-            return app.get(url, referer = referer, headers = headers, cookies = cookies, interceptor = cfKiller, allowRedirects = allowRedirects)
-        }
+        if (isCloudflareChallenge(res)) return app.get(url, referer = referer, headers = headers, cookies = cookies, interceptor = cfKiller, allowRedirects = allowRedirects)
         return res
     }
 
-    private suspend fun cfPost(
-        url: String,
-        referer: String? = null,
-        headers: Map<String, String> = emptyMap(),
-        cookies: Map<String, String> = emptyMap(),
-        data: Map<String, String> = emptyMap(),
-        allowRedirects: Boolean = true
-    ): NiceResponse {
+    private suspend fun cfPost(url: String, referer: String? = null, headers: Map<String, String> = emptyMap(), cookies: Map<String, String> = emptyMap(), data: Map<String, String> = emptyMap(), allowRedirects: Boolean = true): NiceResponse {
         val reqHeaders = mutableMapOf("User-Agent" to USER_AGENT)
         reqHeaders.putAll(cfKiller.getCookieHeaders(url).toMap())
         reqHeaders.putAll(headers)
-
         val res = app.post(url, referer = referer, headers = reqHeaders, cookies = cookies, data = data, allowRedirects = allowRedirects)
-        if (isCloudflareChallenge(res)) {
-            return app.post(url, referer = referer, headers = headers, cookies = cookies, data = data, interceptor = cfKiller, allowRedirects = allowRedirects)
-        }
+        if (isCloudflareChallenge(res)) return app.post(url, referer = referer, headers = headers, cookies = cookies, data = data, interceptor = cfKiller, allowRedirects = allowRedirects)
         return res
     }
 
@@ -132,31 +113,22 @@ class KDHindiDubbedExtractor : ExtractorApi() {
         return map
     }
 
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
+    override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
         try {
             val targetUrl = unwrapRedirect(url.trim(), referer ?: mainUrl)
             val lower = targetUrl.lowercase()
 
             when {
-                lower.contains("momofile.shop") && lower.contains(".php?id=") -> {
-                    extractSingleMomoPhp(targetUrl, referer ?: mainUrl, subtitleCallback, callback)
-                }
+                lower.contains("momofile.shop") && lower.contains(".php?id=") -> extractSingleMomoPhp(targetUrl, referer ?: mainUrl, subtitleCallback, callback)
                 lower.contains("momofile") -> extractMomoFile(targetUrl, subtitleCallback, callback)
                 lower.contains("xcloud") -> extractXCloud(targetUrl, subtitleCallback, callback)
                 lower.contains("tmbcloud") -> extractTmbCloud(targetUrl, subtitleCallback, callback)
-                lower.contains("pixeldrain") -> extractPixelDrain(targetUrl, callback)
-                lower.contains("theditch") || lower.contains("fileditch") -> extractFileDitch(targetUrl, callback)
-                lower.contains("vik1ngfile") || lower.contains("vikingfile") -> extractVikingFile(targetUrl, callback)
-                lower.contains("send.now") || lower.contains("sendnow") -> extractSendNow(targetUrl, callback)
-                lower.contains("susanexpectcare") || lower.contains("voe.sx") || lower.contains("voe.") -> {
-                    extractVoe(targetUrl, referer ?: targetUrl, subtitleCallback, callback)
-                }
-                lower.contains("buzzheavier") -> extractBuzzheavier(targetUrl, callback)
+                lower.contains("pixeldrain") -> extractPixelDrain(targetUrl, subtitleCallback, callback)
+                lower.contains("theditch") || lower.contains("fileditch") -> extractFileDitch(targetUrl, subtitleCallback, callback)
+                lower.contains("vik1ngfile") || lower.contains("vikingfile") -> extractVikingFile(targetUrl, subtitleCallback, callback)
+                lower.contains("send.now") || lower.contains("sendnow") -> extractSendNow(targetUrl, subtitleCallback, callback)
+                lower.contains("susanexpectcare") || lower.contains("voe.sx") || lower.contains("voe.") -> extractVoe(targetUrl, referer ?: targetUrl, subtitleCallback, callback)
+                lower.contains("buzzheavier") -> extractBuzzheavier(targetUrl, subtitleCallback, callback)
                 lower.contains("kdhindidubbed") || lower.contains("dramacool") -> {
                     val doc = cfGet(targetUrl, referer).document
                     val subLinks = doc.select(".entry-content a[href], a[href]").mapNotNull { a ->
@@ -164,7 +136,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                         if (h.startsWith("http") && !h.contains("dramacool.website") && !h.contains("kdhindidubbed") && !h.contains("t.me")) h else null
                     }.distinct()
                     
-                    // FIX 2: Replaced .amap with a standard for loop to fix suspend/coroutine errors
                     for (sub in subLinks) {
                         getUrl(sub, targetUrl, subtitleCallback, callback)
                     }
@@ -204,7 +175,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             sessionCookies = res.cookies
             val doc = res.document
 
-            doc.select("video source[src], video[src], iframe[src]").forEach { el ->
+            for (el in doc.select("video source[src], video[src], iframe[src]")) {
                 val rawSrc = el.attr("src").trim()
                 if (rawSrc.isNotBlank() && !rawSrc.startsWith("javascript")) {
                     val fullSrc = if (rawSrc.startsWith("/")) "$baseUrl$rawSrc" else rawSrc
@@ -220,7 +191,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 }
             }
 
-            // FIX: Replaced .amap with a standard for loop
             for (a in doc.select("a[href]")) {
                 val rawHref = a.attr("href").trim()
                 val text = a.text().trim()
@@ -237,7 +207,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
 
         if (fileId.isNotBlank() && fileId != "d") {
             val services = listOf("pixeldrain", "buzzheavier", "fileditch", "vikingfile", "sendnow")
-            // FIX: Replaced .amap with a standard for loop
             for (service in services) {
                 val phpUrl = "$baseUrl/$service.php?id=$fileId"
                 extractSingleMomoPhp(phpUrl, landingUrl, subtitleCallback, callback, sessionCookies)
@@ -253,17 +222,11 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             val text = apiRes.text.trim()
             if (text.startsWith("{")) {
                 val json = JSONObject(text)
-                val rawUrl = json.optString("url").trim()
+                val rawUrl = json.optString("url").ifBlank { json.optString("link") }.trim()
                 if (rawUrl.isNotBlank()) {
                     val resolvedUrl = if (rawUrl.startsWith("/")) "$baseUrl$rawUrl" else rawUrl
-                    when {
-                        phpUrl.contains("pixeldrain") || resolvedUrl.contains("pixeldrain") -> extractPixelDrain(resolvedUrl, callback)
-                        phpUrl.contains("buzzheavier") || resolvedUrl.contains("buzzheavier") -> extractBuzzheavier(resolvedUrl, callback)
-                        phpUrl.contains("fileditch") || resolvedUrl.contains("fileditch") || resolvedUrl.contains("theditch") -> extractFileDitch(resolvedUrl, callback)
-                        phpUrl.contains("vikingfile") || resolvedUrl.contains("vikingfile") || resolvedUrl.contains("vik1ngfile") -> extractVikingFile(resolvedUrl, callback)
-                        phpUrl.contains("sendnow") || resolvedUrl.contains("send.now") -> extractSendNow(resolvedUrl, callback)
-                        else -> getUrl(resolvedUrl, refererUrl, subtitleCallback, callback)
-                    }
+                    // Fallback to UniversalExtractors for robust fetching
+                    UniversalExtractors.invoke(resolvedUrl, refererUrl, subtitleCallback, callback)
                 }
             }
         } catch (_: Exception) {}
@@ -332,7 +295,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             !h.endsWith(URI(pageUrl).path)
         }
 
-        // FIX: Replaced .amap with a standard for loop
         for (btn in buttons) {
             val rawHref = btn.attr("href").trim()
             val fullHref = if (rawHref.startsWith("/")) "$hostBase$rawHref" else rawHref
@@ -385,7 +347,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 ?: doc.selectFirst("input[name='token_b'], button[data-token]")?.let { it.attr("value").ifBlank { it.attr("data-token") } }
                 ?: ""
 
-            doc.select("a[href], button[data-href]").forEach { el ->
+            for (el in doc.select("a[href], button[data-href]")) {
                 val rawH = el.attr("href").ifBlank { el.attr("data-href") }.trim()
                 if (rawH.isNotBlank() && !rawH.startsWith("#") && !rawH.startsWith("javascript")) {
                     val fullH = if (rawH.startsWith("/")) "$baseUrl$rawH" else rawH
@@ -397,7 +359,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
 
             if (!pageId.isNullOrBlank()) {
                 val typesToTry = listOf("fslv2new", "fastcdnv2", "r2")
-                // FIX: Replaced .amap with a standard for loop
                 for (dataType in typesToTry) {
                     try {
                         val step2Res = cfPost("$baseUrl/step2.php", referer = res.url, cookies = cookies, headers = mapOf("Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8", "X-Requested-With" to "XMLHttpRequest", "Origin" to baseUrl), data = mapOf("type" to dataType, "page_id" to pageId, "page" to pageId, "token_b" to tokenB))
@@ -456,18 +417,24 @@ class KDHindiDubbedExtractor : ExtractorApi() {
         }
     }
 
-    private suspend fun extractPixelDrain(url: String, callback: (ExtractorLink) -> Unit) {
-        val fileId = url.trimEnd('/').substringAfterLast('/').substringBefore("?")
-        if (fileId.isBlank()) return
-        val uri = URI(url)
-        val domain = "${uri.scheme}://${uri.host}"
-        callback.invoke(newExtractorLink("PixelDrain", "PixelDrain [Direct]", "$domain/api/file/$fileId", ExtractorLinkType.VIDEO) {
-            this.quality = Qualities.P720.value
-            this.referer = "$domain/"
-        })
+    // FIX: Pixeldrain domain forced to .com to avoid .dev 403 API blocking + Fallback
+    private suspend fun extractPixelDrain(url: String, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
+        try {
+            val fileId = url.trimEnd('/').substringAfterLast('/').substringBefore("?")
+            if (fileId.isNotBlank()) {
+                val domain = "https://pixeldrain.com" // Force the main domain
+                callback.invoke(newExtractorLink("PixelDrain", "PixelDrain [Direct]", "$domain/api/file/$fileId", ExtractorLinkType.VIDEO) {
+                    this.quality = Qualities.P720.value
+                    this.referer = "" // Blank referer to prevent blocking
+                })
+                return
+            }
+        } catch (_: Exception) {}
+        loadExtractor(url, "https://momofile.shop/", subtitleCallback, callback)
     }
 
-    private suspend fun extractFileDitch(url: String, callback: (ExtractorLink) -> Unit) {
+    // FIX: Aggressive FileDitch with Fallback
+    private suspend fun extractFileDitch(url: String, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
         try {
             val res = cfGet(url, allowRedirects = true)
             val currentUrl = res.url
@@ -487,12 +454,15 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                         this.referer = finalPageUrl
                         this.headers = buildPlayerHeaders(finalPageUrl, finalPageUrl, targetRes.cookies)
                     })
+                    return
                 }
             }
         } catch (_: Exception) {}
+        loadExtractor(url, "https://momofile.shop/", subtitleCallback, callback)
     }
 
-    private suspend fun extractVikingFile(url: String, callback: (ExtractorLink) -> Unit) {
+    // FIX: VikingFile with Fallback
+    private suspend fun extractVikingFile(url: String, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
         try {
             val fileId = url.trimEnd('/').substringAfterLast('/').substringBefore("?")
             if (fileId.isBlank()) return
@@ -519,9 +489,11 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 } catch (_: Exception) {}
             }
         } catch (_: Exception) {}
+        loadExtractor(url, "https://momofile.shop/", subtitleCallback, callback)
     }
 
-    private suspend fun extractSendNow(url: String, callback: (ExtractorLink) -> Unit) {
+    // FIX: SendNow with Fallback
+    private suspend fun extractSendNow(url: String, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
         try {
             val res = cfGet(url, referer = "https://send.now/")
             val doc = res.document
@@ -529,7 +501,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             val form = doc.selectFirst("form[name='F1'], form[method='POST']")
             if (form != null) {
                 val postData = mutableMapOf<String, String>()
-                form.select("input[name]").forEach { input -> postData[input.attr("name")] = input.attr("value") }
+                for (input in form.select("input[name]")) postData[input.attr("name")] = input.attr("value")
                 postData["op"] = "download2"
                 if (!postData.containsKey("id")) postData["id"] = url.trimEnd('/').substringAfterLast('/')
                 val postRes = cfPost(res.url, referer = res.url, cookies = res.cookies, data = postData, allowRedirects = false)
@@ -542,8 +514,10 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                     this.referer = "https://send.now/"
                     this.headers = buildPlayerHeaders(res.url, "https://send.now/", res.cookies)
                 })
+                return
             }
         } catch (_: Exception) {}
+        loadExtractor(url, "https://send.now/", subtitleCallback, callback)
     }
 
     private suspend fun extractVoe(url: String, referer: String, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
@@ -583,7 +557,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
         } catch (_: Exception) {}
     }
 
-    private suspend fun extractBuzzheavier(url: String, callback: (ExtractorLink) -> Unit) {
+    private suspend fun extractBuzzheavier(url: String, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
         try {
             val cleanUrl = url.trimEnd('/')
             val res = cfGet("$cleanUrl/download", referer = url, headers = mapOf("HX-Request" to "true", "HX-Current-URL" to url), allowRedirects = false)
@@ -594,8 +568,10 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                     this.referer = url
                     this.headers = buildPlayerHeaders(url, url, res.cookies)
                 })
+                return
             }
         } catch (_: Exception) {}
+        loadExtractor(url, "https://momofile.shop/", subtitleCallback, callback)
     }
 }
 
@@ -611,41 +587,24 @@ object UniversalExtractors {
     ) {
         val host = href.lowercase()
 
-        fun pushDirect(name: String, directUrl: String) {
-            callback.invoke(
-                newExtractorLink(
-                    source = name,
-                    name = name,
-                    url = directUrl,
-                    type = if (directUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                ) {
-                    this.referer = href
-                    this.quality = Qualities.Unknown.value
-                }
-            )
-        }
-
         when {
-            host.contains("vcloud") -> {
-                // vcloudServers(href).forEach { pushDirect(it.name, it.url) }
-            }
-            host.contains("vegadrive") -> {
-                // vegadriveSkydrop(href)?.let { pushDirect("VegaDrive", it) }
-            }
-            host.contains("fastdl") -> {
-                // fastdlDirect(href)?.let { pushDirect("G-Direct", it) }
-            }
-            host.contains("filebee") || host.contains("filepress") || host.contains("fpgo") -> {
-                // filepressDirect(href)?.let { pushDirect("Filepress", it) }
-            }
-            host.contains("gofile") -> {
-                // gofileDirect(href)?.let { pushDirect("Gofile", it) }
-            }
-            host.contains("gpdl") -> {
-                // gpdlDirect(href)?.let { pushDirect("10Gbps", it) }
-            }
-            host.contains("hubcloud") -> {
-                // hubcloudServers(href).forEach { pushDirect(it.name, it.url) }
+            host.contains("vcloud") -> {}
+            host.contains("vegadrive") -> {}
+            host.contains("fastdl") -> {}
+            host.contains("filebee") || host.contains("filepress") || host.contains("fpgo") -> {}
+            host.contains("gofile") -> {}
+            host.contains("gpdl") -> {}
+            host.contains("hubcloud") -> {}
+            host.contains("pixeldrain") -> {
+                val fileId = href.trimEnd('/').substringAfterLast('/').substringBefore("?")
+                if (fileId.isNotBlank()) {
+                    callback.invoke(newExtractorLink("PixelDrain", "PixelDrain [Direct]", "https://pixeldrain.com/api/file/$fileId", ExtractorLinkType.VIDEO) {
+                        this.quality = Qualities.P720.value
+                        this.referer = ""
+                    })
+                } else {
+                    loadExtractor(href, data, subtitleCallback, callback)
+                }
             }
             else -> {
                 if (href.startsWith("http")) {
