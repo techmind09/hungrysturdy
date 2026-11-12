@@ -137,7 +137,7 @@ class StarfilxProvider : MainAPI() {
 
         val episodes = mutableListOf<Episode>()
 
-        // Parse all buttons (e.g. "ep 1(terabox)", "ep 1(FileNext App)")
+        // Parse buttons like "ep 1(terabox)", "ep 1(stream)", etc.[span_3](start_span)[span_3](end_span)
         contentArea?.select("a.button, a.wp-block-button__link, a[href]")?.forEach { a ->
             val text = a.text().trim()
             val href = a.attr("href").trim()
@@ -150,12 +150,12 @@ class StarfilxProvider : MainAPI() {
                 return@forEach
             }
 
-            // Extract episode number and server name from text
             val epMatch = Regex("""(?:ep|episode)\s*(\d+)""", RegexOption.IGNORE_CASE).find(text)
             if (epMatch != null) {
                 val epNum = epMatch.groupValues[1].toIntOrNull() ?: 1
                 val serverName = when {
                     text.contains("terabox", ignoreCase = true) -> "Terabox"
+                    text.contains("stream", ignoreCase = true) -> "Stream"
                     text.contains("filenext", ignoreCase = true) -> "FileNext"
                     else -> text
                 }
@@ -176,7 +176,6 @@ class StarfilxProvider : MainAPI() {
             }
         }
 
-        // Fallback iframes
         if (episodes.isEmpty()) {
             contentArea?.select("iframe[src]")?.forEachIndexed { index, iframe ->
                 val src = iframe.attr("src")
@@ -217,7 +216,7 @@ class StarfilxProvider : MainAPI() {
             targetUrl.contains("terabox", ignoreCase = true) -> {
                 extractTerabox(targetUrl, subtitleCallback, callback)
             }
-            targetUrl.contains("filenext", ignoreCase = true) -> {
+            targetUrl.contains("filenext", ignoreCase = true) || targetUrl.contains("stream", ignoreCase = true) -> {
                 extractFileNext(targetUrl, subtitleCallback, callback)
             }
             targetUrl.contains("rpmstream.live", ignoreCase = true) -> {
@@ -247,10 +246,14 @@ class StarfilxProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val shortId = Regex("""/s/1?([A-Za-z0-9_-]+)""").find(url)?.groupValues?.get(1)
-        if (!shortId.isNullOrBlank()) {
+        // Extract surl parameter (e.g. 5lTBIEh8tIZ2DOQ8akq5Rw)[span_4](start_span)[span_4](end_span)
+        val surl = Regex("""surl=([A-Za-z0-9_-]+)""").find(url)?.groupValues?.get(1) 
+            ?: Regex("""/s/1?([A-Za-z0-9_-]+)""").find(url)?.groupValues?.get(1)
+
+        if (!surl.isNullOrBlank()) {
             try {
-                val infoUrl = "https://terabox.hnn.workers.dev/api/get-info?shorturl=$shortId&pwd="
+                // Try fetching via Terabox Worker API
+                val infoUrl = "https://terabox.hnn.workers.dev/api/get-info?shorturl=$surl&pwd="
                 val infoRes = app.get(infoUrl).parsedSafe<TeraboxInfoResponse>()
 
                 if (infoRes?.ok == true && !infoRes.list.isNullOrEmpty()) {
@@ -287,11 +290,12 @@ class StarfilxProvider : MainAPI() {
             } catch (_: Exception) {}
         }
 
-        // Fallback to CloudStream's built-in extractor
-        val normalizedUrl = url.replace(
-            Regex("https?://(www\\.)?(1024terabox|teraboxapp|teraboxlink|freeterabox)\\.com"),
-            "https://www.terabox.com"
-        )
+        // Fallback to built-in CloudStream extractor
+        val normalizedUrl = if (url.contains("surl=")) {
+            "https://www.terabox.com/wap/share/filelist?surl=$surl"
+        } else {
+            url.replace(Regex("https?://(www\\.)?(1024terabox|teraboxapp|teraboxlink|freeterabox)\\.com"), "https://www.terabox.com")
+        }
         loadExtractor(normalizedUrl, mainUrl, subtitleCallback, callback)
     }
 
@@ -305,13 +309,14 @@ class StarfilxProvider : MainAPI() {
             val html = response.text
             val doc = response.document
 
-            doc.select("video source[src], video[src], a[href*=.mp4], a[href*=.mkv], a[href*=.m3u8], a[href*=download]").forEach { el ->
+            // Scrape direct video/source/download buttons as seen in FileNext screenshot
+            doc.select("video source[src], video[src], a[href*=.mp4], a[href*=.mkv], a[href*=.m3u8], a[href*=download], a:has(span:contains(Play))").forEach { el ->
                 val mediaUrl = el.attr("src").ifBlank { el.attr("href") }
                 if (mediaUrl.startsWith("http") && !mediaUrl.contains("filenext.in/s/")) {
                     callback.invoke(
                         newExtractorLink(
                             source = this.name,
-                            name = "FileNext",
+                            name = "FileNext Stream",
                             url = fixUrl(mediaUrl),
                             type = if (mediaUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                         ) {
@@ -322,12 +327,13 @@ class StarfilxProvider : MainAPI() {
                 }
             }
 
+            // Regex scan script / HTML data for media streams
             val mediaRegex = Regex("""https?://[^\s"'<>\\]+?\.(?:mp4|m3u8|mkv)(?:\?[^\s"'<>\\]*)?""", RegexOption.IGNORE_CASE)
             mediaRegex.findAll(html).map { it.value.replace("\\/", "/") }.distinct().forEach { streamUrl ->
                 callback.invoke(
                     newExtractorLink(
                         source = this.name,
-                        name = "FileNext Stream",
+                        name = "FileNext Direct",
                         url = streamUrl,
                         type = if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                     ) {
