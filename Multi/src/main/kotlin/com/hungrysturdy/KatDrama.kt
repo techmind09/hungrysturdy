@@ -3,13 +3,13 @@ package com.hungrysturdy
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
+import java.net.URLEncoder
 
 class KatDrama : MainAPI() {
     override var mainUrl = "https://k-drama.in"
     override var name = "KatDrama"
     override val hasMainPage = true
-    override var lang = "hi
-    "
+    override var lang = "hi"
     override val hasDownloadSupport = true
     override val supportedTypes = setOf(
         TvType.TvSeries,
@@ -97,7 +97,8 @@ class KatDrama : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val apiUrl = "$mainUrl/api.php?action=search&q=${query.encodeUri()}"
+        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+        val apiUrl = "$mainUrl/api.php?action=search&q=$encodedQuery"
         val response = app.get(apiUrl).parsedSafe<SearchApiResponse>() ?: return emptyList()
 
         return response.results.mapNotNull { item ->
@@ -210,7 +211,6 @@ class KatDrama : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
 
-        // 1. Server buttons with data-url or data-src
         document.select(".server-btn, button[data-server], [data-url], [data-src]").forEach { serverBtn ->
             val serverUrl = serverBtn.attr("data-url").ifBlank { serverBtn.attr("data-src") }
             if (serverUrl.isNotBlank()) {
@@ -218,7 +218,6 @@ class KatDrama : MainAPI() {
             }
         }
 
-        // 2. Direct iframes & video sources
         document.select("iframe[src], video source[src]").forEach { el ->
             val src = el.attr("src")
             if (src.isNotBlank()) {
