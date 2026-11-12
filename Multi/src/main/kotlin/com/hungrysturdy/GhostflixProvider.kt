@@ -200,9 +200,9 @@ class GhostflixProvider : MainAPI() {
                     source = name,
                     name = "$name Direct (Bolt)",
                     url = streamUrl,
-                    referer = "$mainUrl/"
+                    quality = Qualities.Unknown.value
                 ) {
-                    this.quality = Qualities.Unknown.value
+                    this.referer = "$mainUrl/"
                     this.isM3u8 = streamUrl.contains(".m3u8")
                 }
             )
