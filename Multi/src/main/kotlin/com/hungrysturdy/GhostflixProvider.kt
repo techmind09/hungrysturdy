@@ -39,7 +39,7 @@ class GhostflixProvider : MainAPI() {
         val document = app.get(url).document
         val homePageList = mutableListOf<HomePageList>()
 
-        // 1. Parse static HTML rows (e.g. "Top 10 Movies Today")
+        // 1. Parse static HTML rows
         document.select("div.nx-row").forEach { row ->
             val title = row.selectFirst("h2")?.text()?.trim() ?: return@forEach
             if (title.contains("Continue Watching", ignoreCase = true)) return@forEach
@@ -52,7 +52,7 @@ class GhostflixProvider : MainAPI() {
             }
         }
 
-        // 2. Parse Next.js Flight payload (`initialTrending`) from <script> tags
+        // 2. Parse Next.js Flight payload (`initialTrending`)
         val trendingItems = extractNextFlightTrending(document)
         if (trendingItems.isNotEmpty()) {
             val sectionTitle = if (request.data.isEmpty()) "Trending" else request.name
@@ -94,7 +94,6 @@ class GhostflixProvider : MainAPI() {
 
         for (script in scripts) {
             if (!script.contains("initialTrending")) continue
-            // Unescape Next.js flight payload string
             val unescaped = script
                 .replace("\\\"", "\"")
                 .replace("\\\\", "\\")
@@ -128,7 +127,6 @@ class GhostflixProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        // Ghostflix uses /browse for search
         val url = "$mainUrl/browse?q=${java.net.URLEncoder.encode(query, "UTF-8")}"
         val document = app.get(url).document
 
@@ -159,21 +157,21 @@ class GhostflixProvider : MainAPI() {
         val poster = document.selectFirst("meta[property='og:image']")?.attr("content")
 
         return if (isTv) {
-            // Defaulting to S1E1 play route if episode list is dynamically hydrated on /play
-            val playData = LoadData(id = tmdbId, type = "tv", season = 1, episode = 1).toJson()
+            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "tv", season = 1, episode = 1))
             val episodes = listOf(
-                newEpisode(playData) {
-                    this.name = "Episode 1"
-                    this.season = 1
-                    this.episode = 1
-                }
+                Episode(
+                    data = playData,
+                    name = "Episode 1",
+                    season = 1,
+                    episode = 1
+                )
             )
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.plot = description
             }
         } else {
-            val playData = LoadData(id = tmdbId, type = "movie").toJson()
+            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "movie"))
             newMovieLoadResponse(title, url, TvType.Movie, playData) {
                 this.posterUrl = poster
                 this.plot = description
@@ -189,8 +187,6 @@ class GhostflixProvider : MainAPI() {
     ): Boolean {
         val loadData = tryParseJson<LoadData>(data) ?: return false
 
-        // Construct the /play URL shown in the video:
-        // e.g. https://ghostflix.st/play?id=213375&type=tv or &season=1&episode=1&server=vidbolt
         val playUrl = if (loadData.type == "tv") {
             "$mainUrl/play?id=${loadData.id}&type=tv&season=${loadData.season ?: 1}&episode=${loadData.episode ?: 1}&server=vidbolt"
         } else {
@@ -200,7 +196,6 @@ class GhostflixProvider : MainAPI() {
         val response = app.get(playUrl, referer = mainUrl)
         val pageText = response.text
 
-        // 1. Check for direct m3u8 / mp4 streams inside the Next.js flight data or page scripts
         Regex("""https?://[^\s"'\\]+\.(?:m3u8|mp4)[^\s"'\\]*""").findAll(pageText).forEach { match ->
             val streamUrl = match.value.replace("\\u0026", "&")
             callback.invoke(
@@ -215,7 +210,6 @@ class GhostflixProvider : MainAPI() {
             )
         }
 
-        // 2. Check for iframe embeds if switched to Embed mode
         response.document.select("iframe[src]").forEach { iframe ->
             val embedUrl = iframe.attr("src")
             if (embedUrl.isNotBlank()) {
@@ -246,3 +240,4 @@ class GhostflixProvider : MainAPI() {
         @JsonProperty("vote_average") val voteAverage: Double? = null
     )
 }
+
