@@ -76,12 +76,22 @@ class DramaVerseProvider : MainAPI() {
             btnSlides.forEachIndexed { index, element ->
                 val epName = element.selectFirst(".btn-title")?.text() ?: "Episode ${index + 1}"
                 val epUrl = element.attr("href")
-                episodes.add(Episode(data = epUrl, name = epName, episode = index + 1))
+                episodes.add(
+                    newEpisode(epUrl) {
+                        this.name = epName
+                        this.episode = index + 1
+                    }
+                )
             }
         }
 
         if (episodes.isEmpty()) {
-            episodes.add(Episode(data = url, name = "Full Episode / Stream", episode = 1))
+            episodes.add(
+                newEpisode(url) {
+                    this.name = "Full Episode / Stream"
+                    this.episode = 1
+                }
+            )
         }
 
         return newMovieLoadResponse(title, url, TvType.AsianDrama, episodes) {
@@ -91,30 +101,21 @@ class DramaVerseProvider : MainAPI() {
     }
 
     override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
-        // Step 1: Get the initial page (Blogspot / Safelink / DramaVerse page)
         val document = app.get(data, cookies = cookies).document
-        
-        // Find iframe or direct link pointing to xcloud
         val iframe = document.selectFirst("iframe")?.absUrl("src")
         val targetUrl = iframe ?: data
 
-        // Step 2: Handle XCloud / xcloud.tattoo / stream.xcloud1.lol links
         if (targetUrl.contains("xcloud")) {
-            // If it's the info page (xcloud.tattoo), find the streaming or download link first
             val xCloudDoc = app.get(targetUrl).document
-            
-            // Check for "Online Streaming", "Watch Online", or direct stream link if it redirects
             val watchOnlineBtn = xCloudDoc.selectFirst("a:contains(Streaming), a:contains(Watch Online), a.btn-success, a[href*='stream']")?.absUrl("href")
             
             val streamPageUrl = watchOnlineBtn ?: targetUrl
             val streamDoc = if (streamPageUrl != targetUrl) app.get(streamPageUrl).document else xCloudDoc
 
-            // Look for video source in the player page (`<video src="...">` or `<source src="...">`)
             val videoSrc = streamDoc.selectFirst("video source")?.absUrl("src")
                 ?: streamDoc.selectFirst("video")?.absUrl("src")
                 ?: streamDoc.selectFirst("a:contains(Download), a.download")?.absUrl("href")
 
-            // Fallback: Check script tags for direct video url patterns if not found in tags directly
             val htmlContent = streamDoc.html()
             val extractedVideoUrl = videoSrc ?: Regex("[\"'](https?://[^\"']+\\.(m3u8|mp4|mkv)[^\"']*)[\"']").find(htmlContent)?.groupValues?.get(1)
 
@@ -133,7 +134,6 @@ class DramaVerseProvider : MainAPI() {
             }
         }
 
-        // Fallback to standard extractors
         loadExtractor(targetUrl, "$mainUrl/", subtitleCallback, callback)
         return true
     }
