@@ -45,7 +45,7 @@ class Filemoon : ExtractorApi() {
 }
 
 // ==========================================
-// 2. KDHINDIDUBBED SERVER HANDLER (Only Voe, PixelDrain, Send)
+// 2. MAIN KDHINDIDUBBED SERVER HANDLER 
 // ==========================================
 class KDHindiDubbedExtractor : ExtractorApi() {
     override val name = "KDHindiDubbed"
@@ -89,31 +89,59 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             val lower = targetUrl.lowercase()
 
             when {
+                // 1. Momofile Main Host
                 lower.contains("momofile.shop") -> extractMomoFile(targetUrl, subtitleCallback, callback)
                 
-                lower.contains("pixeldrain") -> {
-                    // Fix: Use PixelDrain API directly
+                // 2. PixelDrain (.dev and .com)
+                lower.contains("pixeldrain.dev") || lower.contains("pixeldrain.com") -> {
                     val fileId = targetUrl.trimEnd('/').substringAfterLast('/').substringBefore("?")
                     if (fileId.isNotBlank()) {
-                        callback.invoke(newExtractorLink(name, "PixelDrain [Direct]", "https://pixeldrain.com/api/file/$fileId", ExtractorLinkType.VIDEO) {
+                        callback.invoke(newExtractorLink(name, "PixelDrain", "https://pixeldrain.com/api/file/$fileId", ExtractorLinkType.VIDEO) {
                             this.quality = Qualities.P1080.value
-                            this.referer = "https://pixeldrain.com" // Provide a valid referer
+                            this.referer = "https://pixeldrain.com"
                         })
                     } else {
                         loadExtractor(targetUrl, targetUrl, subtitleCallback, callback)
                     }
                 }
                 
-                lower.contains("susanexpectcare") || lower.contains("voe.sx") || lower.contains("voe.") -> {
+                // 3. Voe (SusanExpectCare)
+                lower.contains("susanexpectcare") || lower.contains("voe.sx") -> {
                     extractVoe(targetUrl, targetUrl, subtitleCallback, callback)
                 }
                 
-                lower.contains("send.now") || lower.contains("sendnow") -> {
+                // 4. Send.now
+                lower.contains("send.now") -> {
                     loadExtractor(targetUrl, "https://send.now/", subtitleCallback, callback)
+                }
+
+                // 5. Vik1ngfile
+                lower.contains("vik1ngfile.site") || lower.contains("vikingfile.com") -> {
+                    loadExtractor(targetUrl, "https://vik1ngfile.site/", subtitleCallback, callback)
+                }
+
+                // 6. Fileditch
+                lower.contains("fileditchvids.st") || lower.contains("fileditch") -> {
+                    loadExtractor(targetUrl, "https://fileditchvids.st/", subtitleCallback, callback)
+                }
+
+                // 7. Tmbcloud & Sub-servers (fslv2, cloudfilesv2, cloudfiles)
+                lower.contains("tmbcloud.lol") -> {
+                    loadExtractor(targetUrl, "https://tmbcloud.lol/", subtitleCallback, callback)
+                }
+
+                // 8. Buzzheavier
+                lower.contains("buzzheavier") -> {
+                    extractBuzzheavier(targetUrl, callback)
+                }
+
+                // 9. XCloud
+                lower.contains("xcloud") -> {
+                    extractXCloud(targetUrl, callback)
                 }
                 
                 else -> {
-                    // Ignore all other servers for KDHindiDubbed
+                    loadExtractor(targetUrl, referer, subtitleCallback, callback)
                 }
             }
         } catch (_: Exception) {}
@@ -129,6 +157,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             val res = cfGet(landingUrl, referer = baseUrl)
             val doc = res.document
 
+            // Check Direct Embedded Video Tags
             for (el in doc.select("video source[src], video[src], iframe[src]")) {
                 val fullSrc = el.attr("src").trim().let { if (it.startsWith("/")) "$baseUrl$it" else it }
                 if (fullSrc.isNotBlank() && !fullSrc.startsWith("javascript")) {
@@ -138,8 +167,10 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 }
             }
 
+            // Extract from internal Momofile APIs
             if (fileId.isNotBlank() && fileId != "d") {
-                val allowedServices = listOf("pixeldrain", "sendnow") 
+                // ALL Requested services added back so episodes fetch properly
+                val allowedServices = listOf("pixeldrain", "sendnow", "vikingfile", "fileditch", "buzzheavier") 
                 for (service in allowedServices) {
                     val apiRes = cfGet("$baseUrl/$service.php?id=$fileId", referer = landingUrl, headers = mapOf("X-Requested-With" to "XMLHttpRequest"))
                     val text = apiRes.text.trim()
@@ -148,6 +179,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                         val rawUrl = json.optString("url").ifBlank { json.optString("link") }.trim()
                         if (rawUrl.isNotBlank()) {
                             val resolvedUrl = if (rawUrl.startsWith("/")) "$baseUrl$rawUrl" else rawUrl
+                            // Route it back through getUrl to hit the correct domain logic
                             getUrl(resolvedUrl, landingUrl, subtitleCallback, callback) 
                         }
                     }
@@ -158,7 +190,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
 
     private suspend fun extractVoe(url: String, referer: String, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
         try {
-            // Fix: Try native loadExtractor first for Voe, as their internal API changes frequently
             val success = loadExtractor(url, referer, subtitleCallback, callback)
             if (!success) {
                  val res = cfGet(url, referer = referer)
@@ -173,6 +204,38 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                          })
                      }
                  }
+            }
+        } catch (_: Exception) {}
+    }
+
+    private suspend fun extractBuzzheavier(url: String, callback: (ExtractorLink) -> Unit) {
+        try {
+            val res = app.get("${url.trimEnd('/')}/download", referer = url, headers = mapOf("HX-Request" to "true"), allowRedirects = false)
+            val hxRedirect = res.headers["hx-redirect"] ?: res.headers["HX-Redirect"] ?: res.headers["location"]
+            if (!hxRedirect.isNullOrBlank() && hxRedirect.startsWith("http")) {
+                callback.invoke(newExtractorLink("Buzzheavier", "Buzzheavier [Direct]", hxRedirect, ExtractorLinkType.VIDEO) {
+                    this.quality = Qualities.P720.value
+                    this.referer = url
+                })
+            }
+        } catch (_: Exception) {}
+    }
+
+    private suspend fun extractXCloud(url: String, callback: (ExtractorLink) -> Unit) {
+        try {
+            val cleanId = URI(url).path.trimEnd('/').substringAfterLast('/').removePrefix("preview_")
+            if (cleanId.isBlank()) return
+            
+            val streamRes = cfGet("https://stream.xcloud1.lol/$cleanId", referer = "https://xcloud1.lol/")
+            val videoTagSrc = streamRes.document.selectFirst("video source[src], video[src]")?.attr("src")?.trim()
+                ?: Regex("""(?:file|src|url|sources)\s*[:=]\s*\[?\s*\{?\s*(?:file\s*:\s*)?["'](https?://[^"']+|/[^"']+)["']""").find(streamRes.text)?.groupValues?.get(1)
+            
+            if (!videoTagSrc.isNullOrBlank()) {
+                val fullStream = if (videoTagSrc.startsWith("/")) "https://stream.xcloud1.lol$videoTagSrc" else videoTagSrc
+                callback.invoke(newExtractorLink("XCloud", "XCloud [Stream Player]", fullStream, if (fullStream.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
+                    this.quality = Qualities.P720.value
+                    this.referer = "https://stream.xcloud1.lol/$cleanId"
+                })
             }
         } catch (_: Exception) {}
     }
