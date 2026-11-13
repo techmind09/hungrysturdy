@@ -124,11 +124,11 @@ class DramaVerseProvider : MainAPI() {
                     newExtractorLink(
                         source = "XCloud",
                         name = "XCloud",
-                        url = extractedVideoUrl
+                        url = extractedVideoUrl,
+                        isM3u8 = extractedVideoUrl.contains(".m3u8")
                     ) {
                         this.referer = "https://xcloud.tattoo/"
                         this.quality = Qualities.Unknown.value
-                        this.isM3u8 = extractedVideoUrl.contains(".m3u8")
                     }
                 )
                 return true
