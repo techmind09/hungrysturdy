@@ -22,7 +22,6 @@ class GhostflixProvider : MainAPI() {
 
     companion object {
         private const val TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w500"
-        private const val TMDB_BACKDROP_BASE = "https://image.tmdb.org/t/p/w1280"
     }
 
     override val mainPage = mainPageOf(
@@ -73,12 +72,14 @@ class GhostflixProvider : MainAPI() {
 
         val posterUrl = this.selectFirst("img")?.attr("src")
 
+        val targetUrl = if (isTv) "$mainUrl/tv/$idMatch" else "$mainUrl/movie/$idMatch"
+
         return if (isTv) {
-            newTvSeriesSearchResponse(title, "$mainUrl/tv/$idMatch", TvType.TvSeries) {
+            newTvSeriesSearchResponse(title, targetUrl, TvType.TvSeries) {
                 this.posterUrl = posterUrl
             }
         } else {
-            newMovieSearchResponse(title, "$mainUrl/movie/$idMatch", TvType.Movie) {
+            newMovieSearchResponse(title, targetUrl, TvType.Movie) {
                 this.posterUrl = posterUrl
             }
         }
@@ -105,16 +106,17 @@ class GhostflixProvider : MainAPI() {
                 val mediaId = item.id ?: return@forEach
                 val isTv = item.mediaType.equals("tv", ignoreCase = true)
                 val poster = item.posterPath?.let { "$TMDB_IMAGE_BASE$it" }
+                val targetUrl = if (isTv) "$mainUrl/tv/$mediaId" else "$mainUrl/movie/$mediaId"
 
                 if (isTv) {
                     results.add(
-                        newTvSeriesSearchResponse(title, "$mainUrl/tv/$mediaId", TvType.TvSeries) {
+                        newTvSeriesSearchResponse(title, targetUrl, TvType.TvSeries) {
                             this.posterUrl = poster
                         }
                     )
                 } else {
                     results.add(
-                        newMovieSearchResponse(title, "$mainUrl/movie/$mediaId", TvType.Movie) {
+                        newMovieSearchResponse(title, targetUrl, TvType.Movie) {
                             this.posterUrl = poster
                         }
                     )
@@ -144,7 +146,8 @@ class GhostflixProvider : MainAPI() {
             ?: Regex("""id=(\d+)""").find(url)?.groupValues?.get(1)
             ?: return null
 
-        val document = app.get(url).document
+        val docUrl = if (isTv) "$mainUrl/tv/$tmdbId" else "$mainUrl/movie/$tmdbId"
+        val document = try { app.get(docUrl).document } catch (e: Exception) { Document(mainUrl) }
 
         val title = document.selectFirst("meta[property='og:title']")?.attr("content")
             ?.substringBefore(" - ")?.substringBefore(" — ")?.trim()
