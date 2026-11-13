@@ -91,11 +91,12 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             var targetUrl = url.trim()
             if (!targetUrl.startsWith("http")) return
 
-            if (targetUrl.matches(Regex(".*\\.(mp4|mkv|m3u8)(\\?.*)?$", RegexOption.IGNORE_CASE))) {
+            if (targetUrl.matches(Regex(".*\\.(mp4|mkv|m3u8|ts)(\\?.*)?$", RegexOption.IGNORE_CASE)) || targetUrl.contains("r2.dev") || targetUrl.contains("workers.dev")) {
+                val directCdnUrl = resolveFinalStreamUrl(targetUrl, referer ?: mainUrl)
                 callback.invoke(
-                    newExtractorLink(name, "$name [Direct]", targetUrl, if (targetUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
+                    newExtractorLink(name, "$name [Direct R2]", directCdnUrl, if (directCdnUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
                         this.quality = Qualities.P1080.value
-                        this.referer = referer ?: mainUrl
+                        this.referer = referer ?: ""
                     }
                 )
                 return
@@ -125,8 +126,8 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 lower.contains("send.now") || lower.contains("sendnow") -> {
                     extractSendNow(targetUrl, subtitleCallback, callback)
                 }
-                lower.contains("vik1ngfile.site") || lower.contains("vikingfile") -> {
-                    loadExtractor(targetUrl, "https://vik1ngfile.site/", subtitleCallback, callback)
+                lower.contains("vik1ngfile.site") || lower.contains("vikingfile.com") -> {
+                    extractVikingFile(targetUrl, subtitleCallback, callback)
                 }
                 lower.contains("fileditchvids.st") || lower.contains("fileditch") || lower.contains("theditch") -> {
                     extractFileDitch(targetUrl, subtitleCallback, callback)
@@ -134,14 +135,23 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 lower.contains("tmbcloud.lol") || lower.contains("tmbcloud") -> {
                     extractTmbCloud(targetUrl, subtitleCallback, callback)
                 }
-                lower.contains("xcloud") -> {
+                lower.contains("xcloud") || lower.contains("xcloud.tattoo") -> {
                     extractXCloud(targetUrl, subtitleCallback, callback)
                 }
                 lower.contains("buzzheavier") -> {
                     extractBuzzheavier(targetUrl, callback)
                 }
                 else -> {
-                    loadExtractor(targetUrl, referer, subtitleCallback, callback)
+                    val resolved = resolveFinalStreamUrl(targetUrl, referer ?: mainUrl)
+                    if (resolved.matches(Regex(".*\\.(mp4|mkv|m3u8|ts)(\\?.*)?$", RegexOption.IGNORE_CASE))) {
+                        callback.invoke(
+                            newExtractorLink(name, "$name [Direct]", resolved, ExtractorLinkType.VIDEO) {
+                                this.quality = Qualities.P1080.value
+                            }
+                        )
+                    } else {
+                        loadExtractor(targetUrl, referer, subtitleCallback, callback)
+                    }
                 }
             }
         } catch (_: Exception) {}
@@ -160,15 +170,14 @@ class KDHindiDubbedExtractor : ExtractorApi() {
         val fileId = url.trimEnd('/').substringAfterLast('/').substringBefore("?")
         if (fileId.isBlank()) return
 
-        // Both .dev and .com variants emitted for robust connectivity
         callback.invoke(
-            newExtractorLink("PixelDrain.dev", "PixelDrain [pixeldrain.dev]", "https://pixeldrain.dev/api/file/$fileId?download", ExtractorLinkType.VIDEO) {
+            newExtractorLink("PixelDrain.dev", "PixelDrain [dev]", "https://pixeldrain.dev/api/file/$fileId?download", ExtractorLinkType.VIDEO) {
                 this.quality = Qualities.P1080.value
                 this.referer = "https://pixeldrain.dev/u/$fileId"
             }
         )
         callback.invoke(
-            newExtractorLink("PixelDrain", "PixelDrain [pixeldrain.com]", "https://pixeldrain.com/api/file/$fileId?download", ExtractorLinkType.VIDEO) {
+            newExtractorLink("PixelDrain", "PixelDrain [com]", "https://pixeldrain.com/api/file/$fileId?download", ExtractorLinkType.VIDEO) {
                 this.quality = Qualities.P1080.value
                 this.referer = "https://pixeldrain.com/u/$fileId"
             }
@@ -199,8 +208,9 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                     if (fullSrc.contains("voe") || fullSrc.contains("susanexpectcare") || fullSrc.contains("/access/")) {
                         extractVoe(fullSrc, landingUrl, subtitleCallback, callback)
                     } else if (fullSrc.matches(Regex(".*\\.(mp4|mkv|m3u8)(\\?.*)?$", RegexOption.IGNORE_CASE))) {
+                        val directCdn = resolveFinalStreamUrl(fullSrc, landingUrl)
                         callback.invoke(
-                            newExtractorLink("momofile.shop", "MomoFile [Direct]", fullSrc, if (fullSrc.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
+                            newExtractorLink("momofile.shop", "MomoFile [Direct]", directCdn, if (directCdn.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
                                 this.quality = Qualities.P720.value
                                 this.referer = landingUrl
                             }
@@ -277,7 +287,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 if (!decoded.isNullOrBlank() && decoded.startsWith("http")) {
                     val directCdnUrl = resolveFinalStreamUrl(decoded.trim(), hostBase)
                     callback.invoke(
-                        newExtractorLink("Voe", "Voe / SusanExpectCare", directCdnUrl, ExtractorLinkType.M3U8) {
+                        newExtractorLink("Voe", "Voe.sx", directCdnUrl, ExtractorLinkType.M3U8) {
                             this.quality = Qualities.P720.value
                             this.referer = hostBase
                         }
@@ -303,7 +313,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             if (!directVideo.isNullOrBlank() && directVideo.startsWith("http")) {
                 val directCdnUrl = resolveFinalStreamUrl(directVideo.trim(), "https://send.now/")
                 callback.invoke(
-                    newExtractorLink("send.now", "Send.now [Direct]", directCdnUrl, ExtractorLinkType.VIDEO) {
+                    newExtractorLink("send.now", "send.now", directCdnUrl, ExtractorLinkType.VIDEO) {
                         this.quality = Qualities.P720.value
                         this.referer = "https://send.now/"
                     }
@@ -321,13 +331,13 @@ class KDHindiDubbedExtractor : ExtractorApi() {
     ) {
         try {
             val res = cfGet(url, referer = "https://fileditchvids.st/")
-            val src = res.document.selectFirst("video source[src], video[src], a.download-button[href]")?.let {
+            val src = res.document.selectFirst("video source[src], video[src], a.download-button[href], a.btn[href]")?.let {
                 it.attr("src").ifBlank { it.attr("href") }
             }
             if (!src.isNullOrBlank() && src.startsWith("http")) {
                 val directCdnUrl = resolveFinalStreamUrl(src.trim(), "https://fileditchvids.st/")
                 callback.invoke(
-                    newExtractorLink("fileditchvids.st", "Fileditch [Direct]", directCdnUrl, ExtractorLinkType.VIDEO) {
+                    newExtractorLink("Fileditch", "fileditchvids.st", directCdnUrl, ExtractorLinkType.VIDEO) {
                         this.quality = Qualities.P720.value
                         this.referer = "https://fileditchvids.st/"
                     }
@@ -338,33 +348,68 @@ class KDHindiDubbedExtractor : ExtractorApi() {
         loadExtractor(url, "https://fileditchvids.st/", subtitleCallback, callback)
     }
 
+    private suspend fun extractVikingFile(
+        url: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val res = cfGet(url, referer = "https://vikingfile.com/")
+            val src = res.document.selectFirst("video source[src], video[src], a#download-btn[href], a.btn[href]")?.let {
+                it.attr("src").ifBlank { it.attr("href") }
+            }
+            if (!src.isNullOrBlank() && src.startsWith("http")) {
+                val directCdnUrl = resolveFinalStreamUrl(src.trim(), "https://vikingfile.com/")
+                callback.invoke(
+                    newExtractorLink("VikingFile", "vikingfile.com", directCdnUrl, ExtractorLinkType.VIDEO) {
+                        this.quality = Qualities.P720.value
+                        this.referer = "https://vikingfile.com/"
+                    }
+                )
+                return
+            }
+        } catch (_: Exception) {}
+        loadExtractor(url, "https://vikingfile.com/", subtitleCallback, callback)
+    }
+
     private suspend fun extractTmbCloud(
         url: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
         try {
+            val directResolved = resolveFinalStreamUrl(url, "https://tmbcloud.lol/")
+            if (directResolved.matches(Regex(".*\\.(mp4|mkv|m3u8|ts)(\\?.*)?$", RegexOption.IGNORE_CASE)) || directResolved.contains("r2.dev") || directResolved.contains("workers.dev")) {
+                callback.invoke(
+                    newExtractorLink("TMBCloud [Direct R2]", "TMBCloud [Pre-signed R2]", directResolved, if (directResolved.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
+                        this.quality = Qualities.P1080.value
+                        this.referer = "https://tmbcloud.lol/"
+                    }
+                )
+                return
+            }
+
             val res = cfGet(url, referer = "https://tmbcloud.lol/")
             val doc = res.document
             var foundDirect = false
 
-            for (a in doc.select("a[href]")) {
-                val href = a.attr("href").trim()
+            for (a in doc.select("a[href], source[src], video[src], iframe[src]")) {
+                val href = a.attr("href").ifBlank { a.attr("src") }.trim()
                 if (href.contains("/fslv2") || href.contains("/cloudfilesv2") || href.contains("/cloudfiles") ||
                     href.contains("r2.dev") || href.contains("workers.dev") ||
-                    href.matches(Regex(".*\\.(mp4|mkv)(\\?.*)?$", RegexOption.IGNORE_CASE))
+                    href.matches(Regex(".*\\.(mp4|mkv|m3u8)(\\?.*)?$", RegexOption.IGNORE_CASE))
                 ) {
                     val fullHref = if (href.startsWith("/")) "https://tmbcloud.lol$href" else href
                     val directCdnUrl = resolveFinalStreamUrl(fullHref, "https://tmbcloud.lol/")
                     val serverLabel = when {
-                        fullHref.contains("fslv2", true) -> "tmbcloud.lol/fslv2"
-                        fullHref.contains("cloudfilesv2", true) -> "tmbcloud.lol/cloudfilesv2"
-                        fullHref.contains("cloudfiles", true) -> "tmbcloud.lol/cloudfiles"
-                        else -> "tmbcloud.lol"
+                        fullHref.contains("fslv2", true) -> "TMBCloud [fslv2]"
+                        fullHref.contains("cloudfilesv2", true) -> "TMBCloud [cloudfilesv2]"
+                        fullHref.contains("cloudfiles", true) -> "TMBCloud [cloudfiles]"
+                        else -> "TMBCloud [R2]"
                     }
                     foundDirect = true
                     callback.invoke(
-                        newExtractorLink(serverLabel, serverLabel, directCdnUrl, ExtractorLinkType.VIDEO) {
+                        newExtractorLink(serverLabel, serverLabel, directCdnUrl, if (directCdnUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
                             this.quality = Qualities.P1080.value
                             this.referer = "https://tmbcloud.lol/"
                         }
@@ -383,7 +428,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             if (!hxRedirect.isNullOrBlank() && hxRedirect.startsWith("http")) {
                 val directCdnUrl = resolveFinalStreamUrl(hxRedirect.trim(), url)
                 callback.invoke(
-                    newExtractorLink("Buzzheavier", "Buzzheavier [Direct]", directCdnUrl, ExtractorLinkType.VIDEO) {
+                    newExtractorLink("Buzzheavier", "Buzzheavier", directCdnUrl, ExtractorLinkType.VIDEO) {
                         this.quality = Qualities.P720.value
                         this.referer = url
                     }
@@ -420,6 +465,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             if (mediaId.isNotEmpty()) {
                 streamCandidates.add("$baseUri/stream_$mediaId")
                 streamCandidates.add("https://stream.xcloud1.lol/$mediaId")
+                streamCandidates.add("https://xcloud.tattoo/$mediaId")
             }
 
             for (streamPageUrl in streamCandidates) {
