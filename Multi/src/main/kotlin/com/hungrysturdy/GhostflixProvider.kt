@@ -68,10 +68,9 @@ class GhostflixProvider : MainAPI() {
 
         val title = this.selectFirst("p.truncate, p.line-clamp-2")?.text()?.trim()
             ?: this.attr("aria-label").substringBefore(", rated").trim()
-            .takeIf { it.isNotBlank() } ?: return null
+            .takeIf { it.isNotBlank() } ?: "Ghostflix Title #$idMatch"
 
         val posterUrl = this.selectFirst("img")?.attr("src")
-
         val targetUrl = if (isTv) "$mainUrl/tv/$idMatch" else "$mainUrl/movie/$idMatch"
 
         return if (isTv) {
@@ -88,15 +87,11 @@ class GhostflixProvider : MainAPI() {
     private fun extractNextFlightTrending(document: Document): List<SearchResponse> {
         val results = mutableListOf<SearchResponse>()
         val scripts = document.select("script").map { it.data() }
-
         val regex = Regex("""\"initialTrending\"\s*:\s*(\[\{.*?\}\])""")
 
         for (script in scripts) {
             if (!script.contains("initialTrending")) continue
-            val unescaped = script
-                .replace("\\\"", "\"")
-                .replace("\\\\", "\\")
-
+            val unescaped = script.replace("\\\"", "\"").replace("\\\\", "\\")
             val match = regex.find(unescaped) ?: continue
             val jsonArray = match.groupValues[1]
 
@@ -109,17 +104,9 @@ class GhostflixProvider : MainAPI() {
                 val targetUrl = if (isTv) "$mainUrl/tv/$mediaId" else "$mainUrl/movie/$mediaId"
 
                 if (isTv) {
-                    results.add(
-                        newTvSeriesSearchResponse(title, targetUrl, TvType.TvSeries) {
-                            this.posterUrl = poster
-                        }
-                    )
+                    results.add(newTvSeriesSearchResponse(title, targetUrl, TvType.TvSeries) { this.posterUrl = poster })
                 } else {
-                    results.add(
-                        newMovieSearchResponse(title, targetUrl, TvType.Movie) {
-                            this.posterUrl = poster
-                        }
-                    )
+                    results.add(newMovieSearchResponse(title, targetUrl, TvType.Movie) { this.posterUrl = poster })
                 }
             }
         }
@@ -130,14 +117,10 @@ class GhostflixProvider : MainAPI() {
         val url = "$mainUrl/browse?q=${java.net.URLEncoder.encode(query, "UTF-8")}"
         val document = app.get(url).document
 
-        val htmlResults = document.select("a[href^='/movie/'], a[href^='/tv/']").mapNotNull {
-            it.toSearchResult()
-        }
+        val htmlResults = document.select("a[href^='/movie/'], a[href^='/tv/']").mapNotNull { it.toSearchResult() }
         if (htmlResults.isNotEmpty()) return htmlResults
 
-        return extractNextFlightTrending(document).filter {
-            it.name.contains(query, ignoreCase = true)
-        }
+        return extractNextFlightTrending(document).filter { it.name.contains(query, ignoreCase = true) }
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -154,7 +137,7 @@ class GhostflixProvider : MainAPI() {
             ?: document.selectFirst("h1")?.text()?.trim()
             ?: "Ghostflix Title #$tmdbId"
 
-        val description = document.selectFirst("meta[property='og:description']")?.attr("content")
+        val description = document.selectFirst("meta[property='og:description']")?.attr("content") ?: "No description available."
         val poster = document.selectFirst("meta[property='og:image']")?.attr("content")
 
         return if (isTv) {
@@ -187,36 +170,48 @@ class GhostflixProvider : MainAPI() {
     ): Boolean {
         val loadData = tryParseJson<LoadData>(data) ?: return false
 
-        val playUrl = if (loadData.type == "tv") {
-            "$mainUrl/play?id=${loadData.id}&type=tv&season=${loadData.season ?: 1}&episode=${loadData.episode ?: 1}&server=vidbolt"
-        } else {
-            "$mainUrl/play?id=${loadData.id}&type=movie&server=vidbolt"
-        }
+        // All Ghostflix servers including Hindi and regional variants
+        val servers = listOf(
+            "vidbolt", "vidcore", "flix", "vidly", "orion", 
+            "vidrift", "vidqueen", "hindi", "hindi-new", "cinezo"
+        )
 
-        val response = app.get(playUrl, referer = mainUrl)
-        val pageText = response.text
-
-        Regex("""https?://[^\s"'\\]+\.(?:m3u8|mp4)[^\s"'\\]*""").findAll(pageText).forEach { match ->
-            val streamUrl = match.value.replace("\\u0026", "&")
-            val linkType = if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-            callback.invoke(
-                newExtractorLink(
-                    source = name,
-                    name = "$name Direct (Bolt)",
-                    url = streamUrl,
-                    type = linkType
-                ) {
-                    this.referer = "$mainUrl/"
-                    this.quality = Qualities.Unknown.value
-                }
-            )
-        }
-
-        response.document.select("iframe[src]").forEach { iframe ->
-            val embedUrl = iframe.attr("src")
-            if (embedUrl.isNotBlank()) {
-                loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
+        servers.forEach { server ->
+            val playUrl = if (loadData.type == "tv") {
+                "$mainUrl/play?id=${loadData.id}&type=tv&season=${loadData.season ?: 1}&episode=${loadData.episode ?: 1}&server=$server"
+            } else {
+                "$mainUrl/play?id=${loadData.id}&type=movie&server=$server"
             }
+
+            try {
+                val response = app.get(playUrl, referer = mainUrl)
+                val pageText = response.text
+
+                // Extract direct stream links (m3u8 / mp4)
+                Regex("""https?://[^\s"'\\]+\.(?:m3u8|mp4)[^\s"'\\]*""").findAll(pageText).forEach { match ->
+                    val streamUrl = match.value.replace("\\u0026", "&")
+                    val linkType = if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    callback.invoke(
+                        newExtractorLink(
+                            source = name,
+                            name = "$name Direct (${server.replaceFirstChar { it.uppercase() }})",
+                            url = streamUrl,
+                            type = linkType
+                        ) {
+                            this.referer = "$mainUrl/"
+                            this.quality = Qualities.Unknown.value
+                        }
+                    )
+                }
+
+                // Extract iframe embeds
+                response.document.select("iframe[src]").forEach { iframe ->
+                    val embedUrl = iframe.attr("src")
+                    if (embedUrl.isNotBlank()) {
+                        loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
+                    }
+                }
+            } catch (_: Exception) {}
         }
 
         return true
