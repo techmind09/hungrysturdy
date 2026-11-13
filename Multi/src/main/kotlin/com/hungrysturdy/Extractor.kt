@@ -14,7 +14,38 @@ import java.net.URI
 import android.util.Base64
 
 // ==========================================
-// KDHINDIDUBBED SERVER HANDLER (Only Voe, PixelDrain, Send)
+// 1. GENERIC EXTRACTORS
+// ==========================================
+open class VidhideExtractor : ExtractorApi() {
+    override var name = "Vidhide"
+    override var mainUrl = "https://vidhide.com"
+    override val requiresReferer = false
+    override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {}
+}
+class Vidsp : VidhideExtractor() { override var mainUrl = "https://vidsp.lol" }
+class VidHideplus : VidhideExtractor() { override var mainUrl = "https://vidhideplus.com" }
+class VidHidedht : VidhideExtractor() { override var mainUrl = "https://dhtpre.com" }
+class Vidhidehub : VidhideExtractor() { override var mainUrl = "https://vidhidehub.com" }
+class Vidhidetoul : VidhideExtractor() { override var mainUrl = "https://toul.hair" }
+class Xtapes : VidhideExtractor() { override var mainUrl = "https://xtapes.porn"; override var name = "Xtapes" }
+
+open class LuluStream : ExtractorApi() {
+    override var name = "Lulustream"
+    override var mainUrl = "https://lulustream.com"
+    override val requiresReferer = false
+    override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {}
+}
+class Luluvid : LuluStream() { override var mainUrl = "https://luluvid.com" }
+
+class Filemoon : ExtractorApi() {
+    override var name = "Filemoon"
+    override var mainUrl = "https://filemoon.sx"
+    override val requiresReferer = false
+    override suspend fun getUrl(url: String, referer: String?, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {}
+}
+
+// ==========================================
+// 2. KDHINDIDUBBED SERVER HANDLER (Only Voe, PixelDrain, Send)
 // ==========================================
 class KDHindiDubbedExtractor : ExtractorApi() {
     override val name = "KDHindiDubbed"
@@ -58,10 +89,8 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             val lower = targetUrl.lowercase()
 
             when {
-                // 1. Momofile (Check internally if it has Voe/Pixeldrain)
                 lower.contains("momofile.shop") -> extractMomoFile(targetUrl, subtitleCallback, callback)
                 
-                // 2. PixelDrain (Direct Native Extractor)
                 lower.contains("pixeldrain") -> {
                     val fileId = targetUrl.trimEnd('/').substringAfterLast('/').substringBefore("?")
                     if (fileId.isNotBlank()) {
@@ -74,19 +103,16 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                     }
                 }
                 
-                // 3. Voe (SusanExpectCare)
                 lower.contains("susanexpectcare") || lower.contains("voe.sx") || lower.contains("voe.") -> {
                     extractVoe(targetUrl, targetUrl, subtitleCallback, callback)
                 }
                 
-                // 4. Send.now (Requires WebView for Cloudstream currently)
                 lower.contains("send.now") || lower.contains("sendnow") -> {
                     loadExtractor(targetUrl, "https://send.now/", subtitleCallback, callback)
                 }
                 
-                // IGNORE ALL OTHER SERVERS (Buzzheavier, Tmbcloud, Fileditch, Vikingfile, XCloud, etc.)
                 else -> {
-                    // Do nothing for other servers as requested.
+                    // Ignore all other servers for KDHindiDubbed
                 }
             }
         } catch (_: Exception) {}
@@ -102,7 +128,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             val res = cfGet(landingUrl, referer = baseUrl)
             val doc = res.document
 
-            // Check if Momofile embeds Voe directly via tags
             for (el in doc.select("video source[src], video[src], iframe[src]")) {
                 val fullSrc = el.attr("src").trim().let { if (it.startsWith("/")) "$baseUrl$it" else it }
                 if (fullSrc.isNotBlank() && !fullSrc.startsWith("javascript")) {
@@ -112,9 +137,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 }
             }
 
-            // Fallback internal services (Check only for Pixeldrain or Sendnow on Momofile's PHP endpoints)
             if (fileId.isNotBlank() && fileId != "d") {
-                // Restricted list to ONLY requested servers
                 val allowedServices = listOf("pixeldrain", "sendnow") 
                 for (service in allowedServices) {
                     val apiRes = cfGet("$baseUrl/$service.php?id=$fileId", referer = landingUrl, headers = mapOf("X-Requested-With" to "XMLHttpRequest"))
@@ -124,7 +147,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                         val rawUrl = json.optString("url").ifBlank { json.optString("link") }.trim()
                         if (rawUrl.isNotBlank()) {
                             val resolvedUrl = if (rawUrl.startsWith("/")) "$baseUrl$rawUrl" else rawUrl
-                            // Re-route back through main getUrl to apply strict filtering
                             getUrl(resolvedUrl, landingUrl, subtitleCallback, callback) 
                         }
                     }
@@ -136,7 +158,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
     private suspend fun extractVoe(url: String, referer: String, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit) {
         try {
             val res = cfGet(url, referer = referer)
-            // Voe obfuscates HLS link inside JS
             val hlsMatch = Regex("""['"]hls['"]\s*:\s*['"]([^'"]+)['"]""").find(res.text)?.groupValues?.get(1)
             
             if (!hlsMatch.isNullOrBlank()) {
@@ -149,8 +170,57 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                     return
                 }
             }
-            // Fallback to internal extractor if custom parsing fails
             loadExtractor(res.url, referer, subtitleCallback, callback)
         } catch (_: Exception) {}
+    }
+}
+
+// ==========================================
+// 3. UNIVERSAL ROUTER (For KatDrama Servers)
+// ==========================================
+object UniversalExtractors {
+    suspend fun invoke(
+        href: String,
+        data: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val host = href.lowercase()
+
+        suspend fun pushDirect(name: String, directUrl: String, type: ExtractorLinkType? = null) {
+            val linkType = type ?: if (directUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+            callback.invoke(
+                newExtractorLink(source = name, name = name, url = directUrl, type = linkType) {
+                    this.referer = href
+                    this.quality = Qualities.Unknown.value
+                }
+            )
+        }
+
+        when {
+            // Direct file checks to prevent OOM
+            href.matches(Regex(".*\\.(mkv|mp4|ts|m3u8)$", RegexOption.IGNORE_CASE)) -> {
+                pushDirect("Direct Media", href)
+            }
+            
+            // KatDrama specific servers
+            host.contains("hakunaymatata") -> pushDirect("Fast Server [KatDrama]", href, ExtractorLinkType.DASH)
+            host.contains("devcorp.me") -> pushDirect("DevCorp Stream [KatDrama]", href, ExtractorLinkType.M3U8)
+            host.contains("modiplay.xyz") || host.contains("rozgarlelo") || host.contains("fvibuxer") -> {
+                val targetUrl = try {
+                    if (href.contains("url=")) java.net.URLDecoder.decode(href.substringAfter("url=").substringBefore("&"), "UTF-8") else href
+                } catch (e: Exception) { href }
+                pushDirect("Hindi Proxy [KatDrama]", targetUrl)
+            }
+            host.contains("vidmoly") || host.contains("staticmoly") -> {
+                loadExtractor(href.replace("staticmoly.me/static/jquery.min.js", "vidmoly.org"), data, subtitleCallback, callback)
+            }
+            
+            else -> {
+                if (href.startsWith("http")) {
+                    loadExtractor(href, data, subtitleCallback, callback)
+                }
+            }
+        }
     }
 }
