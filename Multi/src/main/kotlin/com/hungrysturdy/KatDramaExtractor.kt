@@ -11,9 +11,6 @@ private val defaultHeaders = mapOf(
     "User-Agent" to "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 )
 
-// =========================================================================
-// 1. HubCloud Extractor (hubcloud.pw -> gamerxyt.com -> Direct Servers)
-// =========================================================================
 open class KatHubCloudExtractor : ExtractorApi() {
     override val name = "HubCloud"
     override val mainUrl = "https://hubcloud.pw"
@@ -45,13 +42,12 @@ open class KatHubCloudExtractor : ExtractorApi() {
                 if (fslUrl.isNotBlank()) {
                     val fslQuality = if (detectedQuality != Qualities.Unknown.value) detectedQuality else getQualityFromName(fslUrl)
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             source = this.name,
                             name = "$name [FSL Server]",
                             url = fslUrl,
                             referer = gamerLink,
-                            quality = fslQuality,
-                            isM3u8 = false
+                            quality = fslQuality
                         )
                     )
                 }
@@ -71,13 +67,12 @@ open class KatHubCloudExtractor : ExtractorApi() {
             gamerDoc.selectFirst("a[href*='pixel.hubcloud'], a:contains(10Gbps)")?.attr("href")?.let { tenGbpsUrl ->
                 if (tenGbpsUrl.isNotBlank()) {
                     callback.invoke(
-                        ExtractorLink(
+                        newExtractorLink(
                             source = this.name,
                             name = "$name [Server : 10Gbps]",
                             url = tenGbpsUrl,
                             referer = gamerLink,
-                            quality = detectedQuality,
-                            isM3u8 = false
+                            quality = detectedQuality
                         )
                     )
                 }
@@ -94,7 +89,6 @@ open class KatHubCloudExtractor : ExtractorApi() {
     }
 }
 
-// Mirrors of HubCloud & GamerXYT
 class HubCloudDrive : KatHubCloudExtractor() {
     override val mainUrl = "https://hubcloud.dad"
 }
@@ -108,9 +102,6 @@ class GamerXYTExtractor : KatHubCloudExtractor() {
     override val mainUrl = "https://gamerxyt.com"
 }
 
-// =========================================================================
-// 2. GDFlix Extractor (gdflix.vip / gdflix.cfd)
-// =========================================================================
 open class KatGDFlixExtractor : ExtractorApi() {
     override val name = "GDFlix"
     override val mainUrl = "https://gdflix.vip"
@@ -134,28 +125,21 @@ open class KatGDFlixExtractor : ExtractorApi() {
                 val text = btn.text().trim()
 
                 when {
-                    href.contains("pixeldrain") -> {
-                        extractPixelDrainLink(href, quality, callback)
-                    }
-                    href.contains("hbplay.pages.dev") -> {
-                        extractHbPlayLink(href, quality, callback)
-                    }
-                    href.contains("fuckingfast.net") -> {
-                        extractFuckingFastLink(href, quality, callback)
-                    }
+                    href.contains("pixeldrain") -> extractPixelDrainLink(href, quality, callback)
+                    href.contains("hbplay.pages.dev") -> extractHbPlayLink(href, quality, callback)
+                    href.contains("fuckingfast.net") -> extractFuckingFastLink(href, quality, callback)
                     href.contains("r2.cloudflarestorage.com") ||
                     text.contains("Instant DL", true) ||
                     text.contains("Fast Cloud", true) ||
                     text.contains("Direct", true) -> {
                         if (href.startsWith("http") && !href.contains("gdflix")) {
                             callback.invoke(
-                                ExtractorLink(
+                                newExtractorLink(
                                     source = this.name,
                                     name = "$name [${text.ifEmpty { "Direct" }}]",
                                     url = href,
                                     referer = url,
-                                    quality = quality,
-                                    isM3u8 = false
+                                    quality = quality
                                 )
                             )
                         }
@@ -176,9 +160,6 @@ class GDFlixdad : KatGDFlixExtractor() {
     override val mainUrl = "https://gdflix.dad"
 }
 
-// =========================================================================
-// 3. Standalone Extractors (PixelDrain, HBPlay, FuckingFast)
-// =========================================================================
 class KatPixelDrainExtractor : ExtractorApi() {
     override val name = "PixelServer"
     override val mainUrl = "https://pixeldrain.dev"
@@ -224,11 +205,7 @@ class KatFuckingFastExtractor : ExtractorApi() {
     }
 }
 
-// =========================================================================
-// Helper Functions
-// =========================================================================
-
-suspend fun extractPixelDrainLink(
+suspend fun ExtractorApi.extractPixelDrainLink(
     url: String,
     quality: Int,
     callback: (ExtractorLink) -> Unit
@@ -237,19 +214,18 @@ suspend fun extractPixelDrainLink(
     if (fileId.isNotBlank()) {
         val host = if (url.contains("pixeldrain.dev")) "https://pixeldrain.dev" else "https://pixeldrain.com"
         callback.invoke(
-            ExtractorLink(
+            newExtractorLink(
                 source = "PixelServer",
                 name = "HubCloud [PixelServer : 2]",
                 url = "$host/api/file/$fileId?download",
                 referer = "$host/",
-                quality = quality,
-                isM3u8 = false
+                quality = quality
             )
         )
     }
 }
 
-suspend fun extractHbPlayLink(
+suspend fun ExtractorApi.extractHbPlayLink(
     url: String,
     quality: Int,
     callback: (ExtractorLink) -> Unit
@@ -261,13 +237,12 @@ suspend fun extractHbPlayLink(
             if (decodedUrl.startsWith("http")) {
                 val finalQuality = if (quality != Qualities.Unknown.value) quality else getQualityFromName(decodedUrl)
                 callback.invoke(
-                    ExtractorLink(
+                    newExtractorLink(
                         source = "HBPlay",
                         name = "HubCloud [HBPlay Direct]",
                         url = decodedUrl,
                         referer = "https://hbplay.pages.dev/",
-                        quality = finalQuality,
-                        isM3u8 = false
+                        quality = finalQuality
                     )
                 )
             }
@@ -275,7 +250,7 @@ suspend fun extractHbPlayLink(
     }
 }
 
-suspend fun extractFuckingFastLink(
+suspend fun ExtractorApi.extractFuckingFastLink(
     url: String,
     quality: Int,
     callback: (ExtractorLink) -> Unit
@@ -286,13 +261,12 @@ suspend fun extractFuckingFastLink(
             .find(responseText)?.groupValues?.get(1)
         if (!directLink.isNullOrBlank()) {
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = "BuzzServer",
                     name = "HubCloud [Buzz Server]",
                     url = directLink,
                     referer = url,
-                    quality = quality,
-                    isM3u8 = false
+                    quality = quality
                 )
             )
         }
