@@ -12,14 +12,10 @@ class Plugin : Plugin() {
         registerMainAPI(KatDrama())
         registerMainAPI(GhostflixProvider())
         registerMainAPI(KDHindiDubbed())
-        registerMainAPI(NineAnimeProvider())
         registerMainAPI(GokuHDProvider())
 
         // Extractors Registration
         registerExtractorAPI(KDHindiDubbedExtractor())
-        registerExtractorAPI(NineAnimeMegaPlay())
-        registerExtractorAPI(NineAnimeVidmoly())
-        registerExtractorAPI(NineAnimeMoon())
         registerExtractorAPI(GokuHDExtractor())
 
         // Universal & Custom Video Extractors (Vidhide clones, Luluvid, Filemoon)
