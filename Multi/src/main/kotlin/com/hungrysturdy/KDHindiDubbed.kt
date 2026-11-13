@@ -75,7 +75,6 @@ class KDHindiDubbed : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Fix: Pagination logic to prevent Page 1 redirecting to identical Homepage
         val urlWithoutPage = request.data.substringBeforeLast("page/")
         val pageUrl = if (page == 1) {
             urlWithoutPage
@@ -84,27 +83,44 @@ class KDHindiDubbed : MainAPI() {
         }
 
         val document = fetchDoc(pageUrl)
-        val home = document.select("article.post, article.item, div.post-item, div.herald-lay-c").mapNotNull { it.toSearchResult() }
+        val home = document.select("article.post, article.item, div.post-item, div.herald-lay-c, article.herald-lay-c").mapNotNull { it.toSearchResult() }
         
         return newHomePageResponse(request.name, home, hasNext = home.isNotEmpty())
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val titleElement = this.selectFirst("h2.entry-title a, h2 a, h3 a, a.title, h2.title a, .post-title a") ?: return null
+        val titleElement = this.selectFirst("h2.entry-title a, h2 a, h3 a, a.title, h2.title a, .post-title a, .entry-title") ?: return null
         val title = titleElement.text().trim()
-        val href = fixUrl(titleElement.attr("href"))
+        val href = fixUrl(titleElement.attr("href").ifBlank { titleElement.selectFirst("a")?.attr("href") ?: "" })
         
         if (title.isBlank() || href.isBlank()) return null
 
-        // Fix: Prioritize lazy-load attributes to prevent blank/same posters
-        val imgElement = this.selectFirst("img")
-        val posterUrl = fixUrl(
-            imgElement?.attr("data-src")?.takeIf { it.isNotBlank() }
-                ?: imgElement?.attr("data-lazy-src")?.takeIf { it.isNotBlank() }
-                ?: imgElement?.attr("data-cfsrc")?.takeIf { it.isNotBlank() }
-                ?: imgElement?.attr("src")?.takeIf { it.isNotBlank() && !it.startsWith("data:") }
+        // FIX: Ultra-Aggressive Poster Finder
+        var rawImg = ""
+        val imgElements = this.select("img")
+        for (img in imgElements) {
+            rawImg = img.attr("data-src").takeIf { it.isNotBlank() }
+                ?: img.attr("data-lazy-src").takeIf { it.isNotBlank() }
+                ?: img.attr("data-cfsrc").takeIf { it.isNotBlank() }
+                ?: img.attr("src").takeIf { it.isNotBlank() && !it.startsWith("data:") }
                 ?: ""
-        )
+            
+            if (rawImg.isNotBlank()) break
+        }
+
+        // Fallback: Check if the image is set as a background-image via inline CSS
+        if (rawImg.isBlank()) {
+            val bgElement = this.selectFirst("[style*=background-image]")
+            if (bgElement != null) {
+                val style = bgElement.attr("style")
+                val bgUrl = Regex("""url\(['"]?(.*?)['"]?\)""").find(style)?.groupValues?.get(1)
+                if (!bgUrl.isNullOrBlank()) {
+                    rawImg = bgUrl
+                }
+            }
+        }
+
+        val posterUrl = fixUrl(rawImg)
 
         val type = if (title.contains("Movie", true)) TvType.Movie else TvType.TvSeries
         
@@ -117,7 +133,7 @@ class KDHindiDubbed : MainAPI() {
         val encoded = java.net.URLEncoder.encode(query.trim(), "UTF-8")
         val document = fetchDoc("$mainUrl/?s=$encoded")
         
-        return document.select("article.post, article.item, div.post-item, div.herald-lay-c")
+        return document.select("article.post, article.item, div.post-item, div.herald-lay-c, article.herald-lay-c")
             .mapNotNull { it.toSearchResult() }
             .distinctBy { it.url }
     }
@@ -126,12 +142,22 @@ class KDHindiDubbed : MainAPI() {
         val document = fetchDoc(url)
         val title = document.selectFirst("h1.entry-title, h1, h2.title")?.text()?.trim() ?: "Drama"
 
-        val poster = fixUrl(
-            document.selectFirst("meta[property='og:image']")?.attr("content")
-                ?: document.selectFirst("div.poster img, img.wp-post-image, .entry-content img, article img")?.attr("data-src")
-                ?: document.selectFirst("div.poster img, img.wp-post-image, .entry-content img, article img")?.attr("src")
-                ?: ""
-        )
+        // FIX: Aggressive Poster Finder for Load Page
+        var poster = fixUrl(document.selectFirst("meta[property='og:image']")?.attr("content") ?: "")
+        
+        if (poster.isBlank()) {
+             val imgElements = document.select("div.poster img, img.wp-post-image, .entry-content img, article img")
+             for (img in imgElements) {
+                 val rawSrc = img.attr("data-src").takeIf { it.isNotBlank() }
+                     ?: img.attr("data-lazy-src").takeIf { it.isNotBlank() }
+                     ?: img.attr("src").takeIf { it.isNotBlank() && !it.startsWith("data:") }
+                 
+                 if (!rawSrc.isNullOrBlank()) {
+                     poster = fixUrl(rawSrc)
+                     break
+                 }
+             }
+        }
 
         val description = document.selectFirst("div.storyline, .entry-content p:contains(follows), .entry-content p")?.text()?.trim() ?: "No Plot Found"
         val isMovie = title.contains("Movie", true)
