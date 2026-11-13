@@ -53,7 +53,7 @@ class DramaVerseProvider : MainAPI() {
             it.absUrl("data-src").ifEmpty { it.absUrl("src") }
         }
 
-        return newMovieSearchResponse(title, href, TvType.AsianDrama) {
+        return newTvSeriesSearchResponse(title, href, TvType.AsianDrama) {
             this.posterUrl = posterUrl
         }
     }
@@ -71,7 +71,7 @@ class DramaVerseProvider : MainAPI() {
 
         val episodes = mutableListOf<Episode>()
         val btnSlides = document.select("a.btn-slide")
-        
+
         if (btnSlides.isNotEmpty()) {
             btnSlides.forEachIndexed { index, element ->
                 val epName = element.selectFirst(".btn-title")?.text() ?: "Episode ${index + 1}"
@@ -94,13 +94,18 @@ class DramaVerseProvider : MainAPI() {
             )
         }
 
-        return newMovieLoadResponse(title, url, TvType.AsianDrama, episodes) {
+        return newTvSeriesLoadResponse(title, url, TvType.AsianDrama, episodes) {
             this.posterUrl = poster
             this.plot = description
         }
     }
 
-    override suspend fun loadLinks(data: String, isCasting: Boolean, subtitleCallback: (SubtitleFile) -> Unit, callback: (ExtractorLink) -> Unit): Boolean {
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
         val document = app.get(data, cookies = cookies).document
         val iframe = document.selectFirst("iframe")?.absUrl("src")
         val targetUrl = iframe ?: data
@@ -108,7 +113,7 @@ class DramaVerseProvider : MainAPI() {
         if (targetUrl.contains("xcloud")) {
             val xCloudDoc = app.get(targetUrl).document
             val watchOnlineBtn = xCloudDoc.selectFirst("a:contains(Streaming), a:contains(Watch Online), a.btn-success, a[href*='stream']")?.absUrl("href")
-            
+
             val streamPageUrl = watchOnlineBtn ?: targetUrl
             val streamDoc = if (streamPageUrl != targetUrl) app.get(streamPageUrl).document else xCloudDoc
 
@@ -117,7 +122,9 @@ class DramaVerseProvider : MainAPI() {
                 ?: streamDoc.selectFirst("a:contains(Download), a.download")?.absUrl("href")
 
             val htmlContent = streamDoc.html()
-            val extractedVideoUrl = videoSrc ?: Regex("[\"'](https?://[^\"']+\\.(m3u8|mp4|mkv)[^\"']*)[\"']").find(htmlContent)?.groupValues?.get(1)
+            val extractedVideoUrl = videoSrc
+                ?: Regex("[\"'](https?://[^\"']+\\.(m3u8|mp4|mkv)[^\"']*)[\"']")
+                    .find(htmlContent)?.groupValues?.get(1)
 
             if (!extractedVideoUrl.isNullOrEmpty()) {
                 callback.invoke(
@@ -127,8 +134,6 @@ class DramaVerseProvider : MainAPI() {
                         url = extractedVideoUrl
                     ) {
                         this.referer = "https://xcloud.tattoo/"
-                        this.quality = Qualities.Unknown.value
-                        this.isM3u8 = extractedVideoUrl.contains(".m3u8")
                     }
                 )
                 return true
