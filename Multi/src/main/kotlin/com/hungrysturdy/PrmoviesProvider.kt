@@ -12,7 +12,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 class PrmoviesProvider : MainAPI() {
-    override var mainUrl = "https://prmovies.ventures"
+    override var mainUrl = "https://prmovies.kids"
     override var name = "Prmovies"
     override val hasMainPage = true
     override var lang = "en"
