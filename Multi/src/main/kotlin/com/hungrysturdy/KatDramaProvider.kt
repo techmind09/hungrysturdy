@@ -272,12 +272,14 @@ class KatDramaProvider : MainAPI() {
                 if (fslUrl.isNotBlank()) {
                     callback.invoke(
                         newExtractorLink(
-                            this.name,
-                            "HubCloud [FSL Server]",
-                            fslUrl,
-                            gamerLink,
-                            detectedQuality
-                        )
+                            source = this.name,
+                            name = "HubCloud [FSL Server]",
+                            url = fslUrl,
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = gamerLink
+                            this.quality = detectedQuality
+                        }
                     )
                 }
             }
@@ -291,12 +293,14 @@ class KatDramaProvider : MainAPI() {
                         if (decodedUrl.startsWith("http")) {
                             callback.invoke(
                                 newExtractorLink(
-                                    this.name,
-                                    "HubCloud [HBPlay Direct]",
-                                    decodedUrl,
-                                    "https://hbplay.pages.dev/",
-                                    detectedQuality
-                                )
+                                    source = this.name,
+                                    name = "HubCloud [HBPlay Direct]",
+                                    url = decodedUrl,
+                                    type = ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = "https://hbplay.pages.dev/"
+                                    this.quality = detectedQuality
+                                }
                             )
                         }
                     } catch (_: Exception) {}
@@ -309,12 +313,14 @@ class KatDramaProvider : MainAPI() {
                 if (fileId.isNotBlank()) {
                     callback.invoke(
                         newExtractorLink(
-                            this.name,
-                            "HubCloud [PixelServer]",
-                            "https://pixeldrain.dev/api/file/$fileId?download",
-                            pxlUrl,
-                            detectedQuality
-                        )
+                            source = this.name,
+                            name = "HubCloud [PixelServer]",
+                            url = "https://pixeldrain.dev/api/file/$fileId?download",
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = pxlUrl
+                            this.quality = detectedQuality
+                        }
                     )
                 }
             }
@@ -324,12 +330,14 @@ class KatDramaProvider : MainAPI() {
                 if (tenGbpsUrl.isNotBlank()) {
                     callback.invoke(
                         newExtractorLink(
-                            this.name,
-                            "HubCloud [10Gbps Server]",
-                            tenGbpsUrl,
-                            gamerLink,
-                            detectedQuality
-                        )
+                            source = this.name,
+                            name = "HubCloud [10Gbps Server]",
+                            url = tenGbpsUrl,
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = gamerLink
+                            this.quality = detectedQuality
+                        }
                     )
                 }
             }
@@ -358,12 +366,14 @@ class KatDramaProvider : MainAPI() {
             if (directLink != null) {
                 callback.invoke(
                     newExtractorLink(
-                        this.name,
-                        "HubCloud [Buzz Server]",
-                        directLink,
-                        url,
-                        quality
-                    )
+                        source = this.name,
+                        name = "HubCloud [Buzz Server]",
+                        url = directLink,
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = url
+                        this.quality = quality
+                    }
                 )
             }
         } catch (_: Exception) {}
@@ -393,12 +403,14 @@ class KatDramaProvider : MainAPI() {
                 if (instantUrl.startsWith("http")) {
                     callback.invoke(
                         newExtractorLink(
-                            this.name,
-                            "GDFlix [Instant DL 10Gbps]",
-                            instantUrl,
-                            finalUrl,
-                            detectedQuality
-                        )
+                            source = this.name,
+                            name = "GDFlix [Instant DL 10Gbps]",
+                            url = instantUrl,
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = finalUrl
+                            this.quality = detectedQuality
+                        }
                     )
                 }
             }
@@ -414,12 +426,14 @@ class KatDramaProvider : MainAPI() {
                         if (dlHref.startsWith("http") && !dlHref.contains("/login")) {
                             callback.invoke(
                                 newExtractorLink(
-                                    this.name,
-                                    "GDFlix [Fast Cloud]",
-                                    dlHref,
-                                    cloudUrl,
-                                    detectedQuality
-                                )
+                                    source = this.name,
+                                    name = "GDFlix [Fast Cloud]",
+                                    url = dlHref,
+                                    type = ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = cloudUrl
+                                    this.quality = detectedQuality
+                                }
                             )
                         }
                     }
@@ -440,12 +454,14 @@ class KatDramaProvider : MainAPI() {
                         if (h.startsWith("http") && !h.contains("drivebot")) {
                             callback.invoke(
                                 newExtractorLink(
-                                    this.name,
-                                    "GDFlix [DriveBot]",
-                                    h,
-                                    driveBotUrl,
-                                    detectedQuality
-                                )
+                                    source = this.name,
+                                    name = "GDFlix [DriveBot]",
+                                    url = h,
+                                    type = ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = driveBotUrl
+                                    this.quality = detectedQuality
+                                }
                             )
                         }
                     }
@@ -458,12 +474,14 @@ class KatDramaProvider : MainAPI() {
                 if (id.isNotBlank()) {
                     callback.invoke(
                         newExtractorLink(
-                            this.name,
-                            "GDFlix [PixelDrain]",
-                            "https://pixeldrain.dev/api/file/$id?download",
-                            finalUrl,
-                            detectedQuality
-                        )
+                            source = this.name,
+                            name = "GDFlix [PixelDrain]",
+                            url = "https://pixeldrain.dev/api/file/$id?download",
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = finalUrl
+                            this.quality = detectedQuality
+                        }
                     )
                 }
             }
