@@ -75,6 +75,7 @@ class GhostflixProvider : MainAPI() {
         val imgElem = this.selectFirst("img")
         val posterUrl = imgElem?.attr("src")?.takeIf { it.startsWith("http") }
             ?: imgElem?.attr("data-src")
+            ?: imgElem?.attr("srcset")?.split(",")?.lastOrNull()?.trim()?.split(" ")?.getOrNull(0)
             ?: "$TMDB_IMAGE_BASE/t/p/w500"
 
         val targetUrl = if (isTv) "$mainUrl/tv/$idMatch" else "$mainUrl/movie/$idMatch"
@@ -135,10 +136,9 @@ class GhostflixProvider : MainAPI() {
             ?: Regex("""id=(\d+)""").find(url)?.groupValues?.get(1)
             ?: return null
 
-        // Fallback to TMDB API if website page details fail
         val mediaType = if (isTv) "tv" else "movie"
         val tmdbUrl = "https://api.themoviedb.org/3/$mediaType/$tmdbId?api_key=$TMDB_API_KEY"
-        
+
         var title = "Ghostflix Title #$tmdbId"
         var description = "No description available."
         var poster: String? = null
@@ -193,9 +193,11 @@ class GhostflixProvider : MainAPI() {
     ): Boolean {
         val loadData = tryParseJson<LoadData>(data) ?: return false
 
+        // All active servers supported by Ghostflix UI
         val servers = listOf(
-            "vidbolt", "vidcore", "flix", "vidly", "orion", 
-            "vidrift", "vidqueen", "hindi", "hindi-new", "cinezo"
+            "orion", "vidrift", "vidqueen", "vidly", "hindi", 
+            "cinezo", "hindi-new", "flix", "fast", "nflix", 
+            "premium", "mega", "alpha", "vidbolt", "vidcore"
         )
 
         servers.forEach { server ->
