@@ -109,23 +109,32 @@ class KDHindiDubbed : MainAPI() {
                !lower.matches(Regex(".*\\.(jpg|jpeg|png|webp|gif|svg)(\\?.*)?$"))
     }
 
-    private fun isDirectServerHost(url: String): Boolean {
+    private fun isServerOrRedirectUrl(url: String): Boolean {
         val u = url.lowercase()
-        return u.contains("momofile.shop") ||
+        return u.contains("momofile") ||
                u.contains("pixeldrain") ||
                u.contains("send.now") ||
+               u.contains("sendnow") ||
                u.contains("vik1ngfile") ||
                u.contains("vikingfile") ||
                u.contains("fileditch") ||
-               u.contains("tmbcloud.lol") ||
+               u.contains("theditch") ||
+               u.contains("tmbcloud") ||
                u.contains("susanexpectcare") ||
                u.contains("voe.sx") ||
+               u.contains("voe.") ||
                u.contains("xcloud") ||
-               u.contains("buzzheavier")
+               u.contains("buzzheavier") ||
+               u.contains("redir") ||
+               u.contains("fifa") ||
+               u.contains("?url=") ||
+               u.contains("goto") ||
+               u.contains("dl.") ||
+               u.contains("embed")
     }
 
     private fun extractEpNum(text: String, href: String, fallback: Int): Int {
-        val combined = "$text $href"
+        val combined = "$text$href"
         val match = Regex("""(?i)(?:episode|ep|e)\s*[-–:=]?\s*0*(\d{1,3})\b""").find(combined)
         return match?.groupValues?.get(1)?.toIntOrNull() ?: fallback
     }
@@ -159,16 +168,16 @@ class KDHindiDubbed : MainAPI() {
 
             if (!isValidCandidateUrl(href)) continue
 
-            val epNum = extractEpNum("$text $parentText", href, fallbackEp)
+            val epNum = extractEpNum("$text$parentText", href, fallbackEp)
 
-            if (isDirectServerHost(href)) {
+            if (isServerOrRedirectUrl(href)) {
                 episodeMap.getOrPut(epNum) { mutableListOf() }.add(href)
                 allLinksForMovie.add(href)
                 if (epNum >= fallbackEp) fallbackEp = epNum + 1
-            } else if (text.contains("DOWNLOAD", true) || text.contains("Episode", true) || text.contains("720p", true) || text.contains("1080p", true) || href.contains("momofile.shop")) {
+            } else {
                 try {
                     val resolvedUrl = followRedirect(href, url)
-                    if (isDirectServerHost(resolvedUrl)) {
+                    if (isServerOrRedirectUrl(resolvedUrl)) {
                         episodeMap.getOrPut(epNum) { mutableListOf() }.add(resolvedUrl)
                         allLinksForMovie.add(resolvedUrl)
                     } else {
@@ -178,8 +187,8 @@ class KDHindiDubbed : MainAPI() {
                         for (subA in subLinks) {
                             val subHref = fixUrl(subA.attr("href").trim())
                             val subText = subA.text().trim()
-                            if (isValidCandidateUrl(subHref) && isDirectServerHost(subHref)) {
-                                val finalEp = extractEpNum("$subText ${subA.parent()?.text()}", subHref, subEp)
+                            if (isValidCandidateUrl(subHref) && isServerOrRedirectUrl(subHref)) {
+                                val finalEp = extractEpNum("$subText${subA.parent()?.text()}", subHref, subEp)
                                 episodeMap.getOrPut(finalEp) { mutableListOf() }.add(subHref)
                                 allLinksForMovie.add(subHref)
                                 if (finalEp >= subEp) subEp = finalEp + 1
