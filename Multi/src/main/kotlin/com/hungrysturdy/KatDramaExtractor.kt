@@ -2,6 +2,7 @@ package com.hungrysturdy
 
 import android.util.Base64
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.extractors.Filesim
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.*
 
@@ -10,6 +11,12 @@ private val cfKiller by lazy { CloudflareKiller() }
 private val defaultHeaders = mapOf(
     "User-Agent" to "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 )
+
+// Plugin.kt:30:30 ke 'Unresolved reference: Filemoon' error ko fix karne ke liye
+class Filemoon : Filesim() {
+    override val name = "Filemoon"
+    override var mainUrl = "https://filemoon.sx"
+}
 
 open class KatHubCloudExtractor : ExtractorApi() {
     override val name = "HubCloud"
@@ -46,9 +53,11 @@ open class KatHubCloudExtractor : ExtractorApi() {
                             source = this.name,
                             name = "$name [FSL Server]",
                             url = fslUrl,
-                            referer = gamerLink,
-                            quality = fslQuality
-                        )
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = gamerLink
+                            this.quality = fslQuality
+                        }
                     )
                 }
             }
@@ -71,9 +80,11 @@ open class KatHubCloudExtractor : ExtractorApi() {
                             source = this.name,
                             name = "$name [Server : 10Gbps]",
                             url = tenGbpsUrl,
-                            referer = gamerLink,
-                            quality = detectedQuality
-                        )
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = gamerLink
+                            this.quality = detectedQuality
+                        }
                     )
                 }
             }
@@ -138,9 +149,11 @@ open class KatGDFlixExtractor : ExtractorApi() {
                                     source = this.name,
                                     name = "$name [${text.ifEmpty { "Direct" }}]",
                                     url = href,
-                                    referer = url,
-                                    quality = quality
-                                )
+                                    type = ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = url
+                                    this.quality = quality
+                                }
                             )
                         }
                     }
@@ -205,7 +218,7 @@ class KatFuckingFastExtractor : ExtractorApi() {
     }
 }
 
-suspend fun ExtractorApi.extractPixelDrainLink(
+suspend fun extractPixelDrainLink(
     url: String,
     quality: Int,
     callback: (ExtractorLink) -> Unit
@@ -218,14 +231,16 @@ suspend fun ExtractorApi.extractPixelDrainLink(
                 source = "PixelServer",
                 name = "HubCloud [PixelServer : 2]",
                 url = "$host/api/file/$fileId?download",
-                referer = "$host/",
-                quality = quality
-            )
+                type = ExtractorLinkType.VIDEO
+            ) {
+                this.referer = "$host/"
+                this.quality = quality
+            }
         )
     }
 }
 
-suspend fun ExtractorApi.extractHbPlayLink(
+suspend fun extractHbPlayLink(
     url: String,
     quality: Int,
     callback: (ExtractorLink) -> Unit
@@ -241,16 +256,18 @@ suspend fun ExtractorApi.extractHbPlayLink(
                         source = "HBPlay",
                         name = "HubCloud [HBPlay Direct]",
                         url = decodedUrl,
-                        referer = "https://hbplay.pages.dev/",
-                        quality = finalQuality
-                    )
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = "https://hbplay.pages.dev/"
+                        this.quality = finalQuality
+                    }
                 )
             }
         } catch (_: Exception) {}
     }
 }
 
-suspend fun ExtractorApi.extractFuckingFastLink(
+suspend fun extractFuckingFastLink(
     url: String,
     quality: Int,
     callback: (ExtractorLink) -> Unit
@@ -265,9 +282,11 @@ suspend fun ExtractorApi.extractFuckingFastLink(
                     source = "BuzzServer",
                     name = "HubCloud [Buzz Server]",
                     url = directLink,
-                    referer = url,
-                    quality = quality
-                )
+                    type = ExtractorLinkType.VIDEO
+                ) {
+                    this.referer = url
+                    this.quality = quality
+                }
             )
         }
     } catch (_: Exception) {}
