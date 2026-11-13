@@ -41,8 +41,7 @@ class DramaVerseProvider : MainAPI() {
         val home = document.select("li.post-item, article.item-list, div.post-element")
             .mapNotNull { it.toSearchResult() }
             .ifEmpty {
-                // Fallback selector matching a.post-thumb directly
-                document.select("a.post-thumb").mapNotNull { it.ThumbToSearchResult() }
+                document.select("a.post-thumb").mapNotNull { it.thumbToSearchResult() }
             }
 
         return newHomePageResponse(request.name, home)
@@ -65,7 +64,7 @@ class DramaVerseProvider : MainAPI() {
         }
     }
 
-    private fun Element.ThumbToSearchResult(): SearchResponse? {
+    private fun Element.thumbToSearchResult(): SearchResponse? {
         val href = this.absUrl("href").ifEmpty { return null }
         val img = this.selectFirst("img")
         val title = this.attr("aria-label").substringBefore("|").trim()
@@ -84,7 +83,7 @@ class DramaVerseProvider : MainAPI() {
         return document.select("li.post-item, article.item-list")
             .mapNotNull { it.toSearchResult() }
             .ifEmpty {
-                document.select("a.post-thumb").mapNotNull { it.ThumbToSearchResult() }
+                document.select("a.post-thumb").mapNotNull { it.thumbToSearchResult() }
             }
     }
 
@@ -103,45 +102,48 @@ class DramaVerseProvider : MainAPI() {
             val slideUrl = slide.absUrl("href").ifEmpty { continue }
             val slideTitle = slide.selectFirst(".btn-title")?.text()?.trim() ?: "Episode"
 
-            // If the button points to safe.sohojgyan.com ("Episode Wise Links"), scrape episodes inside it
             if (slideUrl.contains("sohojgyan") || slideTitle.contains("Episode Wise", ignoreCase = true)) {
                 try {
                     val safeDoc = app.get(slideUrl, referer = url).document
-                    val epLinks = safeDoc.select("a[href*='xcloud'], a[href*='hubcloud'], a[href*='gdflix'], .EpFile a, a.btn, .entry-content a")
+                    val epLinks = safeDoc.select("a[href*='xcloud'], a[href*='hubcloud'], a[href*='gdflix']")
                         .filter { a ->
                             val href = a.absUrl("href")
-                            href.isNotEmpty() && !href.contains("telegram", ignoreCase = true) && href != slideUrl
+                            href.isNotEmpty() && !href.contains("telegram", ignoreCase = true)
                         }
 
                     if (epLinks.isNotEmpty()) {
                         epLinks.forEachIndexed { index, epElement ->
                             val epHref = epElement.absUrl("href")
-                            val epText = epElement.text().trim().ifEmpty { "Episode ${index + 1}" }
-                            val epNum = Regex("(?i)(?:ep|episode|e)\\s*(\\d+)").find(epText)?.groupValues?.get(1)?.toIntOrNull()
+                            val parentText = epElement.parent()?.ownText()?.trim().orEmpty()
+                            val siblingTitle = epElement.parent()
+                                ?.selectFirst("h2, h3, h4, strong, .title, .ep-title")
+                                ?.text()?.trim().orEmpty()
+
+                            val rawText = epElement.ownText().trim()
+                                .ifEmpty { parentText }
+                                .ifEmpty { siblingTitle }
+                                .ifEmpty { "Episode ${index + 1}" }
+
+                            val epNum = Regex("(?i)(?:ep|episode|e)\\s*0*(\\d+)")
+                                .find("$rawText $siblingTitle")
+                                ?.groupValues?.get(1)?.toIntOrNull()
                                 ?: (index + 1)
+
+                            val cleanName = if (rawText.equals("XCloud", ignoreCase = true)) {
+                                "Episode $epNum"
+                            } else {
+                                rawText
+                            }
 
                             episodes.add(
                                 newEpisode(epHref) {
-                                    this.name = epText
+                                    this.name = cleanName
                                     this.episode = epNum
                                 }
                             )
                         }
-                    } else {
-                        episodes.add(
-                            newEpisode(slideUrl) {
-                                this.name = slideTitle
-                                this.episode = episodes.size + 1
-                            }
-                        )
                     }
                 } catch (_: Exception) {
-                    episodes.add(
-                        newEpisode(slideUrl) {
-                            this.name = slideTitle
-                            this.episode = episodes.size + 1
-                        }
-                    )
                 }
             } else {
                 episodes.add(
@@ -176,15 +178,13 @@ class DramaVerseProvider : MainAPI() {
     ): Boolean {
         var currentUrl = data
 
-        // 1. If data is still a safe.sohojgyan.com page, resolve XCloud links from it first
         if (currentUrl.contains("sohojgyan")) {
             val safeDoc = app.get(currentUrl).document
-            val xcloudLinks = safeDoc.select("a[href*='xcloud'], a[href]").mapNotNull {
-                val href = it.absUrl("href")
-                if (href.contains("xcloud")) href else null
+            val xcloudLinks = safeDoc.select("a[href*='xcloud']").mapNotNull {
+                it.absUrl("href").ifEmpty { null }
             }
             for (link in xcloudLinks) {
-                extractXCloud(link, callback)
+                extractXCloud(link, subtitleCallback, callback)
             }
             if (xcloudLinks.isNotEmpty()) return true
 
@@ -195,12 +195,10 @@ class DramaVerseProvider : MainAPI() {
             }
         }
 
-        // 2. If it's an XCloud page (e.g. https://xcloud.tattoo/4ad2cac5576e66b)
         if (currentUrl.contains("xcloud")) {
-            if (extractXCloud(currentUrl, callback)) return true
+            if (extractXCloud(currentUrl, subtitleCallback, callback)) return true
         }
 
-        // 3. Fallback to standard iframe / CloudStream extractors
         val document = app.get(currentUrl, cookies = cookies).document
         val iframe = document.selectFirst("iframe")?.absUrl("src") ?: currentUrl
         loadExtractor(iframe, "$mainUrl/", subtitleCallback, callback)
@@ -209,76 +207,118 @@ class DramaVerseProvider : MainAPI() {
 
     private suspend fun extractXCloud(
         url: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         var found = false
         val xCloudDoc = app.get(url).document
 
-        // Grab candidate action buttons on XCloud:
-        // "Online Streaming", "WATCH ONLINE", "Generate Direct Download Link", "DOWNLOAD"
-        val candidatePages = mutableSetOf<String>()
-        xCloudDoc.select(
-            "a:contains(Online Streaming), a:contains(WATCH ONLINE), a:contains(Generate Direct Download Link), a:contains(Download), a[href*='stream'], a[href*='download']"
-        ).forEach { el ->
-            val href = el.absUrl("href")
-            if (href.isNotEmpty() && !href.contains("telegram", ignoreCase = true) && !href.endsWith("#")) {
-                candidatePages.add(href)
+        // 1. Subtitle link agar page par hai to add karo
+        xCloudDoc.select("div.vd a[href*='subtitle']").firstOrNull()?.absUrl("href")?.let { subUrl ->
+            if (subUrl.isNotEmpty()) {
+                subtitleCallback.invoke(SubtitleFile("English", subUrl))
             }
         }
 
-        // Also check the current page directly in case video tags are already present
-        candidatePages.add(url)
+        // 2. Sirf asli <div class="vd"> ke buttons nikalo (fake ads-btns ko ignore karo)
+        val directGenUrl = xCloudDoc.selectFirst("div.vd a:contains(Generate Direct Download), div.vd a[href*='token=']")
+            ?.absUrl("href")
+        val streamPageUrl = xCloudDoc.selectFirst("div.vd a:contains(Online Streaming), div.vd a[href*='stream_']")
+            ?.absUrl("href")
 
-        for (pageUrl in candidatePages) {
+        val emittedUrls = mutableSetOf<String>()
+
+        // 3. Pehle "Generate Direct Download Link" (xcloud1.lol/...?token=...) resolve karo
+        if (!directGenUrl.isNullOrEmpty() && !directGenUrl.contains("subtitle")) {
             try {
-                // Check if the link itself is already a direct video file (.mkv / .mp4 / .m3u8)
-                if (pageUrl.matches(Regex("(?i).*\\.(mkv|mp4|m3u8)(\\?.*)?$"))) {
-                    callback.invoke(
-                        newExtractorLink(
-                            source = "XCloud",
-                            name = "XCloud Direct",
-                            url = pageUrl
-                        )
-                    )
-                    found = true
-                    continue
-                }
-
-                val doc = if (pageUrl == url) xCloudDoc else app.get(pageUrl, referer = url).document
-
-                // Look for <video src="...">, <source src="...">, or direct download links on the next page
-                val directLinks = mutableSetOf<String>()
-                doc.select("video source[src], video[src]").forEach {
-                    val src = it.absUrl("src")
-                    if (src.isNotEmpty()) directLinks.add(src)
-                }
-                doc.select("a[href*='.mkv'], a[href*='.mp4'], a[href*='.m3u8'], a:contains(Download)").forEach {
-                    val href = it.absUrl("href")
-                    if (href.matches(Regex("(?i).*\\.(mkv|mp4|m3u8).*")) || href.contains("token=") || href.contains("download")) {
-                        if (!href.contains("telegram", ignoreCase = true) && href != pageUrl) {
-                            directLinks.add(href)
+                val genDoc = app.get(directGenUrl, referer = url).document
+                // Is page par jo actual download buttons / CDN links hain unhe nikalo
+                genDoc.select("a[href]").forEach { a ->
+                    val href = a.absUrl("href")
+                    val text = a.text().trim()
+                    if (href.isNotEmpty() &&
+                        href != directGenUrl &&
+                        !href.contains("telegram", ignoreCase = true) &&
+                        !href.contains("fifa2026", ignoreCase = true) &&
+                        !href.endsWith("#") &&
+                        (href.matches(Regex("(?i).*\\.(mkv|mp4|m3u8)(\\?.*)?$")) ||
+                         href.contains("googleusercontent.com") ||
+                         href.contains("r2.dev") ||
+                         href.contains("workers.dev") ||
+                         href.contains("pixeldrain") ||
+                         href.contains("fsl.gigabox") ||
+                         href.contains("hubcdn") ||
+                         text.contains("Download", ignoreCase = true) ||
+                         text.contains("Server", ignoreCase = true) ||
+                         text.contains("Direct", ignoreCase = true))
+                    ) {
+                        if (emittedUrls.add(href)) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = "XCloud",
+                                    name = text.ifEmpty { "XCloud Direct" },
+                                    url = href,
+                                    type = ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = directGenUrl
+                                }
+                            )
+                            found = true
                         }
                     }
                 }
 
-                // Regex scan raw HTML/scripts for direct stream URLs
-                val html = doc.html()
-                Regex("""["'](https?://[^"']+\.(?:m3u8|mp4|mkv)[^"']*)["']""", RegexOption.IGNORE_CASE)
-                    .findAll(html)
-                    .forEach { match ->
-                        directLinks.add(match.groupValues[1])
+                // Regex se hidden video/CDN URLs scan karo
+                Regex("""["'](https?://[^"'\s<>]+\.(?:m3u8|mp4|mkv)(?:\?[^"'\s<>]*)?)["']""", RegexOption.IGNORE_CASE)
+                    .findAll(genDoc.html())
+                    .forEach { m ->
+                        val vUrl = m.groupValues[1]
+                        if (emittedUrls.add(vUrl)) {
+                            val type = if (vUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            callback.invoke(
+                                newExtractorLink("XCloud", "XCloud Direct", vUrl, type) {
+                                    this.referer = directGenUrl
+                                }
+                            )
+                            found = true
+                        }
                     }
+            } catch (_: Exception) {
+            }
+        }
 
-                for (videoUrl in directLinks) {
-                    callback.invoke(
-                        newExtractorLink(
-                            source = "XCloud",
-                            name = "XCloud",
-                            url = videoUrl
+        // 4. Ab "Online Streaming" (/stream_...) page se player stream nikalo
+        if (!streamPageUrl.isNullOrEmpty()) {
+            try {
+                val streamDoc = app.get(streamPageUrl, referer = url).document
+
+                streamDoc.select("video source[src], video[src]").forEach { el ->
+                    val src = el.absUrl("src")
+                    if (src.isNotEmpty() && emittedUrls.add(src)) {
+                        val type = if (src.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        callback.invoke(
+                            newExtractorLink("XCloud", "XCloud Stream", src, type) {
+                                this.referer = streamPageUrl
+                            }
                         )
-                    )
-                    found = true
+                        found = true
+                    }
                 }
+
+                Regex("""["'](https?://[^"'\s<>]+\.(?:m3u8|mp4|mkv)(?:\?[^"'\s<>]*)?)["']""", RegexOption.IGNORE_CASE)
+                    .findAll(streamDoc.html())
+                    .forEach { m ->
+                        val vUrl = m.groupValues[1]
+                        if (emittedUrls.add(vUrl)) {
+                            val type = if (vUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            callback.invoke(
+                                newExtractorLink("XCloud", "XCloud Stream", vUrl, type) {
+                                    this.referer = streamPageUrl
+                                }
+                            )
+                            found = true
+                        }
+                    }
             } catch (_: Exception) {
             }
         }
