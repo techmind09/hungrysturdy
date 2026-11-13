@@ -1,14 +1,15 @@
 package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 
 class KDHindiDubbed : MainAPI() {
-    override var mainUrl = "https://kdhindidubbed.cfd"
+    override var mainUrl = "https://dramacool.website"
     override var name = "KDHindiDubbed"
     override val hasMainPage = true
     override var lang = "hi"
@@ -20,7 +21,6 @@ class KDHindiDubbed : MainAPI() {
 
     private val cfKiller by lazy { CloudflareKiller() }
 
-    // Cloudflare Bypass Fetcher
     private suspend fun fetchDoc(url: String, referer: String = mainUrl): Document {
         val res = app.get(url, referer = referer, allowRedirects = true)
         if (res.code in listOf(403, 503) || res.text.contains("Just a moment", true) || res.text.contains("cf-browser-verification", true)) {
@@ -80,26 +80,41 @@ class KDHindiDubbed : MainAPI() {
         val pageUrl = if (page == 1) urlWithoutPage else "${urlWithoutPage}page/$page/"
 
         val document = fetchDoc(pageUrl)
-        val home = document.select("article.herald-lay-c, article.post, div.item, div.post-item").mapNotNull { it.toSearchResult() }
+        val home = document.select("article.post, article.item, div.post-item, div.herald-lay-c, article.herald-lay-c").mapNotNull { it.toSearchResult() }
         
         return newHomePageResponse(request.name, home, hasNext = home.isNotEmpty())
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val titleElement = this.selectFirst("h2.entry-title a, h2 a, h3 a, a.title, .post-title a") ?: return null
+        val titleElement = this.selectFirst("h2.entry-title a, h2 a, h3 a, a.title, h2.title a, .post-title a, .entry-title") ?: return null
         val title = titleElement.text().trim()
-        val href = fixUrl(titleElement.attr("href"))
+        val href = fixUrl(titleElement.attr("href").ifBlank { titleElement.selectFirst("a")?.attr("href") ?: "" })
         
         if (title.isBlank() || href.isBlank()) return null
 
-        val imgElement = this.selectFirst("img")
-        val posterUrl = fixUrl(
-            imgElement?.attr("data-src")?.takeIf { it.isNotBlank() }
-                ?: imgElement?.attr("data-lazy-src")?.takeIf { it.isNotBlank() }
-                ?: imgElement?.attr("src")?.takeIf { it.isNotBlank() && !it.startsWith("data:") }
+        var rawImg = ""
+        val imgElements = this.select("img")
+        for (img in imgElements) {
+            rawImg = img.attr("data-src").takeIf { it.isNotBlank() }
+                ?: img.attr("data-lazy-src").takeIf { it.isNotBlank() }
+                ?: img.attr("data-cfsrc").takeIf { it.isNotBlank() }
+                ?: img.attr("src").takeIf { it.isNotBlank() && !it.startsWith("data:") }
                 ?: ""
-        )
+            if (rawImg.isNotBlank()) break
+        }
 
+        if (rawImg.isBlank()) {
+            val bgElement = this.selectFirst("[style*=background-image]")
+            if (bgElement != null) {
+                val style = bgElement.attr("style")
+                val bgUrl = Regex("""url\(['"]?(.*?)['"]?\)""").find(style)?.groupValues?.get(1)
+                if (!bgUrl.isNullOrBlank()) {
+                    rawImg = bgUrl
+                }
+            }
+        }
+
+        val posterUrl = fixUrl(rawImg)
         val type = if (title.contains("Movie", true)) TvType.Movie else TvType.TvSeries
         
         return newMovieSearchResponse(title, href, type) {
@@ -111,7 +126,7 @@ class KDHindiDubbed : MainAPI() {
         val encoded = java.net.URLEncoder.encode(query.trim(), "UTF-8")
         val document = fetchDoc("$mainUrl/?s=$encoded")
         
-        return document.select("article.herald-lay-c, article.post, div.item, div.post-item")
+        return document.select("article.post, article.item, div.post-item, div.herald-lay-c, article.herald-lay-c")
             .mapNotNull { it.toSearchResult() }
             .distinctBy { it.url }
     }
@@ -120,98 +135,89 @@ class KDHindiDubbed : MainAPI() {
         val document = fetchDoc(url)
         val title = document.selectFirst("h1.entry-title, h1, h2.title")?.text()?.trim() ?: "Drama"
 
-        val poster = fixUrl(
-            document.selectFirst("meta[property='og:image']")?.attr("content")
-                ?: document.selectFirst("div.poster img, img.wp-post-image, .entry-content img, article img")?.attr("data-src")
-                ?: document.selectFirst("div.poster img, img.wp-post-image, .entry-content img, article img")?.attr("src")
-                ?: ""
-        )
+        var poster = fixUrl(document.selectFirst("meta[property='og:image']")?.attr("content") ?: "")
+        if (poster.isBlank()) {
+             val imgElements = document.select("div.poster img, img.wp-post-image, .entry-content img, article img")
+             for (img in imgElements) {
+                 val rawSrc = img.attr("data-src").takeIf { it.isNotBlank() }
+                     ?: img.attr("data-lazy-src").takeIf { it.isNotBlank() }
+                     ?: img.attr("src").takeIf { it.isNotBlank() && !it.startsWith("data:") }
+                 if (!rawSrc.isNullOrBlank()) {
+                     poster = fixUrl(rawSrc)
+                     break
+                 }
+             }
+        }
 
         val description = document.selectFirst("div.storyline, .entry-content p:contains(follows), .entry-content p")?.text()?.trim() ?: "No Plot Found"
         val isMovie = title.contains("Movie", true)
 
-        val episodeMap = LinkedHashMap<Int, MutableList<EpisodeLink>>()
-        val allLinksForMovie = mutableListOf<EpisodeLink>()
+        val episodeMap = LinkedHashMap<Int, MutableList<String>>()
+        val allLinksForMovie = mutableListOf<String>()
 
-        val pagesToScan = mutableListOf<Pair<Document, String>>()
-        pagesToScan.add(document to "")
-
-        // Gather sub-pages (Episodes) from main page
         val subPageLinks = document.select(".entry-content a[href]").mapNotNull { el ->
             val href = el.attr("href").trim()
             val text = el.text().trim()
-            val parentHeading = el.parent()?.previousElementSibling()?.text().orEmpty()
             
-            // STRICT FILTER: Block images from being treated as episode URLs
             if (href.isBlank() || href.matches(Regex(".*\\.(jpg|jpeg|png|webp|gif)$", RegexOption.IGNORE_CASE)) || href.contains("blogger.googleusercontent.com")) {
                 return@mapNotNull null
             }
-
-            val qualityTag = when {
-                text.contains("1080p", true) || parentHeading.contains("1080p", true) -> "1080p"
-                text.contains("720p", true) || parentHeading.contains("720p", true) -> "720p"
-                text.contains("480p", true) || parentHeading.contains("480p", true) -> "480p"
-                else -> ""
-            }
-
+            
             if (href.startsWith("http") && (
                     text.contains("DOWNLOAD", true) ||
                     href.contains(mainUrl.substringAfter("https://")) || 
                     href.contains("dramacool")
                 ) && !href.contains("/category/") && !href.contains("/tag/") && !href.contains("t.me")
             ) {
-                href to qualityTag
+                href
             } else null
-        }.distinctBy { it.first }
+        }.distinct()
 
-        // Fetch sub-pages to find ACTUAL video host links
-        for ((subLink, qTag) in subPageLinks) {
-            try {
-                val resolvedUrl = followRedirect(subLink, url)
-                if (isDirectServerHost(resolvedUrl)) {
-                    allLinksForMovie.add(EpisodeLink(resolvedUrl, 1, qTag))
-                    episodeMap.getOrPut(1) { mutableListOf() }.add(EpisodeLink(resolvedUrl, 1, qTag))
-                } else if (resolvedUrl.contains(mainUrl.substringAfter("https://"))) {
-                    // Fetch the internal WordPress page to find the embedded momofile/pixeldrain links
-                    val subDoc = fetchDoc(resolvedUrl, url)
-                    pagesToScan.add(subDoc to qTag)
-                }
-            } catch (_: Exception) {}
+        // Scan main page first
+        parseEpisodesFromDoc(document, episodeMap, allLinksForMovie)
+
+        // If no direct links found on main page, scan subpages
+        if (episodeMap.isEmpty() && allLinksForMovie.isEmpty()) {
+            for (subLink in subPageLinks) {
+                try {
+                    val resolvedUrl = followRedirect(subLink, url)
+                    if (isDirectServerHost(resolvedUrl)) {
+                        allLinksForMovie.add(resolvedUrl)
+                        episodeMap.getOrPut(1) { mutableListOf() }.add(resolvedUrl)
+                    } else if (resolvedUrl.contains(mainUrl.substringAfter("https://"))) {
+                        val subDoc = fetchDoc(resolvedUrl, url)
+                        parseEpisodesFromDoc(subDoc, episodeMap, allLinksForMovie)
+                    }
+                } catch (_: Exception) {}
+            }
         }
 
-        // Parse actual video links from all gathered pages
-        for ((doc, qTag) in pagesToScan) {
-            parseEpisodesFromDoc(doc, qTag, episodeMap, allLinksForMovie)
-        }
-
-        // Fallback: If no links found, just scan the main page again safely
+        // Final fallback: just get all raw links from main page
         if (episodeMap.isEmpty() && allLinksForMovie.isEmpty()) {
             document.select(".entry-content a[href]").forEach { el ->
                 val h = el.attr("href").trim()
                 if (h.startsWith("http") && !h.contains("/category/") && !h.contains("/tag/") && !h.contains("t.me") &&
                     !h.matches(Regex(".*\\.(jpg|jpeg|png|webp|gif)$", RegexOption.IGNORE_CASE)) && !h.contains("blogger.googleusercontent.com")) {
-                    allLinksForMovie.add(EpisodeLink(h, 1, ""))
-                    episodeMap.getOrPut(1) { mutableListOf() }.add(EpisodeLink(h, 1, ""))
+                    allLinksForMovie.add(h)
+                    episodeMap.getOrPut(1) { mutableListOf() }.add(h)
                 }
             }
         }
 
         return if (isMovie && episodeMap.size <= 1) {
-            val movieData = mapper.writeValueAsString(allLinksForMovie.distinctBy { it.source })
-            newMovieLoadResponse(title, url, TvType.Movie, movieData) {
+            newMovieLoadResponse(title, url, TvType.Movie, allLinksForMovie.distinct().toJson()) {
                 this.posterUrl = poster
                 this.plot = description
             }
         } else {
             val episodes = episodeMap.entries.sortedBy { it.key }.map { (epNum, links) ->
-                val distinctLinks = links.distinctBy { it.source }
-                newEpisode(mapper.writeValueAsString(distinctLinks)) {
+                newEpisode(links.distinct().toJson()) {
                     this.name = "Episode $epNum"
                     this.episode = epNum
                 }
             }.ifEmpty {
                 listOf(
-                    newEpisode(mapper.writeValueAsString(allLinksForMovie.distinctBy { it.source })) {
+                    newEpisode(allLinksForMovie.distinct().toJson()) {
                         this.name = "Full Movie / Episode 1"
                         this.episode = 1
                     }
@@ -242,24 +248,16 @@ class KDHindiDubbed : MainAPI() {
 
     private fun parseEpisodesFromDoc(
         doc: Document,
-        defaultQuality: String,
-        episodeMap: LinkedHashMap<Int, MutableList<EpisodeLink>>,
-        allLinksForMovie: MutableList<EpisodeLink>
+        episodeMap: LinkedHashMap<Int, MutableList<String>>,
+        allLinksForMovie: MutableList<String>
     ) {
         val contentRoot = doc.selectFirst(".entry-content") ?: doc.body()
         val elements = contentRoot.select("h1, h2, h3, h4, h5, h6, p, strong, b, span, a[href], li")
 
         var currentEp = 1
-        var currentQuality = defaultQuality
 
         for (el in elements) {
             val ownText = el.ownText().ifBlank { el.text() }.trim()
-
-            if (el.tagName() != "a") {
-                if (ownText.contains("1080p", true)) currentQuality = "1080p"
-                else if (ownText.contains("720p", true)) currentQuality = "720p"
-                else if (ownText.contains("480p", true)) currentQuality = "480p"
-            }
 
             val epMatch = Regex("""(?i)Episode\s*[-–:]?\s*0*(\d{1,3})""").find(ownText)
                 ?: Regex("""(?i)\bEp\s*[-–:]?\s*0*(\d{1,3})\b""").find(ownText)
@@ -272,7 +270,6 @@ class KDHindiDubbed : MainAPI() {
                 val href = el.attr("href").trim()
                 val linkText = el.text().trim()
 
-                // STRICT FILTER: Block images, telegram, categories
                 if (href.isBlank() || !href.startsWith("http")) continue
                 if (href.contains("/category/") || href.contains("/tag/") || href.contains("t.me") ||
                     href.contains("telegram.me") || href.contains("facebook.com") || href.contains("twitter.com") ||
@@ -294,9 +291,8 @@ class KDHindiDubbed : MainAPI() {
                     linkText.contains("Watch", true) ||
                     linkText.contains("Server", true)
                 ) {
-                    val epObj = EpisodeLink(href, currentEp, currentQuality)
-                    episodeMap.getOrPut(currentEp) { mutableListOf() }.add(epObj)
-                    allLinksForMovie.add(epObj)
+                    episodeMap.getOrPut(currentEp) { mutableListOf() }.add(href)
+                    allLinksForMovie.add(href)
                 }
             }
         }
@@ -330,25 +326,25 @@ class KDHindiDubbed : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val extractor = KDHindiDubbedExtractor()
-        val sources = tryParseJson<ArrayList<EpisodeLink>>(data)
-
-        if (!sources.isNullOrEmpty()) {
-            sources.amap { sourceObj ->
-                extractor.getUrl(sourceObj.source, mainUrl, subtitleCallback, callback)
+        
+        return try {
+            val sources = parseJson<List<String>>(data)
+            if (sources.isNotEmpty()) {
+                sources.amap { sourceUrl ->
+                    extractor.getUrl(sourceUrl, mainUrl, subtitleCallback, callback)
+                }
+                true
+            } else {
+                false
             }
-            return true
+        } catch (e: Exception) {
+            // Fallback if data is just a single string URL
+            if (data.startsWith("http")) {
+                extractor.getUrl(data, mainUrl, subtitleCallback, callback)
+                true
+            } else {
+                false
+            }
         }
-
-        if (data.startsWith("http")) {
-            extractor.getUrl(data, mainUrl, subtitleCallback, callback)
-            return true
-        }
-        return false
     }
-
-    data class EpisodeLink(
-        val source: String,
-        val episode: Int? = null,
-        val quality: String? = null
-    )
 }
