@@ -1,4 +1,4 @@
-package com.hungrysturdy
+package com.lagradost.cloudstream3.plugins
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
@@ -121,14 +121,15 @@ class DramaVerseProvider : MainAPI() {
 
             if (!extractedVideoUrl.isNullOrEmpty()) {
                 callback.invoke(
-                    ExtractorLink(
-                        name = "XCloud",
+                    newExtractorLink(
                         source = "XCloud",
+                        name = "XCloud",
                         url = extractedVideoUrl,
-                        referer = "https://xcloud.tattoo/",
-                        quality = Qualities.Unknown.value,
-                        isM3u8 = extractedVideoUrl.contains(".m3u8")
-                    )
+                        referer = "https://xcloud.tattoo/"
+                    ) {
+                        this.quality = Qualities.Unknown.value
+                        this.isM3u8 = extractedVideoUrl.contains(".m3u8")
+                    }
                 )
                 return true
             }
