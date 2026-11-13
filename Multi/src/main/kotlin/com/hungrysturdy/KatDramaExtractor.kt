@@ -49,8 +49,8 @@ open class KatHubCloudExtractor : ExtractorApi() {
                             source = this.name,
                             name = "$name [FSL Server]",
                             url = fslUrl,
-                            referer = gamerLink,
-                            quality = fslQuality
+                            quality = fslQuality,
+                            headers = mapOf("referer" to gamerLink)
                         )
                     )
                 }
@@ -74,8 +74,8 @@ open class KatHubCloudExtractor : ExtractorApi() {
                             source = this.name,
                             name = "$name [Server : 10Gbps]",
                             url = tenGbpsUrl,
-                            referer = gamerLink,
-                            quality = detectedQuality
+                            quality = detectedQuality,
+                            headers = mapOf("referer" to gamerLink)
                         )
                     )
                 }
@@ -151,8 +151,8 @@ open class KatGDFlixExtractor : ExtractorApi() {
                                     source = this.name,
                                     name = "$name [${text.ifEmpty { "Direct" }}]",
                                     url = href,
-                                    referer = url,
-                                    quality = quality
+                                    quality = quality,
+                                    headers = mapOf("referer" to url)
                                 )
                             )
                         }
@@ -238,8 +238,8 @@ suspend fun extractPixelDrainLink(
                 source = "PixelServer",
                 name = "HubCloud [PixelServer : 2]",
                 url = "$host/api/file/$fileId?download",
-                referer = "$host/",
-                quality = quality
+                quality = quality,
+                headers = mapOf("referer" to "$host/")
             )
         )
     }
@@ -261,8 +261,8 @@ suspend fun extractHbPlayLink(
                         source = "HBPlay",
                         name = "HubCloud [HBPlay Direct]",
                         url = decodedUrl,
-                        referer = "https://hbplay.pages.dev/",
-                        quality = finalQuality
+                        quality = finalQuality,
+                        headers = mapOf("referer" to "https://hbplay.pages.dev/")
                     )
                 )
             }
@@ -285,8 +285,8 @@ suspend fun extractFuckingFastLink(
                     source = "BuzzServer",
                     name = "HubCloud [Buzz Server]",
                     url = directLink,
-                    referer = url,
-                    quality = quality
+                    quality = quality,
+                    headers = mapOf("referer" to url)
                 )
             )
         }
