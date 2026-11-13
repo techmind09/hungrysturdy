@@ -45,12 +45,13 @@ open class KatHubCloudExtractor : ExtractorApi() {
                 if (fslUrl.isNotBlank()) {
                     val fslQuality = if (detectedQuality != Qualities.Unknown.value) detectedQuality else getQualityFromName(fslUrl)
                     callback.invoke(
-                        newExtractorLink(
+                        ExtractorLink(
                             source = this.name,
                             name = "$name [FSL Server]",
                             url = fslUrl,
+                            referer = gamerLink,
                             quality = fslQuality,
-                            headers = mapOf("referer" to gamerLink)
+                            isM3u8 = false
                         )
                     )
                 }
@@ -70,12 +71,13 @@ open class KatHubCloudExtractor : ExtractorApi() {
             gamerDoc.selectFirst("a[href*='pixel.hubcloud'], a:contains(10Gbps)")?.attr("href")?.let { tenGbpsUrl ->
                 if (tenGbpsUrl.isNotBlank()) {
                     callback.invoke(
-                        newExtractorLink(
+                        ExtractorLink(
                             source = this.name,
                             name = "$name [Server : 10Gbps]",
                             url = tenGbpsUrl,
+                            referer = gamerLink,
                             quality = detectedQuality,
-                            headers = mapOf("referer" to gamerLink)
+                            isM3u8 = false
                         )
                     )
                 }
@@ -147,12 +149,13 @@ open class KatGDFlixExtractor : ExtractorApi() {
                     text.contains("Direct", true) -> {
                         if (href.startsWith("http") && !href.contains("gdflix")) {
                             callback.invoke(
-                                newExtractorLink(
+                                ExtractorLink(
                                     source = this.name,
                                     name = "$name [${text.ifEmpty { "Direct" }}]",
                                     url = href,
+                                    referer = url,
                                     quality = quality,
-                                    headers = mapOf("referer" to url)
+                                    isM3u8 = false
                                 )
                             )
                         }
@@ -234,12 +237,13 @@ suspend fun extractPixelDrainLink(
     if (fileId.isNotBlank()) {
         val host = if (url.contains("pixeldrain.dev")) "https://pixeldrain.dev" else "https://pixeldrain.com"
         callback.invoke(
-            newExtractorLink(
+            ExtractorLink(
                 source = "PixelServer",
                 name = "HubCloud [PixelServer : 2]",
                 url = "$host/api/file/$fileId?download",
+                referer = "$host/",
                 quality = quality,
-                headers = mapOf("referer" to "$host/")
+                isM3u8 = false
             )
         )
     }
@@ -257,12 +261,13 @@ suspend fun extractHbPlayLink(
             if (decodedUrl.startsWith("http")) {
                 val finalQuality = if (quality != Qualities.Unknown.value) quality else getQualityFromName(decodedUrl)
                 callback.invoke(
-                    newExtractorLink(
+                    ExtractorLink(
                         source = "HBPlay",
                         name = "HubCloud [HBPlay Direct]",
                         url = decodedUrl,
+                        referer = "https://hbplay.pages.dev/",
                         quality = finalQuality,
-                        headers = mapOf("referer" to "https://hbplay.pages.dev/")
+                        isM3u8 = false
                     )
                 )
             }
@@ -281,12 +286,13 @@ suspend fun extractFuckingFastLink(
             .find(responseText)?.groupValues?.get(1)
         if (!directLink.isNullOrBlank()) {
             callback.invoke(
-                newExtractorLink(
+                ExtractorLink(
                     source = "BuzzServer",
                     name = "HubCloud [Buzz Server]",
                     url = directLink,
+                    referer = url,
                     quality = quality,
-                    headers = mapOf("referer" to url)
+                    isM3u8 = false
                 )
             )
         }
