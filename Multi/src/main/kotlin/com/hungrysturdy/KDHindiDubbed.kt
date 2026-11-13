@@ -6,7 +6,6 @@ import org.jsoup.nodes.Element
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 
 class KDHindiDubbed : MainAPI() {
-    // Note: mainUrl is kdhindidubbed.cfd based on your HTML source
     override var mainUrl = "https://kdhindidubbed.cfd"
     override var name = "KDHindiDubbed"
     override val hasMainPage = true
@@ -27,10 +26,7 @@ class KDHindiDubbed : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val pageUrl = "${request.data}$page"
         val document = app.get(pageUrl).document
-        
-        // Match the exact HTML structure from the website
         val home = document.select("article.herald-lay-c, article.post").mapNotNull { it.toSearchResult() }
-        
         return newHomePageResponse(request.name, home, hasNext = home.isNotEmpty())
     }
 
@@ -40,7 +36,6 @@ class KDHindiDubbed : MainAPI() {
         val href = fixUrl(titleElement.attr("href"))
         if (title.isBlank() || href.isBlank()) return null
 
-        // Explicitly get the image inside THIS specific article block
         val poster = this.selectFirst("img.wp-post-image, img.attachment-herald-lay-c")?.attr("src") 
             ?: this.selectFirst("img")?.attr("src")
             ?: ""
@@ -77,7 +72,6 @@ class KDHindiDubbed : MainAPI() {
         val episodeMap = mutableMapOf<Int, MutableList<EpisodeLink>>()
         val allLinksForMovie = mutableListOf<EpisodeLink>()
 
-        // Scan all links in the content area
         val contentLinks = document.select(".entry-content a[href]")
         
         var fallbackEp = 1
@@ -85,11 +79,14 @@ class KDHindiDubbed : MainAPI() {
             val href = link.attr("href").trim()
             val text = link.text().trim()
             
-            // Ignore internal categories, tags, or telegram links
-            if (href.isBlank() || href.contains("/category/") || href.contains("/tag/") || href.contains("t.me")) continue
+            // FIX 2: Strict filters to ignore images and invalid links
+            if (href.isBlank() || href.contains("/category/") || href.contains("/tag/") || href.contains("t.me") ||
+                href.contains("blogger.googleusercontent.com/img") || 
+                href.matches(Regex(".*\\.(jpg|jpeg|png|webp|gif)$", RegexOption.IGNORE_CASE))) {
+                continue
+            }
 
             if (href.startsWith("http")) {
-                // Try to find episode number from the link text OR the URL itself
                 val epNumText = Regex("""(?i)(?:episode|ep)\.?\s*0*(\d{1,3})""").find(text)?.groupValues?.get(1)
                     ?: Regex("""(?i)episode-(\d+)""").find(href)?.groupValues?.get(1)
                 
@@ -143,7 +140,6 @@ class KDHindiDubbed : MainAPI() {
 
             if (!sources.isNullOrEmpty()) {
                 for (sourceObj in sources) {
-                    // Send to the Extractor class
                     KDHindiDubbedExtractor().getUrl(sourceObj.source, data, subtitleCallback, callback)
                     found = true
                 }
