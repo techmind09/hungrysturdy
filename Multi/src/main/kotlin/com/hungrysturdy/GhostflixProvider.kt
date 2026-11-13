@@ -43,7 +43,6 @@ class GhostflixProvider : MainAPI() {
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val homePageList = mutableListOf<HomePageList>()
 
-        // Primary: Fetch fast & reliable lists with full posters via TMDB API
         val sep = if (request.data.contains("?")) "&" else "?"
         val tmdbUrl = "https://api.themoviedb.org/3/${request.data}${sep}api_key=$TMDB_API_KEY&page=$page"
 
@@ -73,7 +72,6 @@ class GhostflixProvider : MainAPI() {
             }
         } catch (_: Exception) {}
 
-        // Fallback to Ghostflix HTML scraping if TMDB fails
         val document = app.get(mainUrl).document
         val trendingItems = extractNextFlightTrending(document)
         if (trendingItems.isNotEmpty()) {
@@ -179,40 +177,43 @@ class GhostflixProvider : MainAPI() {
                         val sResp = app.get(sUrl, headers = tmdbHeaders).parsedSafe<TmdbSeasonDetails>()
                         sResp?.episodes?.forEach { ep ->
                             val epNum = ep.episodeNumber ?: return@forEach
-                            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
+                            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
                             episodes.add(
-                                newEpisode(playData) {
-                                    this.name = ep.name ?: "Episode $epNum"
-                                    this.season = sNum
-                                    this.episode = epNum
-                                    this.posterUrl = ep.stillPath?.let { "$TMDB_IMAGE_BASE$it" }
-                                    this.description = ep.overview
-                                }
+                                Episode(
+                                    data = playData,
+                                    name = ep.name ?: "Episode $epNum",
+                                    season = sNum,
+                                    episode = epNum,
+                                    posterUrl = ep.stillPath?.let { "$TMDB_IMAGE_BASE$it" },
+                                    description = ep.overview
+                                )
                             )
                         }
                     } catch (_: Exception) {
                         val epCount = (season.episodeCount ?: 12).coerceAtLeast(1)
                         for (epNum in 1..epCount) {
-                            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
+                            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
                             episodes.add(
-                                newEpisode(playData) {
-                                    this.name = "Episode $epNum"
-                                    this.season = sNum
-                                    this.episode = epNum
-                                }
+                                Episode(
+                                    data = playData,
+                                    name = "Episode $epNum",
+                                    season = sNum,
+                                    episode = epNum
+                                )
                             )
                         }
                     }
                 }
             } else {
                 for (ep in 1..24) {
-                    val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "tv", season = 1, episode = ep))
+                    val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = 1, episode = ep))
                     episodes.add(
-                        newEpisode(playData) {
-                            this.name = "Episode $ep"
-                            this.season = 1
-                            this.episode = ep
-                        }
+                        Episode(
+                            data = playData,
+                            name = "Episode $ep",
+                            season = 1,
+                            episode = ep
+                        )
                     )
                 }
             }
@@ -224,7 +225,7 @@ class GhostflixProvider : MainAPI() {
                 this.year = year
             }
         } else {
-            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "movie"))
+            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "movie"))
             newMovieLoadResponse(title, url, TvType.Movie, playData) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = backdrop ?: poster
@@ -246,7 +247,6 @@ class GhostflixProvider : MainAPI() {
         val s = loadData.season ?: 1
         val e = loadData.episode ?: 1
 
-        // 1. Direct Resolve APIs (Bolt -> vidbolt.pro, Orion -> vidcore.net) as seen in your DevTools Network tab
         val resolveHosts = listOf(
             "Bolt (Direct)" to "https://vidbolt.pro",
             "Orion (VidCore)" to "https://vidcore.net"
@@ -277,7 +277,6 @@ class GhostflixProvider : MainAPI() {
                 } catch (_: Exception) {}
             }
 
-            // Also check embed page directly for inline m3u8 / scripts
             val embedPage = if (isTv) {
                 "$baseHost/tv/$id/$s/$e?theme=E50914&autoPlay=true"
             } else {
@@ -289,7 +288,6 @@ class GhostflixProvider : MainAPI() {
             } catch (_: Exception) {}
         }
 
-        // 2. Ghostflix's other Embed Servers (Orion, VidRift, VidQueen, Vidly, Hindi, Cinezo, Flix, Fast, Nflix, Premium, Mega, Alpha)
         val embedUrls = if (isTv) {
             listOf(
                 "https://vidsrc.xyz/embed/tv/$id/$s-$e",
@@ -334,10 +332,9 @@ class GhostflixProvider : MainAPI() {
     ) {
         val unescaped = text.replace("\\/", "/").replace("\\u0026", "&")
 
-        // Find all m3u8 / mp4 links (including v1.m3u8, video_480p.m3u8?api_key=..., etc.)
         Regex("""https?://[^\s"'<>\\]+\.(?:m3u8|mp4)(?:\?[^\s"'<>\\]*)?""").findAll(unescaped).forEach { match ->
             val streamUrl = match.value
-            if (streamUrl.contains("track_") && !streamUrl.contains("video")) return@forEach // skip audio-only sub-tracks if separate
+            if (streamUrl.contains("track_") && !streamUrl.contains("video")) return@forEach
 
             val isM3u8 = streamUrl.contains(".m3u8")
             val quality = when {
@@ -363,7 +360,6 @@ class GhostflixProvider : MainAPI() {
             )
         }
 
-        // Find subtitles (.vtt / .srt)
         Regex("""https?://[^\s"'<>\\]+\.(?:vtt|srt)(?:\?[^\s"'<>\\]*)?""").findAll(unescaped).forEach { match ->
             val subUrl = match.value
             if (!subUrl.contains("thumbs.vtt", ignoreCase = true)) {
