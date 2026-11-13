@@ -15,7 +15,7 @@ import java.net.URI
 import android.util.Base64
 
 // ==========================================
-// 1. GENERIC EXTRACTORS
+// 1. GENERIC EXTRACTORS (Vidhide, Lulustream, Filemoon)
 // ==========================================
 open class VidhideExtractor : ExtractorApi() {
     override var name = "Vidhide"
@@ -25,6 +25,9 @@ open class VidhideExtractor : ExtractorApi() {
 }
 class Vidsp : VidhideExtractor() { override var mainUrl = "https://vidsp.lol" }
 class VidHideplus : VidhideExtractor() { override var mainUrl = "https://vidhideplus.com" }
+class VidHidedht : VidhideExtractor() { override var mainUrl = "https://dhtpre.com" }
+class Vidhidehub : VidhideExtractor() { override var mainUrl = "https://vidhidehub.com" }
+class Vidhidetoul : VidhideExtractor() { override var mainUrl = "https://toul.hair" }
 class Xtapes : VidhideExtractor() { override var mainUrl = "https://xtapes.porn"; override var name = "Xtapes" }
 
 open class LuluStream : ExtractorApi() {
@@ -88,10 +91,10 @@ class KDHindiDubbedExtractor : ExtractorApi() {
 
             when {
                 lower.contains("momofile.shop") -> extractMomoFile(targetUrl, subtitleCallback, callback)
-                lower.contains("tmbcloud") -> loadExtractor(targetUrl, "https://tmbcloud.lol/", subtitleCallback, callback) // WebView fallback for Turnstile
-                lower.contains("fileditch") || lower.contains("theditch") -> loadExtractor(targetUrl, targetUrl, subtitleCallback, callback) // POST form fallback
-                lower.contains("vikingfile") || lower.contains("vik1ngfile") -> loadExtractor(targetUrl, "https://vikingfile.com/", subtitleCallback, callback) // Turnstile fallback
-                lower.contains("send.now") || lower.contains("sendnow") -> loadExtractor(targetUrl, "https://send.now/", subtitleCallback, callback) // AJAX JS fallback
+                lower.contains("tmbcloud") -> loadExtractor(targetUrl, "https://tmbcloud.lol/", subtitleCallback, callback)
+                lower.contains("fileditch") || lower.contains("theditch") -> loadExtractor(targetUrl, targetUrl, subtitleCallback, callback)
+                lower.contains("vikingfile") || lower.contains("vik1ngfile") -> loadExtractor(targetUrl, "https://vikingfile.com/", subtitleCallback, callback)
+                lower.contains("send.now") || lower.contains("sendnow") -> loadExtractor(targetUrl, "https://send.now/", subtitleCallback, callback)
                 lower.contains("pixeldrain") -> UniversalExtractors.invoke(targetUrl, targetUrl, subtitleCallback, callback)
                 lower.contains("susanexpectcare") || lower.contains("voe.sx") || lower.contains("voe.") -> extractVoe(targetUrl, targetUrl, subtitleCallback, callback)
                 lower.contains("buzzheavier") -> extractBuzzheavier(targetUrl, callback)
