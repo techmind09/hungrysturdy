@@ -3,6 +3,7 @@ package com.hungrysturdy
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.nicehttp.NiceResponse
 import org.json.JSONObject
 import java.net.URI
@@ -15,17 +16,48 @@ class KDHindiDubbedExtractor : ExtractorApi() {
 
     companion object {
         private val cfKiller by lazy { CloudflareKiller() }
+        private const val USER_AGENT =
+            "Mozilla/5.0 (Linux; Android 13; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+    }
+
+    private fun isCloudflareChallenge(res: NiceResponse): Boolean {
+        if (res.code in listOf(403, 503, 429)) return true
+        val body = res.text
+        return body.contains("Just a moment", true) ||
+               body.contains("cf-browser-verification", true) ||
+               body.contains("Verifying...", true) ||
+               body.contains("challenge-platform", true) ||
+               body.contains("_cf_chl_opt", true) ||
+               body.contains("cf-turnstile", true)
     }
 
     private suspend fun cfGet(
         url: String,
         referer: String? = null,
         headers: Map<String, String> = emptyMap(),
+        cookies: Map<String, String> = emptyMap(),
         allowRedirects: Boolean = true
     ): NiceResponse {
-        val res = app.get(url, referer = referer, headers = headers, allowRedirects = allowRedirects)
-        if (res.code in listOf(403, 503) || res.text.contains("Just a moment", true) || res.text.contains("cf-browser-verification", true) || res.text.contains("Verifying...", true)) {
-            return app.get(url, referer = referer, headers = headers, interceptor = cfKiller, allowRedirects = allowRedirects)
+        val reqHeaders = mutableMapOf("User-Agent" to USER_AGENT)
+        reqHeaders.putAll(cfKiller.getCookieHeaders(url).toMap())
+        reqHeaders.putAll(headers)
+
+        val res = app.get(
+            url,
+            referer = referer,
+            headers = reqHeaders,
+            cookies = cookies,
+            allowRedirects = allowRedirects
+        )
+        if (isCloudflareChallenge(res)) {
+            return app.get(
+                url,
+                referer = referer,
+                headers = headers,
+                cookies = cookies,
+                interceptor = cfKiller,
+                allowRedirects = allowRedirects
+            )
         }
         return res
     }
@@ -34,13 +66,48 @@ class KDHindiDubbedExtractor : ExtractorApi() {
         url: String,
         referer: String? = null,
         headers: Map<String, String> = emptyMap(),
-        data: Map<String, String> = emptyMap()
+        cookies: Map<String, String> = emptyMap(),
+        data: Map<String, String> = emptyMap(),
+        allowRedirects: Boolean = true
     ): NiceResponse {
-        val res = app.post(url, referer = referer, headers = headers, data = data)
-        if (res.code in listOf(403, 503) || res.text.contains("Just a moment", true)) {
-            return app.post(url, referer = referer, headers = headers, data = data, interceptor = cfKiller)
+        val reqHeaders = mutableMapOf("User-Agent" to USER_AGENT)
+        reqHeaders.putAll(cfKiller.getCookieHeaders(url).toMap())
+        reqHeaders.putAll(headers)
+
+        val res = app.post(
+            url,
+            referer = referer,
+            headers = reqHeaders,
+            cookies = cookies,
+            data = data,
+            allowRedirects = allowRedirects
+        )
+        if (isCloudflareChallenge(res)) {
+            return app.post(
+                url,
+                referer = referer,
+                headers = headers,
+                cookies = cookies,
+                data = data,
+                interceptor = cfKiller,
+                allowRedirects = allowRedirects
+            )
         }
         return res
+    }
+
+    private fun buildPlayerHeaders(pageUrl: String, referer: String, extraCookies: Map<String, String> = emptyMap()): Map<String, String> {
+        val map = mutableMapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer" to referer
+        )
+        map.putAll(cfKiller.getCookieHeaders(pageUrl).toMap())
+        if (extraCookies.isNotEmpty()) {
+            val cookieStr = extraCookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+            val existing = map["Cookie"] ?: map["cookie"]
+            map["Cookie"] = if (!existing.isNullOrBlank()) "$existing; $cookieStr" else cookieStr
+        }
+        return map
     }
 
     override suspend fun getUrl(
@@ -54,14 +121,19 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             val lower = targetUrl.lowercase()
 
             when {
+                lower.contains("momofile.shop") && lower.contains(".php?id=") -> {
+                    extractSingleMomoPhp(targetUrl, referer ?: mainUrl, subtitleCallback, callback)
+                }
                 lower.contains("momofile") -> extractMomoFile(targetUrl, subtitleCallback, callback)
                 lower.contains("xcloud") -> extractXCloud(targetUrl, subtitleCallback, callback)
                 lower.contains("tmbcloud") -> extractTmbCloud(targetUrl, subtitleCallback, callback)
                 lower.contains("pixeldrain") -> extractPixelDrain(targetUrl, callback)
                 lower.contains("theditch") || lower.contains("fileditch") -> extractFileDitch(targetUrl, callback)
-                lower.contains("vik1ngfile") || lower.contains("vikingfile") -> extractVikingFile(targetUrl, subtitleCallback, callback)
+                lower.contains("vik1ngfile") || lower.contains("vikingfile") -> extractVikingFile(targetUrl, callback)
                 lower.contains("send.now") || lower.contains("sendnow") -> extractSendNow(targetUrl, callback)
-                lower.contains("susanexpectcare") || lower.contains("voe.sx") -> extractVoe(targetUrl, referer ?: targetUrl, subtitleCallback, callback)
+                lower.contains("susanexpectcare") || lower.contains("voe.sx") || lower.contains("voe.") -> {
+                    extractVoe(targetUrl, referer ?: targetUrl, subtitleCallback, callback)
+                }
                 lower.contains("buzzheavier") -> extractBuzzheavier(targetUrl, callback)
                 lower.contains("kdhindidubbed") || lower.contains("dramacool") -> {
                     val doc = cfGet(targetUrl, referer).document
@@ -97,7 +169,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
     }
 
     // =========================================================================
-    // 1. MOMOFILE.SHOP HANDLER (Online Watching Link 2 + All 5 PHP APIs)
+    // 1. MOMOFILE.SHOP (/d/<id> + ALL 5 PHP ENDPOINTS WITH SESSION COOKIES)
     // =========================================================================
     private suspend fun extractMomoFile(
         url: String,
@@ -109,86 +181,424 @@ class KDHindiDubbedExtractor : ExtractorApi() {
         val fileId = uri.query?.substringAfter("id=")?.substringBefore("&")?.takeIf { it.isNotBlank() }
             ?: uri.path.trimEnd('/').substringAfterLast('/')
 
-        // A) Page HTML scan for Online Watching Link 2 (voe.sx -> susanexpectcare) & any pre-generated buttons
+        val landingUrl = "$baseUrl/d/$fileId"
+        var sessionCookies = emptyMap<String, String>()
+
+        // Step A: Load https://momofile.shop/d/<id> FIRST to get session cookies & HTML streams
         try {
-            val res = cfGet(url, referer = baseUrl)
+            val res = cfGet(landingUrl, referer = baseUrl)
+            sessionCookies = res.cookies
             val doc = res.document
 
-            // Direct video/iframe on MomoFile page
+            // Direct player or iframe on momofile page
             doc.select("video source[src], video[src], iframe[src]").forEach { el ->
-                val src = el.attr("src").trim()
-                if (src.startsWith("http")) {
-                    if (src.contains("voe") || src.contains("susanexpectcare")) {
-                        extractVoe(src, url, subtitleCallback, callback)
-                    } else if (src.contains(".mp4") || src.contains(".mkv") || src.contains(".m3u8")) {
+                val rawSrc = el.attr("src").trim()
+                if (rawSrc.isNotBlank() && !rawSrc.startsWith("javascript")) {
+                    val fullSrc = if (rawSrc.startsWith("/")) "$baseUrl$rawSrc" else rawSrc
+                    if (fullSrc.contains("voe") || fullSrc.contains("susanexpectcare") || fullSrc.contains("/access/")) {
+                        extractVoe(fullSrc, landingUrl, subtitleCallback, callback)
+                    } else if (fullSrc.contains(".mp4") || fullSrc.contains(".mkv") || fullSrc.contains(".m3u8") || fullSrc.contains("/stream")) {
                         callback.invoke(
                             newExtractorLink(
                                 source = "MomoFile",
-                                name = "MomoFile [Direct Player]",
-                                url = src,
-                                type = if (src.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                name = "MomoFile [Direct Stream]",
+                                url = fullSrc,
+                                type = if (fullSrc.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                             ) {
-                                this.quality = getQualityFromName(doc.title())
-                                this.referer = url
+                                this.quality = Qualities.P720.value
+                                this.referer = landingUrl
+                                this.headers = buildPlayerHeaders(landingUrl, landingUrl, sessionCookies)
                             }
                         )
                     }
                 }
             }
 
-            // All anchor buttons (Online Watching Link 2, Download from PixelDrain, etc.)
-            val anchors = doc.select("a[href]")
-            anchors.amap { a ->
-                val href = a.attr("href").trim()
+            // Anchors on momofile page (Online Watching Link 2, etc.)
+            doc.select("a[href]").amap { a ->
+                val rawHref = a.attr("href").trim()
                 val text = a.text().trim()
-                if (href.startsWith("http") && !href.contains(uri.host)) {
-                    when {
-                        href.contains("voe.sx") || href.contains("susanexpectcare") || text.contains("Online Watching", true) -> {
-                            extractVoe(href, url, subtitleCallback, callback)
-                        }
-                        href.contains("pixeldrain") -> extractPixelDrain(href, callback)
-                        href.contains("fileditch") || href.contains("theditch") -> extractFileDitch(href, callback)
-                        href.contains("vik1ngfile") || href.contains("vikingfile") -> extractVikingFile(href, subtitleCallback, callback)
-                        href.contains("send.now") -> extractSendNow(href, callback)
-                        href.contains("buzzheavier") -> extractBuzzheavier(href, callback)
-                        else -> getUrl(href, url, subtitleCallback, callback)
+                if (rawHref.isNotBlank() && !rawHref.startsWith("#") && !rawHref.startsWith("javascript")) {
+                    val href = if (rawHref.startsWith("/")) "$baseUrl$rawHref" else rawHref
+                    if (text.contains("Online Watching", true) || href.contains("voe") || href.contains("susanexpectcare") || href.contains("/access/")) {
+                        extractVoe(href, landingUrl, subtitleCallback, callback)
+                    } else if (!href.contains(uri.host)) {
+                        getUrl(href, landingUrl, subtitleCallback, callback)
                     }
                 }
             }
         } catch (_: Exception) {}
 
-        // B) Parallel fetch MomoFile PHP APIs (pixeldrain.php, fileditch.php, vikingfile.php, sendnow.php, buzzheavier.php)
+        // Step B: Call all 5 PHP endpoints with the session cookies from /d/<id>
         if (fileId.isNotBlank() && fileId != "d") {
-            val services = listOf("pixeldrain", "fileditch", "vikingfile", "sendnow", "buzzheavier")
+            val services = listOf("pixeldrain", "buzzheavier", "fileditch", "vikingfile", "sendnow")
             services.amap { service ->
-                try {
-                    val endpoint = "$baseUrl/$service.php?id=$fileId"
-                    val apiRes = cfGet(
-                        endpoint,
-                        referer = url,
-                        headers = mapOf("X-Requested-With" to "XMLHttpRequest")
-                    )
-                    val text = apiRes.text.trim()
-                    if (text.startsWith("{")) {
-                        val json = JSONObject(text)
-                        val genUrl = json.optString("url").takeIf { it.startsWith("http") }
-                        if (!genUrl.isNullOrBlank()) {
-                            when (service) {
-                                "pixeldrain" -> extractPixelDrain(genUrl, callback)
-                                "fileditch" -> extractFileDitch(genUrl, callback)
-                                "vikingfile" -> extractVikingFile(genUrl, subtitleCallback, callback)
-                                "sendnow" -> extractSendNow(genUrl, callback)
-                                "buzzheavier" -> extractBuzzheavier(genUrl, callback)
-                            }
-                        }
+                val phpUrl = "$baseUrl/$service.php?id=$fileId"
+                extractSingleMomoPhp(phpUrl, landingUrl, subtitleCallback, callback, sessionCookies)
+            }
+        }
+    }
+
+    private suspend fun extractSingleMomoPhp(
+        phpUrl: String,
+        refererUrl: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+        cookies: Map<String, String> = emptyMap()
+    ) {
+        try {
+            val uri = URI(phpUrl)
+            val baseUrl = "${uri.scheme}://${uri.host}"
+            val apiRes = cfGet(
+                phpUrl,
+                referer = refererUrl,
+                cookies = cookies,
+                headers = mapOf(
+                    "Accept" to "application/json, text/javascript, */*; q=0.01",
+                    "X-Requested-With" to "XMLHttpRequest"
+                )
+            )
+            val text = apiRes.text.trim()
+            if (text.startsWith("{")) {
+                val json = JSONObject(text)
+                val rawUrl = json.optString("url").trim()
+                if (rawUrl.isNotBlank()) {
+                    val resolvedUrl = if (rawUrl.startsWith("/")) "$baseUrl$rawUrl" else rawUrl
+                    when {
+                        phpUrl.contains("pixeldrain") || resolvedUrl.contains("pixeldrain") -> extractPixelDrain(resolvedUrl, callback)
+                        phpUrl.contains("buzzheavier") || resolvedUrl.contains("buzzheavier") -> extractBuzzheavier(resolvedUrl, callback)
+                        phpUrl.contains("fileditch") || resolvedUrl.contains("fileditch") || resolvedUrl.contains("theditch") -> extractFileDitch(resolvedUrl, callback)
+                        phpUrl.contains("vikingfile") || resolvedUrl.contains("vikingfile") || resolvedUrl.contains("vik1ngfile") -> extractVikingFile(resolvedUrl, callback)
+                        phpUrl.contains("sendnow") || resolvedUrl.contains("send.now") -> extractSendNow(resolvedUrl, callback)
+                        else -> getUrl(resolvedUrl, refererUrl, subtitleCallback, callback)
                     }
-                } catch (_: Exception) {}
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    // =========================================================================
+    // 2. XCLOUD REAL STREAM DOMAIN (https://stream.xcloud1.lol/b96d380968c6630)
+    // =========================================================================
+    private suspend fun extractXCloud(
+        url: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val rawSegment = URI(url).path.trimEnd('/').substringAfterLast('/')
+            val cleanId = rawSegment.removePrefix("preview_")
+            if (cleanId.isBlank()) return
+
+            val streamDomainUrl = "https://stream.xcloud1.lol/$cleanId"
+            val downloadDomainUrl = "https://xcloud1.lol/$cleanId"
+
+            // A) Check https://stream.xcloud1.lol/<id> FIRST (Real streaming domain)
+            try {
+                val streamRes = cfGet(streamDomainUrl, referer = "https://xcloud1.lol/", allowRedirects = true)
+                val streamDoc = streamRes.document
+                val streamHost = "${URI(streamRes.url).scheme}://${URI(streamRes.url).host}"
+
+                // 1. Check if stream.xcloud1.lol itself redirected to a direct video or has <video>/<source>
+                val contentType = streamRes.headers["content-type"] ?: streamRes.headers["Content-Type"] ?: ""
+                if (contentType.contains("video", true) || contentType.contains("octet-stream", true) ||
+                    streamRes.url.endsWith(".mkv", true) || streamRes.url.endsWith(".mp4", true) || streamRes.url.contains(".m3u8")) {
+                    callback.invoke(
+                        newExtractorLink(
+                            source = "XCloud",
+                            name = "XCloud [stream.xcloud1.lol]",
+                            url = streamRes.url,
+                            type = if (streamRes.url.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            this.quality = Qualities.P720.value
+                            this.referer = "https://stream.xcloud1.lol/"
+                            this.headers = buildPlayerHeaders(streamDomainUrl, "https://stream.xcloud1.lol/", streamRes.cookies)
+                        }
+                    )
+                }
+
+                // 2. Check <video> / <source> / JS player source inside stream.xcloud1.lol/<id>
+                val videoTagSrc = streamDoc.selectFirst("video source[src], video[src]")?.attr("src")?.trim()
+                    ?: Regex("""(?:file|src|url|sources)\s*[:=]\s*\[?\s*\{?\s*(?:file\s*:\s*)?["'](https?://[^"']+|/[^"']+)["']""").find(streamRes.text)?.groupValues?.get(1)
+                    ?: Regex("""https?://[^\s"'<>]+(?:\.mp4|\.mkv|\.m3u8|/apis/[^\s"'<>]+)""").find(streamRes.text)?.value
+
+                if (!videoTagSrc.isNullOrBlank()) {
+                    val fullStream = if (videoTagSrc.startsWith("/")) "$streamHost$videoTagSrc" else videoTagSrc
+                    callback.invoke(
+                        newExtractorLink(
+                            source = "XCloud",
+                            name = "XCloud [Stream Player]",
+                            url = fullStream,
+                            type = if (fullStream.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            this.quality = Qualities.P720.value
+                            this.referer = streamDomainUrl
+                            this.headers = buildPlayerHeaders(streamDomainUrl, streamDomainUrl, streamRes.cookies)
+                        }
+                    )
+                }
+
+                // 3. Check any download/stream buttons inside stream.xcloud1.lol/<id>
+                parseXCloudButtons(streamDoc, streamHost, streamRes.url, streamRes.cookies, subtitleCallback, callback)
+            } catch (_: Exception) {}
+
+            // B) Also check https://xcloud1.lol/<id> for [20GBPS], [Cloud], [10Gbps], [Fast] buttons
+            try {
+                val dlRes = cfGet(downloadDomainUrl, referer = url, allowRedirects = true)
+                val dlHost = "${URI(dlRes.url).scheme}://${URI(dlRes.url).host}"
+                parseXCloudButtons(dlRes.document, dlHost, dlRes.url, dlRes.cookies, subtitleCallback, callback)
+            } catch (_: Exception) {}
+        } catch (_: Exception) {}
+    }
+
+    private suspend fun parseXCloudButtons(
+        doc: org.jsoup.nodes.Document,
+        hostBase: String,
+        pageUrl: String,
+        cookies: Map<String, String>,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val buttons = doc.select("a[href]").filter { a ->
+            val h = a.attr("href").trim()
+            val t = a.text().trim()
+            (h.contains("/apis/") || h.contains("stream.xcloud") || h.contains("stepnestph") ||
+             h.contains("workers.dev") || h.contains("r2.dev") || h.contains("gofile") ||
+             h.contains(".mkv") || h.contains(".mp4") || t.contains("Download [", true) || t.contains("Stream", true)) &&
+            !h.endsWith(URI(pageUrl).path)
+        }
+
+        buttons.amap { btn ->
+            val rawHref = btn.attr("href").trim()
+            val fullHref = if (rawHref.startsWith("/")) "$hostBase$rawHref" else rawHref
+            val btnLabel = btn.text().trim().ifBlank { "Server" }
+
+            when {
+                fullHref.contains("gofile") -> loadExtractor(fullHref, pageUrl, subtitleCallback, callback)
+                fullHref.contains("/apis/") -> {
+                    val apiRes = cfGet(fullHref, referer = pageUrl, cookies = cookies, allowRedirects = false)
+                    val redirectUrl = apiRes.headers["location"] ?: apiRes.headers["Location"]
+                    val finalStream = if (!redirectUrl.isNullOrBlank() && redirectUrl.startsWith("http")) {
+                        redirectUrl
+                    } else {
+                        cfGet(fullHref, referer = pageUrl, cookies = cookies, allowRedirects = true).url
+                    }
+
+                    if (finalStream.startsWith("http") && !finalStream.contains("/apis/")) {
+                        callback.invoke(
+                            newExtractorLink(
+                                source = "XCloud",
+                                name = "XCloud - $btnLabel",
+                                url = finalStream,
+                                type = ExtractorLinkType.VIDEO
+                            ) {
+                                this.quality = Qualities.P720.value
+                                this.referer = "$hostBase/"
+                                this.headers = buildPlayerHeaders(pageUrl, "$hostBase/", cookies)
+                            }
+                        )
+                    }
+                }
+                fullHref.startsWith("http") -> {
+                    callback.invoke(
+                        newExtractorLink(
+                            source = "XCloud",
+                            name = "XCloud - $btnLabel",
+                            url = fullHref,
+                            type = if (fullHref.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            this.quality = Qualities.P720.value
+                            this.referer = "$hostBase/"
+                            this.headers = buildPlayerHeaders(pageUrl, "$hostBase/", cookies)
+                        }
+                    )
+                }
             }
         }
     }
 
     // =========================================================================
-    // 2. PIXELDRAIN (https://pixeldrain.dev/u/z6TyKYwY -> /api/file/z6TyKYwY)
+    // 3. TMBCLOUD.LOL REAL FLOW (step2.php + gen-link.php + WebView Fallback)
+    // =========================================================================
+    private suspend fun extractTmbCloud(
+        url: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val res = cfGet(url, referer = "https://tmbcloud.lol/", allowRedirects = true)
+            val doc = res.document
+            val uri = URI(res.url)
+            val baseUrl = "${uri.scheme}://${uri.host}"
+            val cookies = res.cookies
+
+            // Extract shareable /download/<id> link if present on /links/<id> page (as seen in 28891.jpg)
+            val copyInputUrl = doc.selectFirst("input[value*='/download/']")?.attr("value")?.trim()
+            val pageId = doc.selectFirst("button[data-page], a[data-page], div[data-page]")?.attr("data-page")?.takeIf { it.isNotBlank() }
+                ?: Regex("""page_id\s*[:=]\s*['"]([a-zA-Z0-9]+)['"]""").find(res.text)?.groupValues?.get(1)
+                ?: copyInputUrl?.trimEnd('/')?.substringAfterLast('/')
+                ?: uri.path.trimEnd('/').substringAfterLast('/').takeIf { it.isNotBlank() && it != "download" && it != "links" }
+
+            val tokenB = Regex("""token_b\s*[:=]\s*['"]([a-zA-Z0-9]+)['"]""").find(res.text)?.groupValues?.get(1)
+                ?: doc.selectFirst("input[name='token_b'], button[data-token]")?.let { it.attr("value").ifBlank { it.attr("data-token") } }
+                ?: ""
+
+            // 1. Try direct hrefs on buttons if any point to /fslv2/ or external hosts
+            doc.select("a[href], button[data-href]").forEach { el ->
+                val rawH = el.attr("href").ifBlank { el.attr("data-href") }.trim()
+                if (rawH.isNotBlank() && !rawH.startsWith("#") && !rawH.startsWith("javascript")) {
+                    val fullH = if (rawH.startsWith("/")) "$baseUrl$rawH" else rawH
+                    if (fullH.contains("/fslv2/") || fullH.contains("/fastcdn/") || fullH.contains("/r2/")) {
+                        resolveTmbSubPage(fullH, res.url, cookies, callback)
+                    }
+                }
+            }
+
+            if (!pageId.isNullOrBlank()) {
+                val typesToTry = listOf("fslv2new", "fastcdnv2", "r2")
+
+                typesToTry.amap { dataType ->
+                    // Method A: POST to step2.php (seen in 28892.jpg)
+                    try {
+                        val step2Res = cfPost(
+                            "$baseUrl/step2.php",
+                            referer = res.url,
+                            cookies = cookies,
+                            headers = mapOf(
+                                "Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8",
+                                "X-Requested-With" to "XMLHttpRequest",
+                                "Origin" to baseUrl
+                            ),
+                            data = mapOf(
+                                "type" to dataType,
+                                "page_id" to pageId,
+                                "page" to pageId,
+                                "token_b" to tokenB
+                            )
+                        )
+                        handleTmbJsonResponse(step2Res.text, dataType, baseUrl, res.url, cookies, callback)
+                    } catch (_: Exception) {}
+
+                    // Method B: POST to gen-link.php (seen in 28895.jpg)
+                    try {
+                        val genRes = cfPost(
+                            "$baseUrl/gen-link.php",
+                            referer = res.url,
+                            cookies = cookies,
+                            headers = mapOf(
+                                "Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8",
+                                "X-Requested-With" to "XMLHttpRequest",
+                                "Origin" to baseUrl
+                            ),
+                            data = mapOf(
+                                "type" to dataType,
+                                "page_id" to pageId,
+                                "token_b" to tokenB
+                            )
+                        )
+                        handleTmbJsonResponse(genRes.text, dataType, baseUrl, res.url, cookies, callback)
+                    } catch (_: Exception) {}
+
+                    // Method C: POST to /download/<pageId>
+                    try {
+                        val dlRes = cfPost(
+                            "$baseUrl/download/$pageId",
+                            referer = res.url,
+                            cookies = cookies,
+                            headers = mapOf(
+                                "Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8",
+                                "X-Requested-With" to "XMLHttpRequest",
+                                "Origin" to baseUrl
+                            ),
+                            data = mapOf("type" to dataType, "page" to pageId)
+                        )
+                        handleTmbJsonResponse(dlRes.text, dataType, baseUrl, res.url, cookies, callback)
+                    } catch (_: Exception) {}
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    private suspend fun resolveTmbSubPage(
+        subUrl: String,
+        referer: String,
+        cookies: Map<String, String>,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val res = cfGet(subUrl, referer = referer, cookies = cookies, allowRedirects = true)
+            if (res.url != subUrl && (res.url.contains(".mkv") || res.url.contains(".mp4") || res.url.contains("r2.dev") || res.url.contains("workers.dev"))) {
+                callback.invoke(
+                    newExtractorLink(
+                        source = "TMBCloud",
+                        name = "TMBCloud [Direct]",
+                        url = res.url,
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.quality = Qualities.P1080.value
+                        this.referer = referer
+                    }
+                )
+            }
+        } catch (_: Exception) {}
+    }
+
+    private suspend fun handleTmbJsonResponse(
+        rawText: String,
+        dataType: String,
+        baseUrl: String,
+        refererUrl: String,
+        cookies: Map<String, String>,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val text = rawText.trim()
+        if (!text.startsWith("{")) return
+        val json = JSONObject(text)
+        val rawLink = json.optString("url").ifBlank {
+            json.optString("download_url").ifBlank {
+                json.optString("link").ifBlank { json.optString("redirect") }
+            }
+        }
+        if (rawLink.isBlank()) return
+        val fullLink = if (rawLink.startsWith("/")) "$baseUrl$rawLink" else rawLink
+
+        // If step2.php returned an intermediate /fslv2/<token> page, follow it
+        if (fullLink.contains(URI(baseUrl).host) && !fullLink.contains(".mkv") && !fullLink.contains(".mp4")) {
+            val subRes = cfGet(fullLink, referer = refererUrl, cookies = cookies, allowRedirects = true)
+            val directInSub = subRes.document.selectFirst("a[href*='.mkv'], a[href*='.mp4'], a[href*='r2.dev'], a[href*='workers.dev'], a.btn[href*='http']")?.attr("href")
+                ?: Regex("""https?://[^\s"'<>]+(?:\.mkv|\.mp4|r2\.dev[^\s"'<>]+|workers\.dev[^\s"'<>]+)""").find(subRes.text)?.value
+            if (!directInSub.isNullOrBlank()) {
+                callback.invoke(
+                    newExtractorLink(
+                        source = "TMBCloud",
+                        name = "TMBCloud [${dataType.uppercase()}]",
+                        url = directInSub,
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.quality = Qualities.P1080.value
+                        this.referer = "$baseUrl/"
+                        this.headers = buildPlayerHeaders(refererUrl, "$baseUrl/", cookies)
+                    }
+                )
+            }
+        } else if (fullLink.startsWith("http")) {
+            callback.invoke(
+                newExtractorLink(
+                    source = "TMBCloud",
+                    name = "TMBCloud [${dataType.uppercase()}]",
+                    url = fullLink,
+                    type = if (fullLink.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.quality = Qualities.P1080.value
+                    this.referer = "$baseUrl/"
+                    this.headers = buildPlayerHeaders(refererUrl, "$baseUrl/", cookies)
+                }
+            )
+        }
+    }
+
+    // =========================================================================
+    // 4. PIXELDRAIN (https://pixeldrain.dev/u/ID -> /api/file/ID)
     // =========================================================================
     private suspend fun extractPixelDrain(url: String, callback: (ExtractorLink) -> Unit) {
         val fileId = url.trimEnd('/').substringAfterLast('/').substringBefore("?")
@@ -211,146 +621,161 @@ class KDHindiDubbedExtractor : ExtractorApi() {
     }
 
     // =========================================================================
-    // 3. FILEDITCH / THEDITCH (https://fileditchvids.st -> https://theditch.st/jypzukwy)
+    // 5. FILEDITCH / THEDITCH (https://theditch.st/<id>)
     // =========================================================================
     private suspend fun extractFileDitch(url: String, callback: (ExtractorLink) -> Unit) {
         try {
             val res = cfGet(url, allowRedirects = true)
-            val finalUrl = res.url
-            val contentType = res.headers["content-type"] ?: res.headers["Content-Type"] ?: ""
+            val currentUrl = res.url
+            val doc = res.document
 
-            // Agar URL khud direct video file hai
-            if (contentType.contains("video", true) || contentType.contains("octet-stream", true) ||
-                finalUrl.endsWith(".mkv", true) || finalUrl.endsWith(".mp4", true)) {
-                callback.invoke(
-                    newExtractorLink(
-                        source = "TheDitch",
-                        name = "TheDitch [Direct]",
-                        url = finalUrl,
-                        type = ExtractorLinkType.VIDEO
-                    ) {
-                        this.quality = Qualities.P720.value
-                        this.referer = "https://fileditchvids.st/"
-                    }
-                )
-                return
+            val ditchPageLink = doc.selectFirst("input[value*='theditch'], a[href*='theditch']")?.let {
+                it.attr("value").ifBlank { it.attr("href") }
+            } ?: Regex("""https?://[a-zA-Z0-9.-]*theditch\.[a-z]+/[a-zA-Z0-9_-]+""").find(res.text)?.value
+
+            val targetRes = if (!ditchPageLink.isNullOrBlank() && ditchPageLink != currentUrl) {
+                cfGet(ditchPageLink.trim(), referer = currentUrl, cookies = res.cookies, allowRedirects = true)
+            } else {
+                res
             }
 
-            val doc = res.document
-            // Video 00:52 mein input box aur download button dono mein theditch.st link hota hai
-            val extractedLink = doc.selectFirst("input[value*='theditch'], a[href*='theditch'], a.download-button[href], video source[src], video[src], a[href*='download']")?.let {
-                it.attr("value").ifBlank { it.attr("href") }.ifBlank { it.attr("src") }
-            } ?: Regex("""https?://[a-zA-Z0-9.-]*theditch\.[a-z]+/[^\s"'<>]+""").find(res.text)?.value
+            val finalDoc = targetRes.document
+            val finalPageUrl = targetRes.url
+            val baseHost = "${URI(finalPageUrl).scheme}://${URI(finalPageUrl).host}"
 
-            val streamUrl = if (!extractedLink.isNullOrBlank()) fixUrl(extractedLink.trim()) else finalUrl
-            if (streamUrl.startsWith("http")) {
-                callback.invoke(
-                    newExtractorLink(
-                        source = "TheDitch",
-                        name = "TheDitch [Direct Stream]",
-                        url = streamUrl,
-                        type = ExtractorLinkType.VIDEO
-                    ) {
-                        this.quality = Qualities.P720.value
-                        this.referer = finalUrl
-                    }
-                )
+            var directFileUrl = finalDoc.selectFirst(
+                "video source[src], video[src], a.download-button[href], a#download-btn[href], a[href*='fileditchfiles'], a[href*='b-cdn.net'], a[href*='.mkv'], a[href*='.mp4'], a[download][href]"
+            )?.let {
+                it.attr("src").ifBlank { it.attr("href") }
+            }
+
+            if (directFileUrl.isNullOrBlank()) {
+                directFileUrl = Regex("""https?://[^\s"'<>]+(?:\.mkv|\.mp4|fileditchfiles[^\s"'<>]+|/file/[^\s"'<>]+)""").find(targetRes.text)?.value
+            }
+
+            if (!directFileUrl.isNullOrBlank()) {
+                val fullStreamUrl = if (directFileUrl.startsWith("/")) "$baseHost$directFileUrl" else directFileUrl.trim()
+                if (fullStreamUrl != finalPageUrl) {
+                    callback.invoke(
+                        newExtractorLink(
+                            source = "TheDitch",
+                            name = "TheDitch [Direct]",
+                            url = fullStreamUrl,
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.quality = Qualities.P720.value
+                            this.referer = finalPageUrl
+                            this.headers = buildPlayerHeaders(finalPageUrl, finalPageUrl, targetRes.cookies)
+                        }
+                    )
+                }
             }
         } catch (_: Exception) {}
     }
 
     // =========================================================================
-    // 4. VIKINGFILE (https://vik1ngfile.site/f/qw3rACmN5B & https://vikingfile.com/f/qw3rACmN5B)
+    // 6. VIKINGFILE (https://vik1ngfile.site/f/<id> & https://vikingfile.com/f/<id>)
     // =========================================================================
     private suspend fun extractVikingFile(
         url: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
         try {
             val fileId = url.trimEnd('/').substringAfterLast('/').substringBefore("?")
+            if (fileId.isBlank()) return
+
             val urlsToTry = listOf(
-                url,
                 "https://vikingfile.com/f/$fileId",
-                "https://vik1ngfile.site/f/$fileId"
+                "https://vik1ngfile.site/f/$fileId",
+                url
             ).distinct()
 
             for (target in urlsToTry) {
                 try {
-                    val res = cfGet(target, referer = url)
+                    val res = cfGet(target, referer = "https://momofile.shop/")
                     val doc = res.document
                     val base = "${URI(res.url).scheme}://${URI(res.url).host}"
 
-                    // 1. Check <video> / <source> tag or direct download button
-                    val directMedia = doc.selectFirst("video source[src], video[src], a#download-url[href], a.btn[href*='http'], a[href*='.mkv'], a[href*='.mp4'], a[href*='.m3u8']")?.let {
+                    var mediaUrl = doc.selectFirst("video source[src], video[src], a#download-url[href], a[download][href]")?.let {
                         it.attr("src").ifBlank { it.attr("href") }
-                    } ?: Regex("""https?://[^\s"'<>]+\.(?:mp4|mkv|m3u8)[^\s"'<>]*""").find(res.text)?.value
-                    ?: Regex("""(?:file|src|url|downloadUrl)\s*[:=]\s*["'](https?://[^"']+)["']""").find(res.text)?.groupValues?.get(1)
+                    }
 
-                    if (!directMedia.isNullOrBlank() && !directMedia.endsWith("/f/$fileId")) {
-                        val finalStream = if (directMedia.startsWith("/")) "$base$directMedia" else directMedia
-                        callback.invoke(
-                            newExtractorLink(
-                                source = "VikingFile",
-                                name = "VikingFile [Direct]",
-                                url = finalStream,
-                                type = if (finalStream.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.quality = Qualities.P720.value
-                                this.referer = "$base/"
-                                this.headers = cfKiller.getCookieHeaders(res.url).toMap()
-                            }
-                        )
-                        return
+                    if (mediaUrl.isNullOrBlank()) {
+                        val dlAnchor = doc.select("a[href]").firstOrNull { a ->
+                            val t = a.text().trim()
+                            val h = a.attr("href").trim()
+                            t.equals("Download", true) && h.isNotBlank() && !h.startsWith("#") && !h.startsWith("javascript")
+                        }
+                        mediaUrl = dlAnchor?.attr("href")
+                    }
+
+                    if (mediaUrl.isNullOrBlank()) {
+                        mediaUrl = Regex("""(?:file|src|videoUrl|downloadUrl|url)\s*[:=]\s*["'](https?://[^"']+(?:\.mp4|\.mkv|\.m3u8|/d/[^"']+|/dl/[^"']+))["']""", RegexOption.IGNORE_CASE)
+                            .find(res.text)?.groupValues?.get(1)
+                    }
+
+                    if (!mediaUrl.isNullOrBlank()) {
+                        val resolvedUrl = if (mediaUrl.startsWith("/")) "$base$mediaUrl" else mediaUrl.trim()
+                        if (!resolvedUrl.endsWith("/f/$fileId")) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = "VikingFile",
+                                    name = "VikingFile [Direct]",
+                                    url = resolvedUrl,
+                                    type = if (resolvedUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                ) {
+                                    this.quality = Qualities.P720.value
+                                    this.referer = res.url
+                                    this.headers = buildPlayerHeaders(res.url, res.url, res.cookies)
+                                }
+                            )
+                            return
+                        }
                     }
                 } catch (_: Exception) {}
             }
-
-            loadExtractor(url, url, subtitleCallback, callback)
         } catch (_: Exception) {}
     }
 
     // =========================================================================
-    // 5. SEND.NOW (https://send.now/vdzny9gb149c)
+    // 7. SEND.NOW (https://send.now/<id>)
     // =========================================================================
     private suspend fun extractSendNow(url: String, callback: (ExtractorLink) -> Unit) {
         try {
             val res = cfGet(url, referer = "https://send.now/")
             val doc = res.document
+            var dlLink: String? = null
 
-            // Check direct video/download link first
-            var dlLink = doc.selectFirst("video source[src], video[src], a#download_link[href], a.btn-download[href], a[href*='.mkv'], a[href*='.mp4']")?.let {
-                it.attr("src").ifBlank { it.attr("href") }
-            }
+            val form = doc.selectFirst("form[name='F1'], form[method='POST']")
+            if (form != null) {
+                val postData = mutableMapOf<String, String>()
+                form.select("input[name]").forEach { input ->
+                    postData[input.attr("name")] = input.attr("value")
+                }
+                postData["op"] = "download2"
+                if (!postData.containsKey("id")) {
+                    postData["id"] = url.trimEnd('/').substringAfterLast('/')
+                }
 
-            // XFileSharing form POST (op=download2)
-            if (dlLink.isNullOrBlank()) {
-                val form = doc.selectFirst("form[name='F1'], form[method='POST']")
-                if (form != null) {
-                    val postData = mutableMapOf<String, String>()
-                    form.select("input[name]").forEach { input ->
-                        postData[input.attr("name")] = input.attr("value")
-                    }
-                    if (!postData.containsKey("op")) postData["op"] = "download2"
+                val postRes = cfPost(
+                    res.url,
+                    referer = res.url,
+                    cookies = res.cookies,
+                    data = postData,
+                    allowRedirects = false
+                )
 
-                    val postRes = app.post(
-                        res.url,
-                        referer = res.url,
-                        data = postData,
-                        interceptor = cfKiller,
-                        allowRedirects = false
-                    )
-                    val redirectLoc = postRes.headers["location"] ?: postRes.headers["Location"]
-                    dlLink = if (!redirectLoc.isNullOrBlank() && redirectLoc.startsWith("http")) {
-                        redirectLoc
-                    } else {
-                        postRes.document.selectFirst("a#download_link[href], a.btn[href*='http'], span#direct_link a[href], a[href*='.mkv'], a[href*='.mp4']")?.attr("href")
-                            ?: Regex("""https?://[^\s"'<>]+\.(?:mkv|mp4)[^\s"'<>]*""").find(postRes.text)?.value
-                    }
+                val redirectLoc = postRes.headers["location"] ?: postRes.headers["Location"]
+                dlLink = if (!redirectLoc.isNullOrBlank() && redirectLoc.startsWith("http")) {
+                    redirectLoc
+                } else {
+                    postRes.document.selectFirst("a#download_link[href], span#direct_link a[href], a[href*='.mkv'], a[href*='.mp4'], video source[src]")?.let {
+                        it.attr("href").ifBlank { it.attr("src") }
+                    } ?: Regex("""https?://[^\s"'<>]+(?:\.mkv|\.mp4|/d/[a-zA-Z0-9]+/[^\s"'<>]+)""").find(postRes.text)?.value
                 }
             }
 
-            if (!dlLink.isNullOrBlank() && dlLink.startsWith("http")) {
+            if (!dlLink.isNullOrBlank() && dlLink.startsWith("http") && dlLink.trim() != res.url) {
                 callback.invoke(
                     newExtractorLink(
                         source = "SendNow",
@@ -360,6 +785,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                     ) {
                         this.quality = Qualities.P720.value
                         this.referer = "https://send.now/"
+                        this.headers = buildPlayerHeaders(res.url, "https://send.now/", res.cookies)
                     }
                 )
             }
@@ -367,7 +793,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
     }
 
     // =========================================================================
-    // 6. VOE.SX / SUSANEXPECTCARE.COM ("Online Watching Link 2")
+    // 8. VOE.SX / SUSANEXPECTCARE.COM
     // =========================================================================
     private suspend fun extractVoe(
         url: String,
@@ -380,7 +806,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             var html = res.text
             var finalUrl = res.url
 
-            // Follow JS window.location.href redirect (voe.sx -> susanexpectcare.com)
             val jsRedirect = Regex("""window\.location(?:\.href)?\s*=\s*['"](https?://[^'"]+)['"]""").find(html)?.groupValues?.get(1)
             if (!jsRedirect.isNullOrBlank()) {
                 val res2 = cfGet(jsRedirect, referer = finalUrl, allowRedirects = true)
@@ -390,38 +815,38 @@ class KDHindiDubbedExtractor : ExtractorApi() {
 
             val hostBase = "${URI(finalUrl).scheme}://${URI(finalUrl).host}/"
 
-            // 1. Base64 or plain 'hls' / 'mp4' key in script
             val hlsMatch = Regex("""['"]hls['"]\s*:\s*['"]([^'"]+)['"]""").find(html)?.groupValues?.get(1)
             if (!hlsMatch.isNullOrBlank()) {
                 val decoded = if (hlsMatch.startsWith("http")) hlsMatch else runCatching { String(Base64.decode(hlsMatch, Base64.DEFAULT)) }.getOrNull()
                 if (!decoded.isNullOrBlank() && decoded.startsWith("http")) {
                     callback.invoke(
                         newExtractorLink(
-                            source = "SusanExpectCare (VOE)",
+                            source = "SusanExpectCare",
                             name = "SusanExpectCare [Online Watch]",
-                            url = decoded,
+                            url = decoded.trim(),
                             type = ExtractorLinkType.M3U8
                         ) {
                             this.quality = Qualities.P720.value
                             this.referer = hostBase
+                            this.headers = buildPlayerHeaders(finalUrl, hostBase)
                         }
                     )
                     return
                 }
             }
 
-            // 2. Direct .m3u8 URL in HTML
             val rawM3u8 = Regex("""https?://[^\s"'<>]+\.m3u8[^\s"'<>]*""").find(html)?.value
             if (!rawM3u8.isNullOrBlank()) {
                 callback.invoke(
                     newExtractorLink(
-                        source = "SusanExpectCare (VOE)",
+                        source = "SusanExpectCare",
                         name = "SusanExpectCare [Online Watch]",
                         url = rawM3u8,
                         type = ExtractorLinkType.M3U8
                     ) {
                         this.quality = Qualities.P720.value
                         this.referer = hostBase
+                        this.headers = buildPlayerHeaders(finalUrl, hostBase)
                     }
                 )
                 return
@@ -429,203 +854,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
 
             loadExtractor(finalUrl, referer, subtitleCallback, callback)
         } catch (_: Exception) {}
-    }
-
-    // =========================================================================
-    // 7. XCLOUD (https://xcloud.tattoo/ID & https://xcloud1.lol/preview_ID -> https://xcloud1.lol/ID)
-    // =========================================================================
-    private suspend fun extractXCloud(
-        url: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        try {
-            val rawSegment = URI(url).path.trimEnd('/').substringAfterLast('/')
-            val cleanId = rawSegment.removePrefix("preview_")
-            if (cleanId.isBlank()) return
-
-            // Video 01:24 - 01:36: Direct download buttons hamesha https://xcloud1.lol/<cleanId> par milte hain
-            val candidatePages = listOf(
-                "https://xcloud1.lol/$cleanId",
-                "https://xcloud1.lol/preview_$cleanId",
-                url
-            ).distinct()
-
-            for (pageUrl in candidatePages) {
-                try {
-                    val res = cfGet(pageUrl, referer = url)
-                    val doc = res.document
-                    val hostBase = "${URI(res.url).scheme}://${URI(res.url).host}"
-
-                    // Check if preview page has direct <video> tag
-                    doc.select("video source[src], video[src]").forEach { v ->
-                        val vSrc = v.attr("src").trim()
-                        if (vSrc.startsWith("http")) {
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = "XCloud",
-                                    name = "XCloud [Online Stream]",
-                                    url = vSrc,
-                                    type = ExtractorLinkType.VIDEO
-                                ) {
-                                    this.quality = Qualities.P720.value
-                                    this.referer = "$hostBase/"
-                                }
-                            )
-                        }
-                    }
-
-                    val buttons = doc.select("a[href]").filter { a ->
-                        val h = a.attr("href").trim()
-                        val t = a.text().trim()
-                        (h.contains("/apis/") || h.contains("stepnestph") || h.contains("workers.dev") ||
-                         h.contains("r2.dev") || h.contains("gofile") || t.contains("Download [", true)) &&
-                        !h.endsWith("/$cleanId") && !h.contains("preview_")
-                    }
-
-                    if (buttons.isNotEmpty()) {
-                        buttons.amap { btn ->
-                            val rawHref = btn.attr("href").trim()
-                            val fullHref = if (rawHref.startsWith("/")) "$hostBase$rawHref" else rawHref
-                            val btnLabel = btn.text().trim().ifBlank { "Server" }
-
-                            if (fullHref.contains("gofile")) {
-                                loadExtractor(fullHref, res.url, subtitleCallback, callback)
-                            } else if (fullHref.contains("/apis/")) {
-                                // Resolve /apis/ redirect to get direct CDN URL (e.g. cdn.stepnestph.com)
-                                val apiRes = cfGet(fullHref, referer = res.url, allowRedirects = false)
-                                val redirectUrl = apiRes.headers["location"] ?: apiRes.headers["Location"]
-                                val finalStream = if (!redirectUrl.isNullOrBlank() && redirectUrl.startsWith("http")) {
-                                    redirectUrl
-                                } else {
-                                    cfGet(fullHref, referer = res.url, allowRedirects = true).url
-                                }
-
-                                if (finalStream.startsWith("http") && !finalStream.contains("/apis/")) {
-                                    callback.invoke(
-                                        newExtractorLink(
-                                            source = "XCloud",
-                                            name = "XCloud - $btnLabel",
-                                            url = finalStream,
-                                            type = ExtractorLinkType.VIDEO
-                                        ) {
-                                            this.quality = Qualities.P720.value
-                                            this.referer = "$hostBase/"
-                                        }
-                                    )
-                                }
-                            } else if (fullHref.startsWith("http")) {
-                                callback.invoke(
-                                    newExtractorLink(
-                                        source = "XCloud",
-                                        name = "XCloud - $btnLabel",
-                                        url = fullHref,
-                                        type = ExtractorLinkType.VIDEO
-                                    ) {
-                                        this.quality = Qualities.P720.value
-                                        this.referer = "$hostBase/"
-                                    }
-                                )
-                            }
-                        }
-                        break
-                    }
-                } catch (_: Exception) {}
-            }
-        } catch (_: Exception) {}
-    }
-
-    // =========================================================================
-    // 8. TMBCLOUD.LOL (/links/716cacc7a622 & /download/413Y57)
-    // =========================================================================
-    private suspend fun extractTmbCloud(
-        url: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        try {
-            val res = cfGet(url, referer = "https://tmbcloud.lol/", allowRedirects = true)
-            val doc = res.document
-            val uri = URI(res.url)
-            val baseUrl = "${uri.scheme}://${uri.host}"
-
-            // Case A: Agar URL /links/716cacc7a622 hai, toh uske andar /download/ ya external servers ke links hote hain
-            if (res.url.contains("/links/")) {
-                val innerLinks = doc.select("a[href]").mapNotNull { a ->
-                    val h = fixUrl(a.attr("href").trim())
-                    if (h.startsWith("http") && h != res.url && !h.contains("telegram.me") && !h.contains("t.me")) h else null
-                }.distinct()
-
-                innerLinks.amap { link ->
-                    if (link.contains("/download/")) {
-                        extractTmbDownloadPage(link, res.url, callback)
-                    } else {
-                        getUrl(link, res.url, subtitleCallback, callback)
-                    }
-                }
-                return
-            }
-
-            // Case B: Direct /download/ID page
-            extractTmbDownloadPage(res.url, baseUrl, callback, doc)
-        } catch (_: Exception) {}
-    }
-
-    private suspend fun extractTmbDownloadPage(
-        url: String,
-        referer: String,
-        callback: (ExtractorLink) -> Unit,
-        preloadedDoc: org.jsoup.nodes.Document? = null
-    ) {
-        val doc = preloadedDoc ?: cfGet(url, referer = referer).document
-        val uri = URI(url)
-        val baseUrl = "${uri.scheme}://${uri.host}"
-
-        val pageId = doc.selectFirst("button[data-page], a[data-page], div[data-page]")?.attr("data-page")
-            ?.takeIf { it.isNotBlank() }
-            ?: uri.path.trimEnd('/').substringAfterLast('/').takeIf { it.isNotBlank() && it != "download" && it != "links" }
-
-        if (!pageId.isNullOrBlank()) {
-            val dynamicTypes = doc.select("button[data-type], a[data-type]").mapNotNull {
-                it.attr("data-type").takeIf { t -> t.isNotBlank() }
-            }
-            val typesToTry = (dynamicTypes + listOf("fslv2new", "fastcdnv2", "r2", "fsl", "pixel")).distinct()
-
-            typesToTry.amap { dataType ->
-                try {
-                    val apiRes = cfPost(
-                        "$baseUrl/download/$pageId",
-                        referer = url,
-                        headers = mapOf(
-                            "Content-Type" to "application/x-www-form-urlencoded; charset=UTF-8",
-                            "X-Requested-With" to "XMLHttpRequest",
-                            "Origin" to baseUrl
-                        ),
-                        data = mapOf("type" to dataType, "page" to pageId)
-                    )
-                    val text = apiRes.text.trim()
-                    if (text.startsWith("{")) {
-                        val json = JSONObject(text)
-                        val dlUrl = json.optString("url").takeIf { it.startsWith("http") }
-                            ?: json.optString("download_url").takeIf { it.startsWith("http") }
-                            ?: json.optString("file").takeIf { it.startsWith("http") }
-                        if (!dlUrl.isNullOrBlank()) {
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = "TMBCloud",
-                                    name = "TMBCloud [${dataType.uppercase()}]",
-                                    url = dlUrl,
-                                    type = if (dlUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                                ) {
-                                    this.quality = Qualities.P1080.value
-                                    this.referer = "$baseUrl/"
-                                }
-                            )
-                        }
-                    }
-                } catch (_: Exception) {}
-            }
-        }
     }
 
     // =========================================================================
@@ -652,6 +880,7 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                     ) {
                         this.quality = Qualities.P720.value
                         this.referer = url
+                        this.headers = buildPlayerHeaders(url, url, res.cookies)
                     }
                 )
             }
