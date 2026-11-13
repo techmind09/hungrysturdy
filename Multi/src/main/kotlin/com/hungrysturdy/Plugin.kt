@@ -12,21 +12,12 @@ class Plugin : Plugin() {
         registerMainAPI(KatDrama())
         registerMainAPI(DramaVerseProvider())
         registerMainAPI(GhostflixProvider())
-        registerMainAPI(KDHindiDubbed())
         registerMainAPI(GokuHDProvider())
 
         // Extractors Registration
-        registerExtractorAPI(KDHindiDubbedExtractor())
         registerExtractorAPI(GokuHDExtractor())
 
         // Universal & Custom Video Extractors (Vidhide clones, Luluvid, Filemoon)
-        registerExtractorAPI(Vidsp())
-        registerExtractorAPI(VidHideplus())
-        registerExtractorAPI(VidHidedht())
-        registerExtractorAPI(Vidhidehub())
-        registerExtractorAPI(Vidhidetoul())
-        registerExtractorAPI(Xtapes())
-        registerExtractorAPI(Luluvid())
         registerExtractorAPI(Filemoon())
     }
 }
