@@ -22,6 +22,8 @@ class GhostflixProvider : MainAPI() {
 
     companion object {
         private const val TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w500"
+        private const val TMDB_API_KEY = "e76d52f346700d0edf06fb2e938f98ad"
+        private const val TMDB_ACCESS_TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJlNzZkNTJmMzQ2NzAwZDBlZGYwNmZiMmU5MzhmOThhZCIsIm5iZiI6MTc3NzkwNzk4NS4xNiwic3ViIjoiNjlmOGI5MTEzODdlMWExNWY3MzI3MWQxIiwic2NvcGVzIjpbImFwaV9yZWFkIl0sInZlcnNpb24iOjF9.xKkhmPxRCBvBPok8br1xxjIMEHfkAO_jQZQ5nBkX2Cc"
     }
 
     override val mainPage = mainPageOf(
@@ -70,7 +72,11 @@ class GhostflixProvider : MainAPI() {
             ?: this.attr("aria-label").substringBefore(", rated").trim()
             .takeIf { it.isNotBlank() } ?: "Ghostflix Title #$idMatch"
 
-        val posterUrl = this.selectFirst("img")?.attr("src")
+        val imgElem = this.selectFirst("img")
+        val posterUrl = imgElem?.attr("src")?.takeIf { it.startsWith("http") }
+            ?: imgElem?.attr("data-src")
+            ?: "$TMDB_IMAGE_BASE/t/p/w500"
+
         val targetUrl = if (isTv) "$mainUrl/tv/$idMatch" else "$mainUrl/movie/$idMatch"
 
         return if (isTv) {
@@ -129,26 +135,43 @@ class GhostflixProvider : MainAPI() {
             ?: Regex("""id=(\d+)""").find(url)?.groupValues?.get(1)
             ?: return null
 
-        val docUrl = if (isTv) "$mainUrl/tv/$tmdbId" else "$mainUrl/movie/$tmdbId"
-        val document = try { app.get(docUrl).document } catch (e: Exception) { Document(mainUrl) }
+        // Fallback to TMDB API if website page details fail
+        val mediaType = if (isTv) "tv" else "movie"
+        val tmdbUrl = "https://api.themoviedb.org/3/$mediaType/$tmdbId?api_key=$TMDB_API_KEY"
+        
+        var title = "Ghostflix Title #$tmdbId"
+        var description = "No description available."
+        var poster: String? = null
 
-        val title = document.selectFirst("meta[property='og:title']")?.attr("content")
-            ?.substringBefore(" - ")?.substringBefore(" — ")?.trim()
-            ?: document.selectFirst("h1")?.text()?.trim()
-            ?: "Ghostflix Title #$tmdbId"
+        try {
+            val tmdbResp = app.get(tmdbUrl, headers = mapOf("Authorization" to "Bearer $TMDB_ACCESS_TOKEN")).parsedSafe<TmdbDetails>()
+            if (tmdbResp != null) {
+                title = tmdbResp.title ?: tmdbResp.name ?: title
+                description = tmdbResp.overview ?: description
+                poster = tmdbResp.posterPath?.let { "$TMDB_IMAGE_BASE$it" }
+            }
+        } catch (_: Exception) {}
 
-        val description = document.selectFirst("meta[property='og:description']")?.attr("content") ?: "No description available."
-        val poster = document.selectFirst("meta[property='og:image']")?.attr("content")
+        if (poster == null) {
+            val docUrl = if (isTv) "$mainUrl/tv/$tmdbId" else "$mainUrl/movie/$tmdbId"
+            val document = try { app.get(docUrl).document } catch (e: Exception) { Document(mainUrl) }
+            title = document.selectFirst("meta[property='og:title']")?.attr("content")?.substringBefore(" - ")?.trim() ?: title
+            description = document.selectFirst("meta[property='og:description']")?.attr("content") ?: description
+            poster = document.selectFirst("meta[property='og:image']")?.attr("content")
+        }
 
         return if (isTv) {
-            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = 1, episode = 1))
-            val episodes = listOf(
-                newEpisode(playData) {
-                    this.name = "Episode 1"
-                    this.season = 1
-                    this.episode = 1
-                }
-            )
+            val episodes = mutableListOf<Episode>()
+            for (ep in 1..24) {
+                val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = 1, episode = ep))
+                episodes.add(
+                    newEpisode(playData) {
+                        this.name = "Episode $ep"
+                        this.season = 1
+                        this.episode = ep
+                    }
+                )
+            }
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.plot = description
@@ -170,7 +193,6 @@ class GhostflixProvider : MainAPI() {
     ): Boolean {
         val loadData = tryParseJson<LoadData>(data) ?: return false
 
-        // All Ghostflix servers including Hindi and regional variants
         val servers = listOf(
             "vidbolt", "vidcore", "flix", "vidly", "orion", 
             "vidrift", "vidqueen", "hindi", "hindi-new", "cinezo"
@@ -187,7 +209,6 @@ class GhostflixProvider : MainAPI() {
                 val response = app.get(playUrl, referer = mainUrl)
                 val pageText = response.text
 
-                // Extract direct stream links (m3u8 / mp4)
                 Regex("""https?://[^\s"'\\]+\.(?:m3u8|mp4)[^\s"'\\]*""").findAll(pageText).forEach { match ->
                     val streamUrl = match.value.replace("\\u0026", "&")
                     val linkType = if (streamUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
@@ -204,7 +225,6 @@ class GhostflixProvider : MainAPI() {
                     )
                 }
 
-                // Extract iframe embeds
                 response.document.select("iframe[src]").forEach { iframe ->
                     val embedUrl = iframe.attr("src")
                     if (embedUrl.isNotBlank()) {
@@ -235,5 +255,12 @@ class GhostflixProvider : MainAPI() {
         @JsonProperty("backdrop_path") val backdropPath: String? = null,
         @JsonProperty("media_type") val mediaType: String? = null,
         @JsonProperty("vote_average") val voteAverage: Double? = null
+    )
+
+    data class TmdbDetails(
+        @JsonProperty("title") val title: String? = null,
+        @JsonProperty("name") val name: String? = null,
+        @JsonProperty("overview") val overview: String? = null,
+        @JsonProperty("poster_path") val posterPath: String? = null
     )
 }
