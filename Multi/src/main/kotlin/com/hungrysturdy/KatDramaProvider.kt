@@ -22,7 +22,6 @@ class KatDramaProvider : MainAPI() {
 
     private val cfKiller = CloudflareKiller()
 
-    // Aapki Cookie + HubCloud ki 'xla=s4t' cookie (dom.html6.html se)
     private val cookieHeader = "_ga=GA1.1.878454062.1794569904; pp_main_566600af372321e7774c451466cdc753=1; vrk4n8fqhwc3jzy7pbsmgt6dx5lha2u9=01a1b98c-7aec-7761-b581-b09b7730a724_2; dom3ic8zudi28v8lr6fgphwffqoz0j6c=01a1b98c-7aec-7761-b581-b09b7730a724; pp_sub_566600af372321e7774c451466cdc753=2; _ga_99XT71GGK6=GS2.1.s1794569904\$o1\$g1\$t1794569925\$j39\$l0\$h0; xla=s4t"
 
     private val customHeaders = mapOf(
@@ -150,10 +149,8 @@ class KatDramaProvider : MainAPI() {
 
         val tags = document.select("div.tags a, a[rel=tag]").map { it.text().trim() }
 
-        // Map: EpisodeNumber -> List of "Quality|URL"
         val episodeMap = mutableMapOf<Int, MutableList<String>>()
 
-        // 1. Archive links (links.dramashindi.online/archives/...)
         val archiveLinks = document.select("a[href*='links.dramashindi.online'], div.entry-content a.wp-block-button__link, div.entry-content a")
             .filter {
                 val href = it.attr("href")
@@ -184,7 +181,6 @@ class KatDramaProvider : MainAPI() {
             }
         }
 
-        // Fallback: Direct HubCloud/GDFlix links on main post
         if (episodeMap.isEmpty()) {
             document.select("a[href*='hubcloud'], a[href*='gdflix']").forEach { link ->
                 val href = link.attr("href")
@@ -250,7 +246,6 @@ class KatDramaProvider : MainAPI() {
         return true
     }
 
-    // Exact HubCloud Parser based on dom.html6.html
     private suspend fun extractHubCloud(
         url: String,
         defaultQuality: Int,
@@ -261,12 +256,10 @@ class KatDramaProvider : MainAPI() {
             val doc = response.document
             val htmlText = response.text
 
-            // dom.html6.html: <div class="card-header text-white bg-primary mb-3">Love.in.Disguise.S01E01.480p...</div>
             val fileHeader = doc.selectFirst("div.card-header")?.text()?.trim().orEmpty()
             val detectedQuality = Regex("""(\d{3,4}p)""").find(fileHeader)?.groupValues?.get(1)
                 ?.let { getQualityFromName(it) } ?: defaultQuality
 
-            // 1. <a id="download" href="https://gamerxyt.com/hubcloud.php?..."> OR script var url = '...'
             val gamerLink = doc.selectFirst("a#download")?.attr("href")
                 ?: Regex("""var\s+url\s*=\s*['"](https://[^'"]*hubcloud\.php[^'"]*)['"]""")
                     .find(htmlText)?.groupValues?.get(1)
@@ -274,23 +267,22 @@ class KatDramaProvider : MainAPI() {
 
             val gamerDoc = app.get(gamerLink, headers = customHeaders, referer = url).document
 
-            // A. FSL Server (id="fsl" -> r2.cloudflarestorage.com)
+            // 1. FSL Server
             gamerDoc.selectFirst("a#fsl, a:contains(FSL Server)")?.attr("href")?.let { fslUrl ->
                 if (fslUrl.isNotBlank()) {
                     callback.invoke(
-                        ExtractorLink(
-                            source = this.name,
-                            name = "HubCloud [FSL Server]",
-                            url = fslUrl,
-                            referer = gamerLink,
-                            quality = detectedQuality,
-                            isM3u8 = false
+                        newExtractorLink(
+                            this.name,
+                            "HubCloud [FSL Server]",
+                            fslUrl,
+                            gamerLink,
+                            detectedQuality
                         )
                     )
                 }
             }
 
-            // B. HBPlay Base64 Encoded Direct Link (hbplay.pages.dev/?u=...)
+            // 2. HBPlay Direct Link
             gamerDoc.selectFirst("a[href*='hbplay.pages.dev']")?.attr("href")?.let { hbUrl ->
                 val encodedU = hbUrl.substringAfter("u=", "").substringBefore("&")
                 if (encodedU.isNotBlank()) {
@@ -298,13 +290,12 @@ class KatDramaProvider : MainAPI() {
                         val decodedUrl = String(Base64.decode(encodedU, Base64.DEFAULT))
                         if (decodedUrl.startsWith("http")) {
                             callback.invoke(
-                                ExtractorLink(
-                                    source = this.name,
-                                    name = "HubCloud [HBPlay Direct]",
-                                    url = decodedUrl,
-                                    referer = "https://hbplay.pages.dev/",
-                                    quality = detectedQuality,
-                                    isM3u8 = false
+                                newExtractorLink(
+                                    this.name,
+                                    "HubCloud [HBPlay Direct]",
+                                    decodedUrl,
+                                    "https://hbplay.pages.dev/",
+                                    detectedQuality
                                 )
                             )
                         }
@@ -312,40 +303,38 @@ class KatDramaProvider : MainAPI() {
                 }
             }
 
-            // C. PixelDrain Server (id="pxl-1" -> https://pixeldrain.dev/u/VNXWVVAS)
+            // 3. PixelDrain Server
             gamerDoc.selectFirst("a#pxl-1, a[href*='pixeldrain']")?.attr("href")?.let { pxlUrl ->
                 val fileId = pxlUrl.substringAfterLast("/")
                 if (fileId.isNotBlank()) {
                     callback.invoke(
-                        ExtractorLink(
-                            source = this.name,
-                            name = "HubCloud [PixelServer]",
-                            url = "https://pixeldrain.dev/api/file/$fileId?download",
-                            referer = pxlUrl,
-                            quality = detectedQuality,
-                            isM3u8 = false
+                        newExtractorLink(
+                            this.name,
+                            "HubCloud [PixelServer]",
+                            "https://pixeldrain.dev/api/file/$fileId?download",
+                            pxlUrl,
+                            detectedQuality
                         )
                     )
                 }
             }
 
-            // D. 10Gbps Server (https://pixel.hubcloud.pw/?id=...)
+            // 4. 10Gbps Server
             gamerDoc.selectFirst("a[href*='pixel.hubcloud'], a:contains(10Gbps)")?.attr("href")?.let { tenGbpsUrl ->
                 if (tenGbpsUrl.isNotBlank()) {
                     callback.invoke(
-                        ExtractorLink(
-                            source = this.name,
-                            name = "HubCloud [10Gbps Server]",
-                            url = tenGbpsUrl,
-                            referer = gamerLink,
-                            quality = detectedQuality,
-                            isM3u8 = false
+                        newExtractorLink(
+                            this.name,
+                            "HubCloud [10Gbps Server]",
+                            tenGbpsUrl,
+                            gamerLink,
+                            detectedQuality
                         )
                     )
                 }
             }
 
-            // E. Buzz Server (fuckingfast.net)
+            // 5. Buzz Server
             gamerDoc.selectFirst("a[href*='fuckingfast.net'], a:contains(Buzz Server)")?.attr("href")?.let { buzzUrl ->
                 if (buzzUrl.isNotBlank()) {
                     extractFuckingFast(buzzUrl, detectedQuality, callback)
@@ -368,20 +357,18 @@ class KatDramaProvider : MainAPI() {
                 .find(text)?.groupValues?.get(1)
             if (directLink != null) {
                 callback.invoke(
-                    ExtractorLink(
-                        source = this.name,
-                        name = "HubCloud [Buzz Server]",
-                        url = directLink,
-                        referer = url,
-                        quality = quality,
-                        isM3u8 = false
+                    newExtractorLink(
+                        this.name,
+                        "HubCloud [Buzz Server]",
+                        directLink,
+                        url,
+                        quality
                     )
                 )
             }
         } catch (_: Exception) {}
     }
 
-    // Exact GDFlix Parser based on dom.html7.html (new9.gdflix.io / gdflix.vip)
     private suspend fun extractGdFlix(
         url: String,
         defaultQuality: Int,
@@ -393,50 +380,45 @@ class KatDramaProvider : MainAPI() {
             val doc = response.document
             val htmlText = response.text
 
-            // Redirected domain nikalna (e.g. https://new9.gdflix.io)
             val finalUrl = response.url
             val uri = URI(finalUrl)
             val baseOrigin = "${uri.scheme}://${uri.host}"
 
-            // dom.html7.html: <title>GDFlix | Love.in.Disguise.S01E01.480p...</title>
             val pageTitle = doc.title()
             val detectedQuality = Regex("""(\d{3,4}p)""").find(pageTitle)?.groupValues?.get(1)
                 ?.let { getQualityFromName(it) } ?: defaultQuality
 
-            // 1. Instant DL [10GBPS] -> <a href="https://instant.busycdn.xyz/..." class="btn btn-danger">
+            // 1. Instant DL [10GBPS]
             doc.selectFirst("a[href*='busycdn'], a[href*='instant.'], a.btn-danger:contains(Instant DL)")?.attr("href")?.let { instantUrl ->
                 if (instantUrl.startsWith("http")) {
                     callback.invoke(
-                        ExtractorLink(
-                            source = this.name,
-                            name = "GDFlix [Instant DL 10Gbps]",
-                            url = instantUrl,
-                            referer = finalUrl,
-                            quality = detectedQuality,
-                            isM3u8 = false
+                        newExtractorLink(
+                            this.name,
+                            "GDFlix [Instant DL 10Gbps]",
+                            instantUrl,
+                            finalUrl,
+                            detectedQuality
                         )
                     )
                 }
             }
 
-            // 2. FAST CLOUD / ZIPDISK -> <a href="/cloud/1794571040/jefl1NDePljRCMl" class="btn btn-secondary">
+            // 2. FAST CLOUD / ZIPDISK
             doc.selectFirst("a[href^='/cloud/'], a:contains(FAST CLOUD)")?.attr("href")?.let { cloudPath ->
                 val cloudUrl = if (cloudPath.startsWith("http")) cloudPath else "$baseOrigin$cloudPath"
                 try {
                     val cloudRes = app.get(cloudUrl, headers = customHeaders, referer = finalUrl)
                     val cloudDoc = cloudRes.document
-                    // Cloud page ke andar direct download button dhoondhna
                     cloudDoc.select("a.btn-success, a.btn-primary, a.btn-danger, a[href*='r2.cloudflarestorage'], a[href*='busycdn'], a[href*='worker']").forEach { btn ->
                         val dlHref = btn.attr("href")
                         if (dlHref.startsWith("http") && !dlHref.contains("/login")) {
                             callback.invoke(
-                                ExtractorLink(
-                                    source = this.name,
-                                    name = "GDFlix [Fast Cloud]",
-                                    url = dlHref,
-                                    referer = cloudUrl,
-                                    quality = detectedQuality,
-                                    isM3u8 = false
+                                newExtractorLink(
+                                    this.name,
+                                    "GDFlix [Fast Cloud]",
+                                    dlHref,
+                                    cloudUrl,
+                                    detectedQuality
                                 )
                             )
                         }
@@ -444,7 +426,7 @@ class KatDramaProvider : MainAPI() {
                 } catch (_: Exception) {}
             }
 
-            // 3. DRIVEBOT [50MB/S] -> Even if commented out in HTML: <!-- <a href="https://drivebot.sbs/download?id=..." -->
+            // 3. DRIVEBOT [50MB/S]
             val driveBotUrl = doc.selectFirst("a[href*='drivebot']")?.attr("href")
                 ?: Regex("""href=["'](https://drivebot\.[a-z]+/download\?id=[^"']+)["']""")
                     .find(htmlText)?.groupValues?.get(1)?.replace("&amp;", "&")
@@ -457,13 +439,12 @@ class KatDramaProvider : MainAPI() {
                         val h = a.attr("href")
                         if (h.startsWith("http") && !h.contains("drivebot")) {
                             callback.invoke(
-                                ExtractorLink(
-                                    source = this.name,
-                                    name = "GDFlix [DriveBot]",
-                                    url = h,
-                                    referer = driveBotUrl,
-                                    quality = detectedQuality,
-                                    isM3u8 = false
+                                newExtractorLink(
+                                    this.name,
+                                    "GDFlix [DriveBot]",
+                                    h,
+                                    driveBotUrl,
+                                    detectedQuality
                                 )
                             )
                         }
@@ -471,24 +452,23 @@ class KatDramaProvider : MainAPI() {
                 } catch (_: Exception) {}
             }
 
-            // 4. PixelDrain (agar GDFlix par available ho)
+            // 4. PixelDrain
             doc.selectFirst("a[href*='pixeldrain']")?.attr("href")?.let { pxl ->
                 val id = pxl.substringAfterLast("/")
                 if (id.isNotBlank()) {
                     callback.invoke(
-                        ExtractorLink(
-                            source = this.name,
-                            name = "GDFlix [PixelDrain]",
-                            url = "https://pixeldrain.dev/api/file/$id?download",
-                            referer = finalUrl,
-                            quality = detectedQuality,
-                            isM3u8 = false
+                        newExtractorLink(
+                            this.name,
+                            "GDFlix [PixelDrain]",
+                            "https://pixeldrain.dev/api/file/$id?download",
+                            finalUrl,
+                            detectedQuality
                         )
                     )
                 }
             }
 
-            // 5. GoFile [Multiup] -> <a href="https://goflix.sbs/en/mirror/..." class="btn btn-outline-info">
+            // 5. GoFile [Multiup]
             doc.selectFirst("a[href*='goflix'], a[href*='gofile'], a:contains(GoFile)")?.attr("href")?.let { goUrl ->
                 if (goUrl.startsWith("http")) {
                     loadExtractor(goUrl, finalUrl, subtitleCallback, callback)
