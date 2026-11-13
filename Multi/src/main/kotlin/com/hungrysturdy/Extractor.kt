@@ -15,7 +15,7 @@ import java.net.URI
 import android.util.Base64
 
 // ==========================================
-// 1. GENERIC EXTRACTORS (Vidhide, Lulustream, Filemoon)
+// 1. GENERIC EXTRACTORS
 // ==========================================
 open class VidhideExtractor : ExtractorApi() {
     override var name = "Vidhide"
@@ -77,7 +77,16 @@ class KDHindiDubbedExtractor : ExtractorApi() {
         try {
             var targetUrl = url.trim()
             
-            // Bypass redirectors
+            // FIX 1: OOM Preventer - If the link is already a direct media file, yield it and stop. Do NOT fetch it.
+            if (targetUrl.matches(Regex(".*\\.(mkv|mp4|m3u8|ts)$", RegexOption.IGNORE_CASE))) {
+                callback.invoke(newExtractorLink(name, "$name [Direct]", targetUrl, if (targetUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
+                    this.quality = Qualities.Unknown.value
+                    this.referer = referer ?: ""
+                })
+                return
+            }
+            
+            // Bypass redirectors safely
             if (targetUrl.contains("redir") || targetUrl.contains("fifa") || targetUrl.contains("?url=") || targetUrl.contains("goto")) {
                 val res = cfGet(targetUrl, referer)
                 targetUrl = res.url
@@ -114,13 +123,12 @@ class KDHindiDubbedExtractor : ExtractorApi() {
             val res = cfGet(landingUrl, referer = baseUrl)
             val doc = res.document
 
-            // Direct Video Tags
             for (el in doc.select("video source[src], video[src], iframe[src]")) {
                 val fullSrc = el.attr("src").trim().let { if (it.startsWith("/")) "$baseUrl$it" else it }
                 if (fullSrc.isNotBlank() && !fullSrc.startsWith("javascript")) {
                     if (fullSrc.contains("voe") || fullSrc.contains("susanexpectcare") || fullSrc.contains("/access/")) {
                         extractVoe(fullSrc, landingUrl, subtitleCallback, callback)
-                    } else if (fullSrc.contains(".mp4") || fullSrc.contains(".mkv") || fullSrc.contains(".m3u8")) {
+                    } else if (fullSrc.matches(Regex(".*\\.(mp4|mkv|m3u8)$", RegexOption.IGNORE_CASE))) {
                         callback.invoke(newExtractorLink("MomoFile", "MomoFile [Direct]", fullSrc, if (fullSrc.contains(".m3u8")) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO) {
                             this.quality = Qualities.P720.value
                             this.referer = landingUrl
@@ -129,7 +137,6 @@ class KDHindiDubbedExtractor : ExtractorApi() {
                 }
             }
 
-            // Fallback internal services
             if (fileId.isNotBlank() && fileId != "d") {
                 val services = listOf("pixeldrain", "buzzheavier", "fileditch", "vikingfile", "sendnow")
                 for (service in services) {
@@ -223,6 +230,11 @@ object UniversalExtractors {
         }
 
         when {
+            // FIX: Large File Prevention directly in router as well
+            href.matches(Regex(".*\\.(mkv|mp4|ts|m3u8)$", RegexOption.IGNORE_CASE)) -> {
+                pushDirect("Direct Media", href)
+            }
+
             host.contains("hakunaymatata") -> pushDirect("Fast Server [KatDrama]", href, ExtractorLinkType.DASH)
             host.contains("devcorp.me") -> pushDirect("DevCorp Stream [KatDrama]", href, ExtractorLinkType.M3U8)
             host.contains("modiplay.xyz") || host.contains("rozgarlelo") || host.contains("fvibuxer") -> {
