@@ -113,21 +113,16 @@ class KatDrama : MainAPI() {
             ?: document.title().substringBefore("-").trim() 
             ?: "Unknown"
 
-        // 1. Aggressive Poster Scraper
         var poster = document.selectFirst("img.poster, .detail-poster, img[alt*='poster' i]")?.attr("src")
         if (poster.isNullOrBlank()) {
-            // Find any image sourced from TMDB if exact classes fail
             poster = document.select("img").mapNotNull { it.attr("src") }.firstOrNull { it.contains("tmdb.org") }
         }
         if (poster.isNullOrBlank()) {
-            // Last resort: search raw HTML for a TMDB URL
             poster = Regex("""https?://image\.tmdb\.org/t/p/[^"'\s\\]+""").find(html)?.value?.replace("\\", "")
         }
 
-        // 2. Aggressive Plot Scraper
         var plot = document.selectFirst(".plot, .synopsis, p.description, .text-gray-300, .text-sm")?.text()
         if (plot.isNullOrBlank() || plot.length < 20) {
-            // Fallback: Just find the <p> tag with the most text in it
             plot = document.select("p").maxByOrNull { it.text().length }?.text()
         }
 
@@ -135,7 +130,6 @@ class KatDrama : MainAPI() {
         val slug = url.substringAfterLast("/")
 
         if (isMovie) {
-            // Corrected movie watch URL
             val watchUrl = "$mainUrl/watch/movie/$slug"
             return newMovieLoadResponse(title, url, TvType.Movie, watchUrl) {
                 this.posterUrl = poster
@@ -145,7 +139,6 @@ class KatDrama : MainAPI() {
             val episodes = mutableListOf<Episode>()
             val epMap = mutableMapOf<Int, String>()
 
-            // Approach A: Find actual links
             val episodeLinks = document.select("a[href*='-episode-'], a[href*='/watch/tv/']")
             for (link in episodeLinks) {
                 val epHref = link.attr("href")
@@ -155,7 +148,6 @@ class KatDrama : MainAPI() {
                 }
             }
 
-            // Approach B: Search raw HTML for the watch patterns
             if (epMap.isEmpty()) {
                 val matches = Regex("""/watch/tv/([^"'\s\\]+-episode-(\d+))""").findAll(html)
                 for (match in matches) {
@@ -167,7 +159,6 @@ class KatDrama : MainAPI() {
                 }
             }
 
-            // Approach C: Ultimate Fallback - Find highest episode number in text and auto-generate URLs
             if (epMap.isEmpty()) {
                 val maxEpFromRegex = Regex("""episode-(\d+)""").findAll(html).mapNotNull { it.groupValues[1].toIntOrNull() }.maxOrNull()
                 val totalEpsText = document.selectFirst(".total-episodes")?.text()
@@ -176,12 +167,10 @@ class KatDrama : MainAPI() {
                 val totalEps = maxEpFromRegex ?: totalEpsFromText ?: 1
 
                 for (i in 1..totalEps) {
-                    // Corrected TV watch URL (added /tv/)
                     epMap[i] = "$mainUrl/watch/tv/$slug-episode-$i"
                 }
             }
 
-            // Add to Episode list in correct order
             epMap.toSortedMap().forEach { (epNum, epUrl) ->
                 episodes.add(newEpisode(epUrl) { 
                     this.episode = epNum 
@@ -204,8 +193,21 @@ class KatDrama : MainAPI() {
     ): Boolean {
         val document = app.get(data).document
         val html = document.html()
+        var found = false
 
-        // 1. Check all standard buttons
+        // FIX: Deep scan embedded JSON script tags (Next.js / Nuxt hydration payloads) where KatDrama hides true stream URLs
+        val scriptTags = document.select("script#__NEXT_DATA__, script[type='application/json']")
+        for (script in scriptTags) {
+            val jsonText = script.text()
+            val extractedUrls = Regex("""https?://[^"'\s\\]+(?:hakunaymatata|devcorp\.me|modiplay\.xyz|rozgarlelo|fvibuxer|vidmoly|staticmoly|xcloud1\.lol|tmbcloud)[^"'\s\\]*""").findAll(jsonText)
+            for (match in extractedUrls) {
+                val cleanUrl = match.value.replace("\\", "")
+                UniversalExtractors.invoke(cleanUrl, data, subtitleCallback, callback)
+                found = true
+            }
+        }
+
+        // 1. Check standard server buttons
         for (serverBtn in document.select("[data-url], [data-link], [data-src], [data-server], .server-btn, .server-item")) {
             var serverUrl = serverBtn.attr("data-url").ifBlank { serverBtn.attr("data-link") }.ifBlank { serverBtn.attr("data-src") }
             if (serverUrl.isNotBlank()) {
@@ -215,6 +217,7 @@ class KatDrama : MainAPI() {
                 if (serverUrl.startsWith("//")) serverUrl = "https:$serverUrl"
                 if (serverUrl.startsWith("http")) {
                     UniversalExtractors.invoke(serverUrl, data, subtitleCallback, callback)
+                    found = true
                 }
             }
         }
@@ -226,17 +229,19 @@ class KatDrama : MainAPI() {
                 if (src.startsWith("//")) src = "https:$src"
                 if (src.startsWith("http")) {
                     UniversalExtractors.invoke(src, data, subtitleCallback, callback)
+                    found = true
                 }
             }
         }
 
-        // 3. Last Resort Fallback: Scan raw HTML/JS for our known server domains
+        // 3. Fallback: Raw HTML Regex Scan
         val serverRegex = Regex("""(https?://[^"'\s\\]+(?:hakunaymatata|devcorp\.me|modiplay\.xyz|rozgarlelo|fvibuxer|vidmoly|staticmoly|xcloud1\.lol|tmbcloud)[^"'\s\\]*)""")
         for (match in serverRegex.findAll(html)) {
             val cleanUrl = match.value.replace("\\", "")
             UniversalExtractors.invoke(cleanUrl, data, subtitleCallback, callback)
+            found = true
         }
 
-        return true
+        return found
     }
 }
