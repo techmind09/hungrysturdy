@@ -1,16 +1,15 @@
 package com.hungrysturdy
 
-import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
-import com.lagradost.cloudstream3.network.WebViewResolver
 import android.util.Base64
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.WebViewResolver
+import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
-import java.net.URLEncoder
 
 class ToonPlayProvider : MainAPI() {
     override var mainUrl = "https://toonplay.in"
@@ -25,7 +24,6 @@ class ToonPlayProvider : MainAPI() {
         TvType.Cartoon
     )
 
-    // Exact sections matching your j.html & screenshots
     override val mainPage = mainPageOf(
         "trending" to "Trending Now",
         "latest" to "Latest Episodes & Releases",
@@ -42,7 +40,6 @@ class ToonPlayProvider : MainAPI() {
         "lang:kor" to "Language: Korean"
     )
 
-    // Helper to convert Title into ToonPlay's URL slug format (e.g., "Jujutsu Kaisen" -> "jujutsu-kaisen")
     private fun createSlug(title: String): String {
         return title.lowercase()
             .replace(Regex("[^a-z0-9\\s-]"), "")
@@ -50,7 +47,6 @@ class ToonPlayProvider : MainAPI() {
             .replace(Regex("\\s+"), "-")
     }
 
-    // Fetches rendered HTML from React SPA or falls back to AniList GraphQL if WebView times out
     private suspend fun fetchRenderedDom(url: String): Document {
         return try {
             val response = app.get(
@@ -85,7 +81,6 @@ class ToonPlayProvider : MainAPI() {
         val sectionId = request.data
         val results = mutableListOf<SearchResponse>()
 
-        // 1. Try parsing from Rendered ToonPlay DOM (matches your j.html structure)
         if (!sectionId.startsWith("lang:")) {
             val doc = fetchRenderedDom(mainUrl)
             val sectionSelector = when (sectionId) {
@@ -101,8 +96,6 @@ class ToonPlayProvider : MainAPI() {
             }
         }
 
-        // 2. Fallback: If SPA skeleton blocked Jsoup, fetch real Anime/Cartoon catalog via AniList GraphQL
-        // and map directly to ToonPlay's watch URLs so rows are NEVER empty or showing K-Dramas!
         if (results.isEmpty()) {
             val anilistItems = fetchCatalogForToonPlay(sectionId, page)
             results.addAll(anilistItems)
@@ -111,14 +104,12 @@ class ToonPlayProvider : MainAPI() {
         return newHomePageResponse(request.name, results.distinctBy { it.url }, hasNext = false)
     }
 
-    // Parses the exact card HTML from your j.html file
     private fun Element.toToonPlayCard(): SearchResponse? {
         val titleEl = this.selectFirst("h3[title], h3") ?: return null
         val title = titleEl.attr("title").ifBlank { titleEl.text() }.trim()
         if (title.isBlank()) return null
 
-        // Select the actual poster image (skip placeholder.webp)
-        val img = this.select("img").firstOrNull { 
+        val img = this.select("img").firstOrNull {
             val src = it.attr("src")
             src.isNotBlank() && !src.contains("placeholder.webp")
         }
@@ -129,8 +120,7 @@ class ToonPlayProvider : MainAPI() {
 
         val slug = createSlug(title)
         val prefix = if (isMovie) "movie" else "series"
-        
-        // Extract AniList ID if image is from anilistcdn
+
         val anilistId = Regex("""/bx?(\d+)-""").find(poster)?.groupValues?.get(1) ?: ""
         val watchUrl = if (anilistId.isNotBlank()) {
             "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-0&lang=hin&anilistid=$anilistId"
@@ -143,11 +133,11 @@ class ToonPlayProvider : MainAPI() {
 
         return newAnimeSearchResponse(title, watchUrl, if (isMovie) TvType.AnimeMovie else TvType.Anime) {
             this.posterUrl = fixUrl(poster)
-            this.addDubStatus( isDub = true, isSub = true, dubEpisodes = epCount, subEpisodes = epCount )
+            this.addDubStatus(DubStatus.Dubbed, epCount)
+            this.addDubStatus(DubStatus.Subbed, epCount)
         }
     }
 
-    // Ensures ToonPlay always displays real Anime & Cartoons even if Cloudflare/SPA blocks HTML
     private suspend fun fetchCatalogForToonPlay(section: String, page: Int): List<SearchResponse> {
         val sort = when (section) {
             "trending" -> "TRENDING_DESC"
@@ -204,7 +194,7 @@ class ToonPlayProvider : MainAPI() {
                 list.add(
                     newAnimeSearchResponse(title, url, if (isMovie) TvType.AnimeMovie else TvType.Anime) {
                         this.posterUrl = poster
-                        this.addDubStatus(isDub = true, isSub = true)
+                        this.addDubStatus(true, true)
                     }
                 )
             }
@@ -218,7 +208,6 @@ class ToonPlayProvider : MainAPI() {
         val cleanQuery = query.trim()
         if (cleanQuery.isBlank()) return emptyList()
 
-        // Search via AniList + ToonPlay URL builder so search always works fast without SPA blocking
         val gql = """
             query {
               Page(page: 1, perPage: 20) {
@@ -263,7 +252,7 @@ class ToonPlayProvider : MainAPI() {
                 results.add(
                     newAnimeSearchResponse(title, watchUrl, if (isMovie) TvType.AnimeMovie else TvType.Anime) {
                         this.posterUrl = poster
-                        this.addDubStatus(isDub = true, isSub = true)
+                        this.addDubStatus(true, true)
                     }
                 )
             }
@@ -276,10 +265,16 @@ class ToonPlayProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse {
         val doc = fetchRenderedDom(url)
 
-        // Extract Title from rendered DOM or OG meta (matches dom.htmltoo.html)
+        val fallbackSlugTitle = url.substringAfter("/watch/")
+            .substringBefore("?")
+            .removePrefix("series-")
+            .removePrefix("movie-")
+            .replace("-", " ")
+            .replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+
         var title = doc.selectFirst("h1.text-xl, h1")?.text()?.trim()
             ?: doc.selectFirst("meta[property='og:title']")?.attr("content")?.substringBefore(" - ToonPlay")?.trim()
-            ?: url.substringAfter("/watch/").substringBefore("?").removePrefix("series-").removePrefix("movie-").replace("-", " ").capitalize()
+            ?: fallbackSlugTitle
 
         var poster = doc.selectFirst("div.aspect-\\[3\\/4\\] img")?.attr("src")
             ?: doc.selectFirst("meta[property='og:image']")?.attr("content")
@@ -291,7 +286,6 @@ class ToonPlayProvider : MainAPI() {
 
         val tags = doc.select("div.pt-1.flex.flex-wrap span").map { it.text().trim() }.filter { it.isNotBlank() }
 
-        // Parse AniList ID from URL if available to enrich metadata & episode count
         val anilistId = Regex("""anilistid=(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull()
         var totalEpCount = 24
 
@@ -321,7 +315,6 @@ class ToonPlayProvider : MainAPI() {
         val baseWatchUrl = url.substringBefore("?")
         val anilistParam = if (anilistId != null) "&anilistid=$anilistId" else ""
 
-        // Parse episodes from DOM buttons (matches dom.htmltoo.html: <button title="Ryomen Sukuna">...<span>1</span></button>)
         val domEpButtons = doc.select("aside button[title]:has(span:contains(EP))")
         val episodes = mutableListOf<Episode>()
 
@@ -345,7 +338,6 @@ class ToonPlayProvider : MainAPI() {
                 )
             }
         } else if (!isMovie) {
-            // Fallback episode list if JS didn't render the sidebar buttons
             for (epNum in 1..totalEpCount) {
                 val epData = EpisodeData(
                     watchUrl = "$baseWatchUrl?season=1&ep=$epNum&server=options-1-hin&lang=hin$anilistParam",
@@ -396,7 +388,6 @@ class ToonPlayProvider : MainAPI() {
         val targetUrl = epData?.watchUrl ?: data
         var foundLinks = false
 
-        // Both options-0 (ravok.buzz) and options-1 (animesalt multi-audio) from your HTML files
         val serverUrls = listOf(
             targetUrl.replace(Regex("server=[^&]+"), "server=options-1-hin"),
             targetUrl.replace(Regex("server=[^&]+"), "server=options-0")
@@ -407,8 +398,6 @@ class ToonPlayProvider : MainAPI() {
             val iframeSrc = doc.selectFirst("iframe#watchpage-active-iframe, iframe")?.attr("src")?.trim().orEmpty()
 
             if (iframeSrc.isNotBlank()) {
-                // Case 1: AnimeSalt Multi-Audio Base64 Player (from dom.htmltoo.html)
-                // Example: https://animesalt.streamindia.co.in/abyss?url=https%3A%2F%2Fanimesalt.cx%2F...%3Fdata%3DW3sibGFuZ3VhZ2UiOiJIaW5kaSIsImxpbmsiOiJodHRwczpcL1wvcGxheWVyLmFieXNzcGxheWVyLmNvbVwvWWFYZC1sdmIwIn0...
                 if (iframeSrc.contains("data=")) {
                     val decodedUrl = URLDecoder.decode(iframeSrc, "UTF-8")
                     val base64Data = decodedUrl.substringAfter("data=").substringBefore("&")
@@ -440,7 +429,6 @@ class ToonPlayProvider : MainAPI() {
                     } catch (_: Exception) {}
                 }
 
-                // Case 2: Direct Embed Player like ravok.buzz / filemoon / streamwish (from dom.htmltoon.html)
                 loadExtractor(fixUrl(iframeSrc), "$mainUrl/", subtitleCallback, callback)
                 foundLinks = true
             }
