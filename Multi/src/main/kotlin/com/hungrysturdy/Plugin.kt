@@ -7,7 +7,7 @@ import android.content.Context
 @CloudstreamPlugin
 class Plugin : Plugin() {
     override fun load(context: Context) {
-        // All providers should be added in this manner. Please don't edit the providers list directly.
+        // Main Providers
         registerMainAPI(PrmoviesProvider())
         registerMainAPI(KatDramaProvider())
         registerMainAPI(DramaVerseProvider())
@@ -19,15 +19,16 @@ class Plugin : Plugin() {
         registerExtractorAPI(KatHubCloudExtractor())
         registerExtractorAPI(HubCloudDrive())
         registerExtractorAPI(HubCloudClub())
+        registerExtractorAPI(HubCloudOne())
         registerExtractorAPI(GamerXYTExtractor())
         registerExtractorAPI(KatGDFlixExtractor())
         registerExtractorAPI(GDFlixCfd())
         registerExtractorAPI(GDFlixdad())
-        registerExtractorAPI(GDFlixNew9()) // Added new9.gdflix.io support
+        registerExtractorAPI(GDFlixNew9())
         registerExtractorAPI(KatPixelDrainExtractor())
         registerExtractorAPI(KatHBPlayExtractor())
         registerExtractorAPI(KatFuckingFastExtractor())
-        // Universal & Custom Video Extractors (Vidhide clones, Luluvid, Filemoon)
+        registerExtractorAPI(KatGoFlixExtractor())
         registerExtractorAPI(Filemoon())
     }
 }
