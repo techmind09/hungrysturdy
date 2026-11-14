@@ -6,6 +6,8 @@ import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -26,18 +28,20 @@ class ToonPlayProvider : MainAPI() {
 
     override val mainPage = mainPageOf(
         "trending" to "Trending Now",
+        "anime" to "Anime",
         "latest" to "Latest Episodes & Releases",
         "series" to "Most Popular TV Series",
         "movies" to "Blockbuster Anime Movies",
-        "lang:hin" to "Language: Hindi",
-        "lang:tel" to "Language: Telugu",
-        "lang:tam" to "Language: Tamil",
-        "lang:mal" to "Language: Malayalam",
-        "lang:kan" to "Language: Kannada",
-        "lang:ben" to "Language: Bengali",
-        "lang:eng" to "Language: English",
-        "lang:jpn" to "Language: Japanese",
-        "lang:kor" to "Language: Korean"
+        "cartoons" to "Cartoons",
+        "hin" to "Language: Hindi",
+        "tel" to "Language: Telugu",
+        "tam" to "Language: Tamil",
+        "mal" to "Language: Malayalam",
+        "kan" to "Language: Kannada",
+        "ben" to "Language: Bengali",
+        "eng" to "Language: English",
+        "jpn" to "Language: Japanese",
+        "kor" to "Language: Korean"
     )
 
     private fun createSlug(title: String): String {
@@ -123,9 +127,9 @@ class ToonPlayProvider : MainAPI() {
 
         val anilistId = Regex("""/bx?(\d+)-""").find(poster)?.groupValues?.get(1) ?: ""
         val watchUrl = if (anilistId.isNotBlank()) {
-            "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-0&lang=hin&anilistid=$anilistId"
+            "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-1&lang=hin&anilistid=$anilistId"
         } else {
-            "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-0&lang=hin"
+            "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-1&lang=hin"
         }
 
         val epSubText = this.selectFirst("div.font-mono.text-indigo-300")?.text().orEmpty()
@@ -189,7 +193,7 @@ class ToonPlayProvider : MainAPI() {
                 val prefix = if (isMovie) "movie" else "series"
                 val langCode = if (section.startsWith("lang:")) section.substringAfter("lang:") else "hin"
 
-                val url = "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-1-$langCode&lang=$langCode&anilistid=$id"
+                val url = "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-1&lang=$langCode&anilistid=$id"
 
                 list.add(
                     newAnimeSearchResponse(title, url, if (isMovie) TvType.AnimeMovie else TvType.Anime) {
@@ -247,7 +251,7 @@ class ToonPlayProvider : MainAPI() {
                 val isMovie = item.optString("format") == "MOVIE"
                 val slug = createSlug(title)
                 val prefix = if (isMovie) "movie" else "series"
-                val watchUrl = "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-1-hin&lang=hin&anilistid=$id"
+                val watchUrl = "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-1&lang=hin&anilistid=$id"
 
                 results.add(
                     newAnimeSearchResponse(title, watchUrl, if (isMovie) TvType.AnimeMovie else TvType.Anime) {
@@ -325,7 +329,7 @@ class ToonPlayProvider : MainAPI() {
                 val epTitle = btn.attr("title").trim()
                 val epNum = btn.selectFirst("span.tabular-nums")?.text()?.trim()?.toIntOrNull() ?: (episodes.size + 1)
                 val epData = EpisodeData(
-                    watchUrl = "$baseWatchUrl?season=1&ep=$epNum&server=options-1-hin&lang=hin$anilistParam",
+                    watchUrl = "$baseWatchUrl?season=1&ep=$epNum&server=options-1&lang=hin$anilistParam",
                     season = 1,
                     episode = epNum,
                     anilistId = anilistId
@@ -342,7 +346,7 @@ class ToonPlayProvider : MainAPI() {
         } else if (!isMovie) {
             for (epNum in 1..totalEpCount) {
                 val epData = EpisodeData(
-                    watchUrl = "$baseWatchUrl?season=1&ep=$epNum&server=options-1-hin&lang=hin$anilistParam",
+                    watchUrl = "$baseWatchUrl?season=1&ep=$epNum&server=options-1&lang=hin$anilistParam",
                     season = 1,
                     episode = epNum,
                     anilistId = anilistId
@@ -390,18 +394,14 @@ class ToonPlayProvider : MainAPI() {
         val targetUrl = epData?.watchUrl ?: data
         var foundLinks = false
 
-        val serverUrls = listOf(
+        // Loop through options-0, options-1, and options-2 as shown in user screenshots
+        val serverUrls = listOf("options-1", "options-0", "options-2").map { serverOpt ->
             if (targetUrl.contains("server=")) {
-                targetUrl.replace(Regex("server=[^&]+"), "server=options-1-hin")
+                targetUrl.replace(Regex("server=[^&]+"), "server=$serverOpt")
             } else {
-                "$targetUrl${if (targetUrl.contains("?")) "&" else "?"}server=options-1-hin"
-            },
-            if (targetUrl.contains("server=")) {
-                targetUrl.replace(Regex("server=[^&]+"), "server=options-0")
-            } else {
-                "$targetUrl${if (targetUrl.contains("?")) "&" else "?"}server=options-0"
+                "$targetUrl${if (targetUrl.contains("?")) "&" else "?"}server=$serverOpt"
             }
-        ).distinct()
+        }.distinct()
 
         for (sUrl in serverUrls) {
             val doc = fetchRenderedDom(sUrl)
@@ -420,31 +420,31 @@ class ToonPlayProvider : MainAPI() {
                             val langName = obj.optString("language", "Multi")
                             val playerLink = obj.optString("link").replace("\\/", "/").trim()
                             if (playerLink.isNotBlank()) {
-                                val extractedLinks = mutableListOf<ExtractorLink>()
-                                val success = loadExtractor(playerLink, "$mainUrl/", subtitleCallback) { link ->
-                                    extractedLinks.add(link)
+                                val success = withContext(Dispatchers.IO) {
+                                    loadExtractor(playerLink, "$mainUrl/", subtitleCallback) { link ->
+                                        callback.invoke(
+                                            newExtractorLink(
+                                                source = this@ToonPlayProvider.name,
+                                                name = "${link.name} - $langName",
+                                                url = link.url,
+                                                type = link.type
+                                            ) {
+                                                this.referer = link.referer
+                                                this.quality = link.quality
+                                                this.headers = link.headers
+                                            }
+                                        )
+                                    }
                                 }
-                                for (link in extractedLinks) {
-                                    callback.invoke(
-                                        newExtractorLink(
-                                            source = this.name,
-                                            name = "${link.name} - $langName",
-                                            url = link.url,
-                                            type = link.type
-                                        ) {
-                                            this.referer = link.referer
-                                            this.quality = link.quality
-                                            this.headers = link.headers
-                                        }
-                                    )
-                                }
-                                if (success || extractedLinks.isNotEmpty()) foundLinks = true
+                                if (success) foundLinks = true
                             }
                         }
                     } catch (_: Exception) {}
                 }
 
-                val success = loadExtractor(fixUrl(iframeSrc), "$mainUrl/", subtitleCallback, callback)
+                val success = withContext(Dispatchers.IO) {
+                    loadExtractor(fixUrl(iframeSrc), "$mainUrl/", subtitleCallback, callback)
+                }
                 if (success) foundLinks = true
             }
         }
