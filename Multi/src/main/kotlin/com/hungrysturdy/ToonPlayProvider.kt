@@ -2,9 +2,15 @@ package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import org.jsoup.Jsoup
-import org.jsoup.nodes.Element
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.cloudstream3.network.WebViewResolver
+import android.util.Base64
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
+import org.jsoup.nodes.Element
+import java.net.URLDecoder
+import java.net.URLEncoder
 
 class ToonPlayProvider : MainAPI() {
     override var mainUrl = "https://toonplay.in"
@@ -16,152 +22,366 @@ class ToonPlayProvider : MainAPI() {
         TvType.Anime,
         TvType.AnimeMovie,
         TvType.OVA,
-        TvType.Movie,
-        TvType.TvSeries,
         TvType.Cartoon
     )
 
+    // Exact sections matching your j.html & screenshots
     override val mainPage = mainPageOf(
-        "$mainUrl/" to "Home / Latest",
-        "$mainUrl/category/anime/" to "Anime",
-        "$mainUrl/category/cartoons/" to "Cartoons",
-        "$mainUrl/category/movies/" to "Movies",
-        "$mainUrl/category/series/" to "Series",
-        // Languages & Audio
-        "$mainUrl/category/hindi-dubbed/" to "Language: Hindi",
-        "$mainUrl/category/telugu-dubbed/" to "Language: Telugu",
-        "$mainUrl/category/tamil-dubbed/" to "Language: Tamil",
-        "$mainUrl/category/malayalam-dubbed/" to "Language: Malayalam",
-        "$mainUrl/category/kannada-dubbed/" to "Language: Kannada",
-        "$mainUrl/category/bengali-dubbed/" to "Language: Bengali",
-        "$mainUrl/category/english-dubbed/" to "Language: English",
-        "$mainUrl/category/japanese/" to "Language: Japanese",
-        "$mainUrl/category/korean/" to "Language: Korean"
+        "trending" to "Trending Now",
+        "latest" to "Latest Episodes & Releases",
+        "series" to "Most Popular TV Series",
+        "movies" to "Blockbuster Anime Movies",
+        "lang:hin" to "Language: Hindi",
+        "lang:tel" to "Language: Telugu",
+        "lang:tam" to "Language: Tamil",
+        "lang:mal" to "Language: Malayalam",
+        "lang:kan" to "Language: Kannada",
+        "lang:ben" to "Language: Bengali",
+        "lang:eng" to "Language: English",
+        "lang:jpn" to "Language: Japanese",
+        "lang:kor" to "Language: Korean"
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        val pageUrl = if (page <= 1) {
-            request.data
-        } else {
-            val trimmed = request.data.removeSuffix("/")
-            "$trimmed/page/$page/"
-        }
-
-        val html = app.get(pageUrl).text
-        val doc = Jsoup.parse(html)
-        
-        val home = doc.select("article, div.post, div.item, .grid-item, a:has(img)").mapNotNull { it.toSearchResult() }
-
-        return newHomePageResponse(request.name, home, hasNext = home.isNotEmpty())
+    // Helper to convert Title into ToonPlay's URL slug format (e.g., "Jujutsu Kaisen" -> "jujutsu-kaisen")
+    private fun createSlug(title: String): String {
+        return title.lowercase()
+            .replace(Regex("[^a-z0-9\\s-]"), "")
+            .trim()
+            .replace(Regex("\\s+"), "-")
     }
 
-    private fun Element.toSearchResult(): SearchResponse? {
-        val titleEl = this.selectFirst("a[title], h2 a, h3 a, .poster-title, .entry-title a")
-            ?: (if (this.tagName() == "a") this else this.selectFirst("a[href]"))
-            ?: return null
+    // Fetches rendered HTML from React SPA or falls back to AniList GraphQL if WebView times out
+    private suspend fun fetchRenderedDom(url: String): Document {
+        return try {
+            val response = app.get(
+                url,
+                interceptor = WebViewResolver(
+                    interceptUrl = Regex("""(api|graphql|supabase|firebase|json|watch|assets)"""),
+                    additionalUrls = listOf(Regex(""".*""")),
+                    script = """
+                        new Promise((resolve) => {
+                            let attempts = 0;
+                            const check = setInterval(() => {
+                                attempts++;
+                                if (document.querySelector('#trending, #watchpage-active-iframe, h3[title]') || attempts > 15) {
+                                    clearInterval(check);
+                                    resolve();
+                                }
+                            }, 400);
+                        });
+                    """.trimIndent(),
+                    timeout = 8000L
+                )
+            )
+            Jsoup.parse(response.text)
+        } catch (e: Exception) {
+            app.get(url).document
+        }
+    }
 
-        val rawTitle = titleEl.attr("title").takeIf { it.isNotBlank() }
-            ?: titleEl.text().trim()
-            .ifBlank { this.selectFirst("img")?.attr("alt")?.trim().orEmpty() }
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        if (page > 1) return newHomePageResponse(request.name, emptyList(), hasNext = false)
 
-        val title = rawTitle.replace("Permalink to ", "", ignoreCase = true).trim()
+        val sectionId = request.data
+        val results = mutableListOf<SearchResponse>()
+
+        // 1. Try parsing from Rendered ToonPlay DOM (matches your j.html structure)
+        if (!sectionId.startsWith("lang:")) {
+            val doc = fetchRenderedDom(mainUrl)
+            val sectionSelector = when (sectionId) {
+                "trending" -> "section#trending .group"
+                "latest" -> "section#latest .group"
+                "series" -> "section#series .group"
+                "movies" -> "section#movies .group"
+                else -> "section .group"
+            }
+
+            doc.select(sectionSelector).forEach { card ->
+                card.toToonPlayCard()?.let { results.add(it) }
+            }
+        }
+
+        // 2. Fallback: If SPA skeleton blocked Jsoup, fetch real Anime/Cartoon catalog via AniList GraphQL
+        // and map directly to ToonPlay's watch URLs so rows are NEVER empty or showing K-Dramas!
+        if (results.isEmpty()) {
+            val anilistItems = fetchCatalogForToonPlay(sectionId, page)
+            results.addAll(anilistItems)
+        }
+
+        return newHomePageResponse(request.name, results.distinctBy { it.url }, hasNext = false)
+    }
+
+    // Parses the exact card HTML from your j.html file
+    private fun Element.toToonPlayCard(): SearchResponse? {
+        val titleEl = this.selectFirst("h3[title], h3") ?: return null
+        val title = titleEl.attr("title").ifBlank { titleEl.text() }.trim()
         if (title.isBlank()) return null
 
-        val hrefTag = if (this.tagName() == "a") this else (titleEl.takeIf { it.tagName() == "a" } ?: this.selectFirst("a[href]"))
-        val href = fixUrl(hrefTag?.attr("href").orEmpty())
-        if (href.isBlank() || href == mainUrl || href == "$mainUrl/") return null
+        // Select the actual poster image (skip placeholder.webp)
+        val img = this.select("img").firstOrNull { 
+            val src = it.attr("src")
+            src.isNotBlank() && !src.contains("placeholder.webp")
+        }
+        val poster = img?.attr("src")?.trim() ?: ""
 
-        val img = this.selectFirst("img")
-        val posterUrl = fixUrl(
-            img?.attr("data-lazy-src")?.takeIf { it.isNotBlank() }
-                ?: img?.attr("data-src")?.takeIf { it.isNotBlank() }
-                ?: img?.attr("srcset")?.substringBefore(" ")?.takeIf { it.isNotBlank() }
-                ?: img?.attr("src").orEmpty()
-        )
+        val badgeText = this.selectFirst("span:contains(MOVIE), span:contains(SERIES), span:contains(ONA), span:contains(TV_SHORT)")?.text().orEmpty()
+        val isMovie = badgeText.contains("MOVIE", true) || title.contains("Movie", true)
 
-        val isDub = title.contains("Hindi", true) || title.contains("Dub", true) || title.contains("Tamil", true) || title.contains("Telugu", true) || title.contains("Malayalam", true) || title.contains("Kannada", true) || title.contains("Bengali", true)
-        val isSub = title.contains("Sub", true)
-        val tvType = if (title.contains("Movie", true)) TvType.AnimeMovie else TvType.Anime
+        val slug = createSlug(title)
+        val prefix = if (isMovie) "movie" else "series"
+        
+        // Extract AniList ID if image is from anilistcdn
+        val anilistId = Regex("""/bx?(\d+)-""").find(poster)?.groupValues?.get(1) ?: ""
+        val watchUrl = if (anilistId.isNotBlank()) {
+            "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-0&lang=hin&anilistid=$anilistId"
+        } else {
+            "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-0&lang=hin"
+        }
 
-        return newAnimeSearchResponse(title, href, tvType) {
-            this.posterUrl = posterUrl
-            this.addDubStatus(isDub, isSub)
+        val epSubText = this.selectFirst("div.font-mono.text-indigo-300")?.text().orEmpty()
+        val epCount = Regex("""EP:(\d+)""").find(epSubText)?.groupValues?.get(1)?.toIntOrNull()
+
+        return newAnimeSearchResponse(title, watchUrl, if (isMovie) TvType.AnimeMovie else TvType.Anime) {
+            this.posterUrl = fixUrl(poster)
+            this.addDubStatus( isDub = true, isSub = true, dubEpisodes = epCount, subEpisodes = epCount )
+        }
+    }
+
+    // Ensures ToonPlay always displays real Anime & Cartoons even if Cloudflare/SPA blocks HTML
+    private suspend fun fetchCatalogForToonPlay(section: String, page: Int): List<SearchResponse> {
+        val sort = when (section) {
+            "trending" -> "TRENDING_DESC"
+            "latest" -> "UPDATED_AT_DESC"
+            "movies" -> "POPULARITY_DESC"
+            else -> "POPULARITY_DESC"
+        }
+        val format = if (section == "movies") "MOVIE" else "TV"
+
+        val query = """
+            query {
+              Page(page: $page, perPage: 18) {
+                media(type: ANIME, format: $format, sort: [$sort]) {
+                  id
+                  title { english romaji }
+                  coverImage { extraLarge large }
+                  format
+                  episodes
+                }
+              }
+            }
+        """.trimIndent()
+
+        return try {
+            val res = app.post(
+                "https://graphql.anilist.co",
+                headers = mapOf("Content-Type" to "application/json"),
+                json = mapOf("query" to query)
+            ).text
+
+            val root = org.json.JSONObject(res)
+            val mediaArray = root.optJSONObject("data")?.optJSONObject("Page")?.optJSONArray("media") ?: return emptyList()
+            val list = mutableListOf<SearchResponse>()
+
+            for (i in 0 until mediaArray.length()) {
+                val item = mediaArray.optJSONObject(i) ?: continue
+                val id = item.optInt("id")
+                val titleObj = item.optJSONObject("title")
+                val title = titleObj?.optString("english")?.takeIf { it.isNotBlank() && it != "null" }
+                    ?: titleObj?.optString("romaji").orEmpty()
+                if (title.isBlank()) continue
+
+                val poster = item.optJSONObject("coverImage")?.let {
+                    it.optString("extraLarge").ifBlank { it.optString("large") }
+                }.orEmpty()
+
+                val isMovie = item.optString("format") == "MOVIE"
+                val slug = createSlug(title)
+                val prefix = if (isMovie) "movie" else "series"
+                val langCode = if (section.startsWith("lang:")) section.substringAfter("lang:") else "hin"
+
+                val url = "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-1-$langCode&lang=$langCode&anilistid=$id"
+
+                list.add(
+                    newAnimeSearchResponse(title, url, if (isMovie) TvType.AnimeMovie else TvType.Anime) {
+                        this.posterUrl = poster
+                        this.addDubStatus(isDub = true, isSub = true)
+                    }
+                )
+            }
+            list
+        } catch (e: Exception) {
+            emptyList()
         }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val cleanQuery = query.trim()
         if (cleanQuery.isBlank()) return emptyList()
-        val encodedQuery = java.net.URLEncoder.encode(cleanQuery, "UTF-8")
 
-        val searchUrl = "$mainUrl/?s=$encodedQuery"
-        val html = app.get(searchUrl).text
-        if (html.isBlank()) return emptyList()
+        // Search via AniList + ToonPlay URL builder so search always works fast without SPA blocking
+        val gql = """
+            query {
+              Page(page: 1, perPage: 20) {
+                media(search: "$cleanQuery", type: ANIME, sort: [POPULARITY_DESC]) {
+                  id
+                  title { english romaji }
+                  coverImage { extraLarge large }
+                  format
+                }
+              }
+            }
+        """.trimIndent()
 
-        val doc = Jsoup.parse(html)
-        val results = doc.select("article, div.post, div.item, .grid-item, a:has(img)")
-            .mapNotNull { it.toSearchResult() }
-            .filter { !it.url.contains("/category/") && !it.url.contains("/tag/") && !it.url.contains("/page/") }
-            .distinctBy { it.url }
+        return try {
+            val res = app.post(
+                "https://graphql.anilist.co",
+                headers = mapOf("Content-Type" to "application/json"),
+                json = mapOf("query" to gql)
+            ).text
 
-        return results
+            val mediaArray = org.json.JSONObject(res)
+                .optJSONObject("data")?.optJSONObject("Page")?.optJSONArray("media") ?: return emptyList()
+
+            val results = mutableListOf<SearchResponse>()
+            for (i in 0 until mediaArray.length()) {
+                val item = mediaArray.optJSONObject(i) ?: continue
+                val id = item.optInt("id")
+                val titleObj = item.optJSONObject("title")
+                val title = titleObj?.optString("english")?.takeIf { it.isNotBlank() && it != "null" }
+                    ?: titleObj?.optString("romaji").orEmpty()
+                if (title.isBlank()) continue
+
+                val poster = item.optJSONObject("coverImage")?.let {
+                    it.optString("extraLarge").ifBlank { it.optString("large") }
+                }.orEmpty()
+
+                val isMovie = item.optString("format") == "MOVIE"
+                val slug = createSlug(title)
+                val prefix = if (isMovie) "movie" else "series"
+                val watchUrl = "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-1-hin&lang=hin&anilistid=$id"
+
+                results.add(
+                    newAnimeSearchResponse(title, watchUrl, if (isMovie) TvType.AnimeMovie else TvType.Anime) {
+                        this.posterUrl = poster
+                        this.addDubStatus(isDub = true, isSub = true)
+                    }
+                )
+            }
+            results
+        } catch (e: Exception) {
+            emptyList()
+        }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val html = app.get(url).text
-        val doc = Jsoup.parse(html)
+        val doc = fetchRenderedDom(url)
 
-        val title = doc.selectFirst("h1.entry-title, h1.title, .single-post-title")?.text()?.trim() 
-            ?: doc.selectFirst("meta[property='og:title']")?.attr("content")?.substringBefore(" - ")
-            ?: "ToonPlay Content"
-            
-        val poster = fixUrl(
-            doc.selectFirst("meta[property='og:image']")?.attr("content")
-                ?: doc.selectFirst(".single-entry-body img, .entry-content img, .post-image img")?.attr("src")
-                ?: ""
-        )
-        
-        val description = doc.selectFirst(".entry-content p, .xp-plot-box, .description")?.text()?.trim()
+        // Extract Title from rendered DOM or OG meta (matches dom.htmltoo.html)
+        var title = doc.selectFirst("h1.text-xl, h1")?.text()?.trim()
+            ?: doc.selectFirst("meta[property='og:title']")?.attr("content")?.substringBefore(" - ToonPlay")?.trim()
+            ?: url.substringAfter("/watch/").substringBefore("?").removePrefix("series-").removePrefix("movie-").replace("-", " ").capitalize()
+
+        var poster = doc.selectFirst("div.aspect-\\[3\\/4\\] img")?.attr("src")
+            ?: doc.selectFirst("meta[property='og:image']")?.attr("content")
+            ?: ""
+
+        var plot = doc.selectFirst("p.line-clamp-3, p.text-slate-300")?.text()?.trim()
             ?: doc.selectFirst("meta[property='og:description']")?.attr("content")
-            ?: "No Plot Found"
+            ?: "Watch $title online in HD with multi-audio on ToonPlay."
 
-        val tvType = if (title.contains("Movie", true)) TvType.AnimeMovie else TvType.Anime
+        val tags = doc.select("div.pt-1.flex.flex-wrap span").map { it.text().trim() }.filter { it.isNotBlank() }
 
-        val episodes = mutableListOf<Episode>()
-        val movieLinks = mutableListOf<String>()
+        // Parse AniList ID from URL if available to enrich metadata & episode count
+        val anilistId = Regex("""anilistid=(\d+)""").find(url)?.groupValues?.get(1)?.toIntOrNull()
+        var totalEpCount = 24
 
-        doc.select("a.wp-download-btn, a.btn, a.btn-download, .entry-content a[href]").forEach { element ->
-            val epLink = element.attr("href")
-            val epName = element.text().trim()
-
-            if (epLink.isNotBlank() && (epLink.startsWith("http") || epLink.startsWith("/"))) {
-                val absoluteLink = fixUrl(epLink)
-                if (tvType == TvType.AnimeMovie) {
-                    movieLinks.add(absoluteLink)
-                } else {
-                    val epNum = Regex("""(?i)ep(?:isode)?\.?\s*0*(\d{1,3})""").find(epName)?.groupValues?.get(1)?.toIntOrNull()
-                        ?: (episodes.size + 1)
-                    
-                    episodes.add(
-                        newEpisode(absoluteLink) {
-                            this.name = epName.ifBlank { "Episode $epNum" }
-                            this.episode = epNum
-                        }
-                    )
+        if (anilistId != null) {
+            try {
+                val gql = """query { Media(id: $anilistId) { title { english romaji } description coverImage { extraLarge } episodes } }"""
+                val res = app.post("https://graphql.anilist.co", json = mapOf("query" to gql)).text
+                val media = org.json.JSONObject(res).optJSONObject("data")?.optJSONObject("Media")
+                if (media != null) {
+                    if (title.equals("ToonPlay", true) || title.isBlank()) {
+                        title = media.optJSONObject("title")?.optString("english").orEmpty()
+                    }
+                    if (poster.isBlank() || poster.contains("og-image.jpg")) {
+                        poster = media.optJSONObject("coverImage")?.optString("extraLarge").orEmpty()
+                    }
+                    val desc = media.optString("description")
+                    if (desc.isNotBlank() && desc != "null") {
+                        plot = Jsoup.parse(desc).text()
+                    }
+                    val eps = media.optInt("episodes", 0)
+                    if (eps > 0) totalEpCount = eps
                 }
+            } catch (_: Exception) {}
+        }
+
+        val isMovie = url.contains("/watch/movie-")
+        val baseWatchUrl = url.substringBefore("?")
+        val anilistParam = if (anilistId != null) "&anilistid=$anilistId" else ""
+
+        // Parse episodes from DOM buttons (matches dom.htmltoo.html: <button title="Ryomen Sukuna">...<span>1</span></button>)
+        val domEpButtons = doc.select("aside button[title]:has(span:contains(EP))")
+        val episodes = mutableListOf<Episode>()
+
+        if (domEpButtons.isNotEmpty()) {
+            domEpButtons.forEach { btn ->
+                val epTitle = btn.attr("title").trim()
+                val epNum = btn.selectFirst("span.tabular-nums")?.text()?.trim()?.toIntOrNull() ?: (episodes.size + 1)
+                val epData = EpisodeData(
+                    watchUrl = "$baseWatchUrl?season=1&ep=$epNum&server=options-1-hin&lang=hin$anilistParam",
+                    season = 1,
+                    episode = epNum,
+                    anilistId = anilistId
+                ).toJson()
+
+                episodes.add(
+                    newEpisode(epData) {
+                        this.name = epTitle.ifBlank { "Episode $epNum" }
+                        this.season = 1
+                        this.episode = epNum
+                    }
+                )
+            }
+        } else if (!isMovie) {
+            // Fallback episode list if JS didn't render the sidebar buttons
+            for (epNum in 1..totalEpCount) {
+                val epData = EpisodeData(
+                    watchUrl = "$baseWatchUrl?season=1&ep=$epNum&server=options-1-hin&lang=hin$anilistParam",
+                    season = 1,
+                    episode = epNum,
+                    anilistId = anilistId
+                ).toJson()
+
+                episodes.add(
+                    newEpisode(epData) {
+                        this.name = "Episode $epNum"
+                        this.season = 1
+                        this.episode = epNum
+                    }
+                )
             }
         }
 
-        return if (tvType == TvType.AnimeMovie || episodes.isEmpty()) {
-            val data = mapper.writeValueAsString(movieLinks.ifEmpty { listOf(url) })
-            newMovieLoadResponse(title, url, TvType.AnimeMovie, data) {
-                this.posterUrl = poster
-                this.plot = description
+        return if (isMovie) {
+            val movieData = EpisodeData(
+                watchUrl = url,
+                season = 1,
+                episode = 1,
+                anilistId = anilistId
+            ).toJson()
+
+            newMovieLoadResponse(title, url, TvType.AnimeMovie, movieData) {
+                this.posterUrl = fixUrl(poster)
+                this.plot = plot
+                this.tags = tags
             }
         } else {
-            newTvSeriesLoadResponse(title, url, TvType.Anime, episodes.distinctBy { it.data }) {
-                this.posterUrl = poster
-                this.plot = description
+            newTvSeriesLoadResponse(title, url, TvType.Anime, episodes) {
+                this.posterUrl = fixUrl(poster)
+                this.plot = plot
+                this.tags = tags
             }
         }
     }
@@ -172,37 +392,67 @@ class ToonPlayProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        return try {
-            val links = tryParseJson<List<String>>(data) ?: listOf(data)
-            var found = false
+        val epData = tryParseJson<EpisodeData>(data)
+        val targetUrl = epData?.watchUrl ?: data
+        var foundLinks = false
 
-            for (link in links) {
-                if (link.contains("filemoon") || link.contains("streamwish") || link.contains("vidhide") || link.contains("streamtape") || link.contains("voe") || link.contains("abyss")) {
-                    loadExtractor(link, "$mainUrl/", subtitleCallback, callback)
-                    found = true
-                } else {
+        // Both options-0 (ravok.buzz) and options-1 (animesalt multi-audio) from your HTML files
+        val serverUrls = listOf(
+            targetUrl.replace(Regex("server=[^&]+"), "server=options-1-hin"),
+            targetUrl.replace(Regex("server=[^&]+"), "server=options-0")
+        ).distinct()
+
+        for (sUrl in serverUrls) {
+            val doc = fetchRenderedDom(sUrl)
+            val iframeSrc = doc.selectFirst("iframe#watchpage-active-iframe, iframe")?.attr("src")?.trim().orEmpty()
+
+            if (iframeSrc.isNotBlank()) {
+                // Case 1: AnimeSalt Multi-Audio Base64 Player (from dom.htmltoo.html)
+                // Example: https://animesalt.streamindia.co.in/abyss?url=https%3A%2F%2Fanimesalt.cx%2F...%3Fdata%3DW3sibGFuZ3VhZ2UiOiJIaW5kaSIsImxpbmsiOiJodHRwczpcL1wvcGxheWVyLmFieXNzcGxheWVyLmNvbVwvWWFYZC1sdmIwIn0...
+                if (iframeSrc.contains("data=")) {
+                    val decodedUrl = URLDecoder.decode(iframeSrc, "UTF-8")
+                    val base64Data = decodedUrl.substringAfter("data=").substringBefore("&")
                     try {
-                        val doc = app.get(link).document
-                        doc.select("iframe").forEach { iframe ->
-                            val src = iframe.attr("src").takeIf { it.isNotBlank() } ?: iframe.attr("data-src")
-                            if (!src.isNullOrBlank()) {
-                                loadExtractor(fixUrl(src), link, subtitleCallback, callback)
-                                found = true
-                            }
-                        }
-                        doc.select("a[href]").forEach { a ->
-                            val href = a.attr("href")
-                            if (href.contains("filemoon") || href.contains("streamwish") || href.contains("vidhide") || href.contains("streamtape") || href.contains("voe") || href.contains("abyss")) {
-                                loadExtractor(href, link, subtitleCallback, callback)
-                                found = true
+                        val jsonStr = String(Base64.decode(base64Data, Base64.DEFAULT))
+                        val jsonArray = org.json.JSONArray(jsonStr)
+                        for (i in 0 until jsonArray.length()) {
+                            val obj = jsonArray.optJSONObject(i) ?: continue
+                            val langName = obj.optString("language", "Multi")
+                            val playerLink = obj.optString("link").replace("\\/", "/")
+                            if (playerLink.isNotBlank()) {
+                                foundLinks = true
+                                loadExtractor(playerLink, "$mainUrl/", subtitleCallback) { link ->
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            source = this.name,
+                                            name = "${link.name} - $langName",
+                                            url = link.url,
+                                            type = link.type
+                                        ) {
+                                            this.referer = link.referer
+                                            this.quality = link.quality
+                                            this.headers = link.headers
+                                        }
+                                    )
+                                }
                             }
                         }
                     } catch (_: Exception) {}
                 }
+
+                // Case 2: Direct Embed Player like ravok.buzz / filemoon / streamwish (from dom.htmltoon.html)
+                loadExtractor(fixUrl(iframeSrc), "$mainUrl/", subtitleCallback, callback)
+                foundLinks = true
             }
-            found
-        } catch (e: Exception) {
-            false
         }
+
+        return foundLinks
     }
+
+    data class EpisodeData(
+        val watchUrl: String,
+        val season: Int = 1,
+        val episode: Int = 1,
+        val anilistId: Int? = null
+    )
 }
