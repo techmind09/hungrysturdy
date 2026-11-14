@@ -205,7 +205,7 @@ class ToonPlayProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val cleanQuery = query.trim()
+        val cleanQuery = query.trim().replace("\\", "\\\\").replace("\"", "\\\"")
         if (cleanQuery.isBlank()) return emptyList()
 
         val gql = """
@@ -272,16 +272,16 @@ class ToonPlayProvider : MainAPI() {
             .replace("-", " ")
             .replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
 
-        var title = doc.selectFirst("h1.text-xl, h1")?.text()?.trim()
-            ?: doc.selectFirst("meta[property='og:title']")?.attr("content")?.substringBefore(" - ToonPlay")?.trim()
+        var title = doc.selectFirst("h1.text-xl, h1")?.text()?.trim()?.takeIf { it.isNotBlank() }
+            ?: doc.selectFirst("meta[property='og:title']")?.attr("content")?.substringBefore(" - ToonPlay")?.trim()?.takeIf { it.isNotBlank() }
             ?: fallbackSlugTitle
 
-        var poster = doc.selectFirst("div.aspect-\\[3\\/4\\] img")?.attr("src")
-            ?: doc.selectFirst("meta[property='og:image']")?.attr("content")
+        var poster = doc.selectFirst("div.aspect-\\[3\\/4\\] img")?.attr("src")?.takeIf { it.isNotBlank() }
+            ?: doc.selectFirst("meta[property='og:image']")?.attr("content")?.takeIf { it.isNotBlank() }
             ?: ""
 
-        var plot = doc.selectFirst("p.line-clamp-3, p.text-slate-300")?.text()?.trim()
-            ?: doc.selectFirst("meta[property='og:description']")?.attr("content")
+        var plot = doc.selectFirst("p.line-clamp-3, p.text-slate-300")?.text()?.trim()?.takeIf { it.isNotBlank() }
+            ?: doc.selectFirst("meta[property='og:description']")?.attr("content")?.takeIf { it.isNotBlank() }
             ?: "Watch $title online in HD with multi-audio on ToonPlay."
 
         val tags = doc.select("div.pt-1.flex.flex-wrap span").map { it.text().trim() }.filter { it.isNotBlank() }
@@ -296,7 +296,9 @@ class ToonPlayProvider : MainAPI() {
                 val media = org.json.JSONObject(res).optJSONObject("data")?.optJSONObject("Media")
                 if (media != null) {
                     if (title.equals("ToonPlay", true) || title.isBlank()) {
-                        title = media.optJSONObject("title")?.optString("english").orEmpty()
+                        val engTitle = media.optJSONObject("title")?.optString("english").orEmpty()
+                        val romajiTitle = media.optJSONObject("title")?.optString("romaji").orEmpty()
+                        title = engTitle.takeIf { it.isNotBlank() && it != "null" } ?: romajiTitle.ifBlank { title }
                     }
                     if (poster.isBlank() || poster.contains("og-image.jpg")) {
                         poster = media.optJSONObject("coverImage")?.optString("extraLarge").orEmpty()
@@ -389,8 +391,16 @@ class ToonPlayProvider : MainAPI() {
         var foundLinks = false
 
         val serverUrls = listOf(
-            targetUrl.replace(Regex("server=[^&]+"), "server=options-1-hin"),
-            targetUrl.replace(Regex("server=[^&]+"), "server=options-0")
+            if (targetUrl.contains("server=")) {
+                targetUrl.replace(Regex("server=[^&]+"), "server=options-1-hin")
+            } else {
+                "$targetUrl${if (targetUrl.contains("?")) "&" else "?"}server=options-1-hin"
+            },
+            if (targetUrl.contains("server=")) {
+                targetUrl.replace(Regex("server=[^&]+"), "server=options-0")
+            } else {
+                "$targetUrl${if (targetUrl.contains("?")) "&" else "?"}server=options-0"
+            }
         ).distinct()
 
         for (sUrl in serverUrls) {
@@ -400,17 +410,21 @@ class ToonPlayProvider : MainAPI() {
             if (iframeSrc.isNotBlank()) {
                 if (iframeSrc.contains("data=")) {
                     val decodedUrl = URLDecoder.decode(iframeSrc, "UTF-8")
-                    val base64Data = decodedUrl.substringAfter("data=").substringBefore("&")
+                    val rawBase64 = decodedUrl.substringAfter("data=").substringBefore("&")
+                        .replace(" ", "+")
                     try {
-                        val jsonStr = String(Base64.decode(base64Data, Base64.DEFAULT))
+                        val jsonStr = String(Base64.decode(rawBase64, Base64.DEFAULT))
                         val jsonArray = org.json.JSONArray(jsonStr)
                         for (i in 0 until jsonArray.length()) {
                             val obj = jsonArray.optJSONObject(i) ?: continue
                             val langName = obj.optString("language", "Multi")
-                            val playerLink = obj.optString("link").replace("\\/", "/")
+                            val playerLink = obj.optString("link").replace("\\/", "/").trim()
                             if (playerLink.isNotBlank()) {
-                                // FIXED: loadExtractor is called directly inside the suspend loop function without violating coroutine rules
+                                val extractedLinks = mutableListOf<ExtractorLink>()
                                 val success = loadExtractor(playerLink, "$mainUrl/", subtitleCallback) { link ->
+                                    extractedLinks.add(link)
+                                }
+                                for (link in extractedLinks) {
                                     callback.invoke(
                                         newExtractorLink(
                                             source = this.name,
@@ -424,7 +438,7 @@ class ToonPlayProvider : MainAPI() {
                                         }
                                     )
                                 }
-                                if (success) foundLinks = true
+                                if (success || extractedLinks.isNotEmpty()) foundLinks = true
                             }
                         }
                     } catch (_: Exception) {}
