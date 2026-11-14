@@ -23,6 +23,7 @@ class Plugin : Plugin() {
         registerExtractorAPI(KatGDFlixExtractor())
         registerExtractorAPI(GDFlixCfd())
         registerExtractorAPI(GDFlixdad())
+        registerExtractorAPI(GDFlixNew9()) // Added new9.gdflix.io support
         registerExtractorAPI(KatPixelDrainExtractor())
         registerExtractorAPI(KatHBPlayExtractor())
         registerExtractorAPI(KatFuckingFastExtractor())
