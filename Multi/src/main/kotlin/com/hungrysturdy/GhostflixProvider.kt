@@ -47,7 +47,8 @@ class GhostflixProvider : MainAPI() {
 
         try {
             val response = app.get(tmdbUrl, headers = tmdbHeaders).parsedSafe<TmdbPageResponse>()
-            val items = response?.results?.mapNotNull { item ->
+            val resultsList = response?.results ?: emptyList()
+            val items = resultsList.mapNotNull { item ->
                 val title = item.title ?: item.name ?: item.originalTitle ?: item.originalName ?: return@mapNotNull null
                 val mediaId = item.id ?: return@mapNotNull null
                 val isTv = item.mediaType.equals("tv", ignoreCase = true) || request.data.startsWith("tv") || request.data.contains("discover/tv")
@@ -63,7 +64,7 @@ class GhostflixProvider : MainAPI() {
                         this.posterUrl = poster
                     }
                 }
-            } ?: emptyList()
+            }
 
             if (items.isNotEmpty()) {
                 homePageList.add(HomePageList(request.name, items))
@@ -115,7 +116,8 @@ class GhostflixProvider : MainAPI() {
 
         try {
             val response = app.get(searchUrl, headers = tmdbHeaders).parsedSafe<TmdbPageResponse>()
-            val results = response?.results?.mapNotNull { item ->
+            val resultsList = response?.results ?: emptyList()
+            val results = resultsList.mapNotNull { item ->
                 if (item.mediaType == "person") return@mapNotNull null
                 val title = item.title ?: item.name ?: item.originalTitle ?: item.originalName ?: return@mapNotNull null
                 val mediaId = item.id ?: return@mapNotNull null
@@ -128,7 +130,7 @@ class GhostflixProvider : MainAPI() {
                 } else {
                     newMovieSearchResponse(title, targetUrl, TvType.Movie) { this.posterUrl = poster }
                 }
-            } ?: emptyList()
+            }
 
             if (results.isNotEmpty()) return results
         } catch (_: Exception) {}
@@ -166,7 +168,7 @@ class GhostflixProvider : MainAPI() {
 
         return if (isTv) {
             val episodes = mutableListOf<Episode>()
-            val validSeasons = seasonsList?.filter { (it.seasonNumber ?: 0) > 0 } ?: emptyList()
+            val validSeasons = seasonsList?.filter { it.seasonNumber != null && it.seasonNumber > 0 } ?: emptyList()
 
             if (validSeasons.isNotEmpty()) {
                 validSeasons.forEach { season ->
@@ -174,7 +176,8 @@ class GhostflixProvider : MainAPI() {
                     try {
                         val sUrl = "https://api.themoviedb.org/3/tv/$tmdbId/season/$sNum?api_key=$TMDB_API_KEY"
                         val sResp = app.get(sUrl, headers = tmdbHeaders).parsedSafe<TmdbSeasonDetails>()
-                        sResp?.episodes?.forEach { ep ->
+                        val epsList = sResp?.episodes ?: emptyList()
+                        epsList.forEach { ep ->
                             val epNum = ep.episodeNumber ?: return@forEach
                             val playData = LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum).toJson()
 
@@ -346,22 +349,22 @@ class GhostflixProvider : MainAPI() {
             }
 
             callback.invoke(
-    newExtractorLink(
-        source = name,
-        name = "$name - $serverName",
-        url = streamUrl,
-        type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-    ) {
-        this.referer = referer
-        this.quality = quality
-        this.headers = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Referer" to referer,
-            "Origin" to referer.removeSuffix("/")
-        )
-    }
-)
-
+                newExtractorLink(
+                    source = name,
+                    name = "$name - $serverName",
+                    url = streamUrl,
+                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.referer = referer
+                    this.quality = quality
+                    this.headers = mapOf(
+                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "Referer" to referer,
+                        "Origin" to referer.removeSuffix("/")
+                    )
+                }
+            )
+        }
 
         Regex("""https?://[^\s"'<>\\]+\.(?:vtt|srt)(?:\?[^\s"'<>\\]*)?""").findAll(unescaped).forEach { match ->
             val subUrl = match.value
