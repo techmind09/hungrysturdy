@@ -3,7 +3,6 @@ package com.hungrysturdy
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.nodes.Document
 
 class GhostflixProvider : MainAPI() {
@@ -29,6 +28,19 @@ class GhostflixProvider : MainAPI() {
     private val tmdbHeaders = mapOf(
         "Authorization" to "Bearer $TMDB_ACCESS_TOKEN",
         "Accept" to "application/json"
+    )
+
+    // Standard Browser Headers to bypass Cloudflare
+    private val cfHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language" to "en-US,en;q=0.9",
+        "Accept-Encoding" to "gzip, deflate, br",
+        "Connection" to "keep-alive",
+        "Upgrade-Insecure-Requests" to "1",
+        "Sec-Ch-Ua" to "\"Chromium\";v=\"122\", \"Not(A:Brand\";v=\"24\", \"Google Chrome\";v=\"122\"",
+        "Sec-Ch-Ua-Mobile" to "?0",
+        "Sec-Ch-Ua-Platform" to "\"Windows\""
     )
 
     override val mainPage = mainPageOf(
@@ -71,11 +83,14 @@ class GhostflixProvider : MainAPI() {
             }
         } catch (_: Exception) {}
 
-        val document = app.get(mainUrl).document
-        val trendingItems = extractNextFlightTrending(document)
-        if (trendingItems.isNotEmpty()) {
-            homePageList.add(HomePageList(request.name, trendingItems))
-        }
+        // Fallback to ghostflix html if TMDB fails
+        try {
+            val document = app.get(mainUrl, headers = cfHeaders).document
+            val trendingItems = extractNextFlightTrending(document)
+            if (trendingItems.isNotEmpty()) {
+                homePageList.add(HomePageList(request.name, trendingItems))
+            }
+        } catch (_: Exception) {}
 
         return newHomePageResponse(homePageList, hasNext = false)
     }
@@ -91,7 +106,7 @@ class GhostflixProvider : MainAPI() {
             val match = regex.find(unescaped) ?: continue
             val jsonArray = match.groupValues[1]
 
-            val parsed = tryParseJson<List<TrendingItem>>(jsonArray) ?: continue
+            val parsed = AppUtils.tryParseJson<List<TrendingItem>>(jsonArray) ?: continue
             parsed.forEach { item ->
                 val title = item.title ?: item.name ?: item.originalTitle ?: item.originalName ?: return@forEach
                 val mediaId = item.id ?: return@forEach
@@ -178,43 +193,50 @@ class GhostflixProvider : MainAPI() {
                         val epsList: List<TmdbEpisode> = sResp?.episodes ?: emptyList()
                         epsList.forEach { ep ->
                             val epNum = ep.episodeNumber ?: return@forEach
-                            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
+                            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
 
+                            val episodeName = ep.name ?: "Episode $epNum"
+                            val episodePoster = ep.stillPath?.let { "$TMDB_IMAGE_BASE$it" }
+                            val episodeDesc = ep.overview
+                            
                             episodes.add(
-                                newEpisode(playData) {
-                                    this.name = ep.name ?: "Episode $epNum"
-                                    this.season = sNum
-                                    this.episode = epNum
-                                    this.posterUrl = ep.stillPath?.let { "$TMDB_IMAGE_BASE$it" }
-                                    this.description = ep.overview
-                                }
+                                Episode(
+                                    data = playData,
+                                    name = episodeName,
+                                    season = sNum,
+                                    episode = epNum,
+                                    posterUrl = episodePoster,
+                                    description = episodeDesc
+                                )
                             )
                         }
                     } catch (_: Exception) {
                         val epCount = (season.episodeCount ?: 12).coerceAtLeast(1)
                         for (epNum in 1..epCount) {
-                            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
+                            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
 
                             episodes.add(
-                                newEpisode(playData) {
-                                    this.name = "Episode $epNum"
-                                    this.season = sNum
-                                    this.episode = epNum
-                                }
+                                Episode(
+                                    data = playData,
+                                    name = "Episode $epNum",
+                                    season = sNum,
+                                    episode = epNum
+                                )
                             )
                         }
                     }
                 }
             } else {
                 for (ep in 1..24) {
-                    val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = 1, episode = ep))
+                    val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "tv", season = 1, episode = ep))
 
                     episodes.add(
-                        newEpisode(playData) {
-                            this.name = "Episode $ep"
-                            this.season = 1
-                            this.episode = ep
-                        }
+                        Episode(
+                            data = playData,
+                            name = "Episode $ep",
+                            season = 1,
+                            episode = ep
+                        )
                     )
                 }
             }
@@ -226,7 +248,7 @@ class GhostflixProvider : MainAPI() {
                 this.year = year
             }
         } else {
-            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "movie"))
+            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "movie"))
             newMovieLoadResponse(title, url, TvType.Movie, playData) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = backdrop ?: poster
@@ -242,7 +264,7 @@ class GhostflixProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val loadData = tryParseJson<LoadData>(data) ?: return false
+        val loadData = AppUtils.tryParseJson<LoadData>(data) ?: return false
         val id = loadData.id
         val isTv = loadData.type == "tv"
         val s = loadData.season ?: 1
@@ -250,13 +272,15 @@ class GhostflixProvider : MainAPI() {
 
         val resolveHosts = listOf(
             "Bolt" to "https://vidbolt.pro",
-            "Orion" to "https://vidcore.net"
+            "Orion" to "https://vidcore.net",
+            "Flix" to "https://www.viduki.net"
         )
 
         resolveHosts.amap { (serverName, baseHost) ->
             val resolveEndpoints = if (isTv) {
                 listOf(
                     "$baseHost/api/resolve?type=tv&id=$id&season=$s&episode=$e",
+                    "$baseHost/4/tv/$id/$s/$e?color=E50914",
                     "$baseHost/tv/$id/$s/$e?theme=E50914&autoPlay=true"
                 )
             } else {
@@ -266,22 +290,54 @@ class GhostflixProvider : MainAPI() {
                 )
             }
 
+            // Apply exact Cloudflare bypass headers dynamically
+            val reqHeaders = cfHeaders.toMutableMap().apply {
+                put("Origin", baseHost)
+                put("Referer", "$baseHost/")
+            }
+
             for (endpoint in resolveEndpoints) {
                 try {
                     val resText = app.get(
                         endpoint,
-                        referer = "$baseHost/",
-                        headers = mapOf(
-                            "Origin" to baseHost,
-                            "Referer" to "$baseHost/",
-                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                            "Accept" to "*/*"
-                        )
+                        headers = reqHeaders,
+                        timeout = 15
                     ).text
 
                     extractStreamsFromText(resText, serverName, "$baseHost/", subtitleCallback, callback)
                 } catch (_: Exception) {}
             }
+        }
+
+        // Run fallback embed extractors natively
+        val embedUrls = if (isTv) {
+            listOf(
+                "https://vidsrc.xyz/embed/tv/$id/$s-$e",
+                "https://vidsrc.cc/v2/embed/tv/$id/$s/$e",
+                "https://vidsrc.pro/embed/tv/$id/$s/$e",
+                "https://vidlink.pro/tv/$id/$s/$e",
+                "https://autoembed.cc/embed/tv/$id/$s/$e",
+                "https://player.autoembed.cc/embed/tv/$id/$s/$e",
+                "https://multiembed.mov/directstream.php?video_id=$id&tmdb=1&s=$s&e=$e",
+                "https://embed.su/embed/tv/$id/$s/$e"
+            )
+        } else {
+            listOf(
+                "https://vidsrc.xyz/embed/movie/$id",
+                "https://vidsrc.cc/v2/embed/movie/$id",
+                "https://vidsrc.pro/embed/movie/$id",
+                "https://vidlink.pro/movie/$id",
+                "https://autoembed.cc/embed/movie/$id",
+                "https://player.autoembed.cc/embed/movie/$id",
+                "https://multiembed.mov/directstream.php?video_id=$id&tmdb=1",
+                "https://embed.su/embed/movie/$id"
+            )
+        }
+
+        embedUrls.amap { embedUrl ->
+            try {
+                loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
+            } catch (_: Exception) {}
         }
 
         return true
@@ -310,23 +366,20 @@ class GhostflixProvider : MainAPI() {
                 else -> Qualities.Unknown.value
             }
 
+            // Injected Cloudflare Bypass Headers inside ExtractorLink so ExoPlayer handles it smoothly
             callback.invoke(
-                newExtractorLink(
+                ExtractorLink(
                     source = name,
                     name = "$name - $serverName",
                     url = streamUrl,
-                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                ) {
-                    this.referer = referer
-                    this.quality = quality
-                    this.headers = mapOf(
-                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                        "Referer" to referer,
-                        "Origin" to referer.removeSuffix("/"),
-                        "Accept" to "*/*",
-                        "Connection" to "keep-alive"
-                    )
-                }
+                    referer = referer,
+                    quality = quality,
+                    type = if (isM3u8) INFER_TYPE else ExtractorLinkType.VIDEO,
+                    headers = cfHeaders.toMutableMap().apply {
+                        put("Origin", referer.removeSuffix("/"))
+                        put("Referer", referer)
+                    }
+                )
             )
         }
 
