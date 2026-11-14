@@ -6,8 +6,6 @@ import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
@@ -33,15 +31,15 @@ class ToonPlayProvider : MainAPI() {
         "series" to "Most Popular TV Series",
         "movies" to "Blockbuster Anime Movies",
         "cartoons" to "Cartoons",
-        "hin" to "Language: Hindi",
-        "tel" to "Language: Telugu",
-        "tam" to "Language: Tamil",
-        "mal" to "Language: Malayalam",
-        "kan" to "Language: Kannada",
-        "ben" to "Language: Bengali",
-        "eng" to "Language: English",
-        "jpn" to "Language: Japanese",
-        "kor" to "Language: Korean"
+        "lang:hin" to "Language: Hindi",
+        "lang:tel" to "Language: Telugu",
+        "lang:tam" to "Language: Tamil",
+        "lang:mal" to "Language: Malayalam",
+        "lang:kan" to "Language: Kannada",
+        "lang:ben" to "Language: Bengali",
+        "lang:eng" to "Language: English",
+        "lang:jpn" to "Language: Japanese",
+        "lang:kor" to "Language: Korean"
     )
 
     private fun createSlug(title: String): String {
@@ -394,7 +392,6 @@ class ToonPlayProvider : MainAPI() {
         val targetUrl = epData?.watchUrl ?: data
         var foundLinks = false
 
-        // Loop through options-0, options-1, and options-2 as shown in user screenshots
         val serverUrls = listOf("options-1", "options-0", "options-2").map { serverOpt ->
             if (targetUrl.contains("server=")) {
                 targetUrl.replace(Regex("server=[^&]+"), "server=$serverOpt")
@@ -420,21 +417,19 @@ class ToonPlayProvider : MainAPI() {
                             val langName = obj.optString("language", "Multi")
                             val playerLink = obj.optString("link").replace("\\/", "/").trim()
                             if (playerLink.isNotBlank()) {
-                                val success = withContext(Dispatchers.IO) {
-                                    loadExtractor(playerLink, "$mainUrl/", subtitleCallback) { link ->
-                                        callback.invoke(
-                                            newExtractorLink(
-                                                source = this@ToonPlayProvider.name,
-                                                name = "${link.name} - $langName",
-                                                url = link.url,
-                                                type = link.type
-                                            ) {
-                                                this.referer = link.referer
-                                                this.quality = link.quality
-                                                this.headers = link.headers
-                                            }
-                                        )
-                                    }
+                                val success = loadExtractor(playerLink, "$mainUrl/", subtitleCallback) { link ->
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            source = name,
+                                            name = "${link.name} - $langName",
+                                            url = link.url,
+                                            type = link.type
+                                        ) {
+                                            this.referer = link.referer
+                                            this.quality = link.quality
+                                            this.headers = link.headers
+                                        }
+                                    )
                                 }
                                 if (success) foundLinks = true
                             }
@@ -442,9 +437,7 @@ class ToonPlayProvider : MainAPI() {
                     } catch (_: Exception) {}
                 }
 
-                val success = withContext(Dispatchers.IO) {
-                    loadExtractor(fixUrl(iframeSrc), "$mainUrl/", subtitleCallback, callback)
-                }
+                val success = loadExtractor(fixUrl(iframeSrc), "$mainUrl/", subtitleCallback, callback)
                 if (success) foundLinks = true
             }
         }
