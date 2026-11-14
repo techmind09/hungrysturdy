@@ -7,21 +7,23 @@ import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.*
 import java.net.URI
 
-private val cfKiller by lazy { CloudflareKiller() }
+private val katCfKiller by lazy { CloudflareKiller() }
 
-private val defaultHeaders = mapOf(
-    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-    "Accept-Language" to "en-US,en;q=0.9"
+private val katBrowserHeaders = mapOf(
+    "User-Agent" to "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36",
+    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language" to "en-US,en;q=0.9",
+    "Cookie" to "xla=s4t"
 )
 
+// Agar Filemoon aapke project ki kisi aur file mein pehle se hai, toh niche wali 4 lines comment kar dena
 class Filemoon : Filesim() {
     override val name = "Filemoon"
     override var mainUrl = "https://filemoon.sx"
 }
 
 // =========================================================================
-// 1. HubCloud Extractor & Mirrors
+// 1. HubCloud Extractor & Mirrors (hubcloud.pw, .dad, .club, gamerxyt.com)
 // =========================================================================
 open class KatHubCloudExtractor : ExtractorApi() {
     override val name = "HubCloud"
@@ -34,82 +36,7 @@ open class KatHubCloudExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        try {
-            val response = app.get(url, headers = defaultHeaders, referer = referer, interceptor = cfKiller)
-            val doc = response.document
-            val htmlText = response.text
-
-            val fileHeader = doc.selectFirst("div.card-header, title")?.text()?.trim().orEmpty()
-            val detectedQuality = getQualityFromName(fileHeader).let {
-                if (it == Qualities.Unknown.value) getQualityFromName(referer.orEmpty()) else it
-            }
-
-            val gamerLink = if (url.contains("hubcloud.php")) {
-                url
-            } else {
-                doc.selectFirst("a#download, a[href*='hubcloud.php']")?.attr("href")
-                    ?: Regex("""var\s+url\s*=\s*['"](https://[^'"]*hubcloud\.php[^'"]*)['"]""")
-                        .find(htmlText)?.groupValues?.get(1)
-                    ?: return
-            }
-
-            val gamerDoc = app.get(gamerLink, headers = defaultHeaders, referer = response.url, interceptor = cfKiller).document
-
-            // 1. FSL Server
-            gamerDoc.selectFirst("a#fsl, a:contains(FSL Server), a[href*='r2.cloudflarestorage.com']")?.attr("href")?.let { fslUrl ->
-                if (fslUrl.isNotBlank()) {
-                    val fslQuality = if (detectedQuality != Qualities.Unknown.value) detectedQuality else getQualityFromName(fslUrl)
-                    callback.invoke(
-                        newExtractorLink(
-                            source = this.name,
-                            name = "$name [FSL Server]",
-                            url = fslUrl,
-                            type = ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = gamerLink
-                            this.quality = fslQuality
-                        }
-                    )
-                }
-            }
-
-            // 2. HBPlay Direct Link
-            gamerDoc.selectFirst("a[href*='hbplay.pages.dev']")?.attr("href")?.let { hbUrl ->
-                extractKatHbPlay(hbUrl, detectedQuality, callback)
-            }
-
-            // 3. PixelDrain Server
-            gamerDoc.selectFirst("a#pxl-1, a[href*='pixeldrain']")?.attr("href")?.let { pxlUrl ->
-                extractKatPixelDrain(pxlUrl, detectedQuality, callback)
-            }
-
-            // 4. 10Gbps Server
-            gamerDoc.selectFirst("a[href*='pixel.hubcloud'], a:contains(10Gbps)")?.attr("href")?.let { tenGbpsUrl ->
-                if (tenGbpsUrl.isNotBlank()) {
-                    callback.invoke(
-                        newExtractorLink(
-                            source = this.name,
-                            name = "$name [Server : 10Gbps]",
-                            url = tenGbpsUrl,
-                            type = ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = gamerLink
-                            this.quality = detectedQuality
-                        }
-                    )
-                }
-            }
-
-            // 5. Buzz Server
-            gamerDoc.selectFirst("a[href*='fuckingfast.net'], a:contains(Buzz Server)")?.attr("href")?.let { buzzUrl ->
-                if (buzzUrl.isNotBlank()) {
-                    extractKatFuckingFast(buzzUrl, detectedQuality, callback)
-                }
-            }
-
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        KatServerLogic.extractHubCloudServers(url, referer, callback)
     }
 }
 
@@ -121,13 +48,17 @@ class HubCloudClub : KatHubCloudExtractor() {
     override val mainUrl = "https://hubcloud.club"
 }
 
+class HubCloudOne : KatHubCloudExtractor() {
+    override val mainUrl = "https://hubcloud.one"
+}
+
 class GamerXYTExtractor : KatHubCloudExtractor() {
     override val name = "GamerXYT"
     override val mainUrl = "https://gamerxyt.com"
 }
 
 // =========================================================================
-// 2. GDFlix Extractor & Mirrors
+// 2. GDFlix Extractor & Mirrors (gdflix.vip, new9.gdflix.io, .cfd, .dad)
 // =========================================================================
 open class KatGDFlixExtractor : ExtractorApi() {
     override val name = "GDFlix"
@@ -140,111 +71,7 @@ open class KatGDFlixExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        try {
-            val response = app.get(url, headers = defaultHeaders, referer = referer, interceptor = cfKiller)
-            val doc = response.document
-            val finalUrl = response.url.ifEmpty { url }
-            val baseOrigin = try {
-                val uri = URI(finalUrl)
-                "${uri.scheme}://${uri.host}"
-            } catch (_: Exception) {
-                mainUrl
-            }
-
-            val pageInfo = "${doc.title()} ${doc.selectFirst("div.card-body, ul.list-group")?.text().orEmpty()}"
-            val quality = Regex("""(\d{3,4}p)""", RegexOption.IGNORE_CASE).find(pageInfo)?.groupValues?.get(1)
-                ?.let { getQualityFromName(it) }
-                ?: getQualityFromName(referer.orEmpty())
-
-            doc.select("a.btn, a[href]").forEach { btn ->
-                val rawHref = btn.attr("href").trim()
-                if (rawHref.isEmpty() || rawHref.startsWith("#") || rawHref.contains("/login")) return@forEach
-
-                val absHref = if (rawHref.startsWith("http")) rawHref else "$baseOrigin${if (rawHref.startsWith("/")) "" else "/"}$rawHref"
-                val text = btn.text().trim()
-
-                when {
-                    rawHref.contains("/cloud/") || text.contains("FAST CLOUD", true) || text.contains("ZIPDISK", true) -> {
-                        extractKatGdFlixCloud(absHref, finalUrl, quality, callback)
-                    }
-                    absHref.contains("pixeldrain") -> {
-                        extractKatPixelDrain(absHref, quality, callback)
-                    }
-                    absHref.contains("hbplay.pages.dev") -> {
-                        extractKatHbPlay(absHref, quality, callback)
-                    }
-                    absHref.contains("fuckingfast.net") -> {
-                        extractKatFuckingFast(absHref, quality, callback)
-                    }
-                    absHref.contains("goflix.sbs") || absHref.contains("gofile") -> {
-                        loadExtractor(absHref, finalUrl, subtitleCallback, callback)
-                    }
-                    absHref.contains("busycdn") ||
-                    absHref.contains("cloudpaglu") ||
-                    absHref.contains("workers.dev") ||
-                    absHref.contains("r2.cloudflarestorage.com") ||
-                    text.contains("INSTANT DL", true) -> {
-                        if (!absHref.contains("gdflix") && !absHref.contains("t.me")) {
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = this.name,
-                                    name = "$name [${text.ifEmpty { "Instant DL" }}]",
-                                    url = absHref,
-                                    type = ExtractorLinkType.VIDEO
-                                ) {
-                                    this.referer = finalUrl
-                                    this.quality = quality
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
-
-    private suspend fun extractKatGdFlixCloud(
-        cloudUrl: String,
-        refererUrl: String,
-        quality: Int,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        try {
-            val cloudResp = app.get(cloudUrl, headers = defaultHeaders, referer = refererUrl, interceptor = cfKiller)
-            val cloudDoc = cloudResp.document
-
-            cloudDoc.select("a[href]").forEach { a ->
-                val dlHref = a.attr("href").trim()
-                val btnText = a.text().trim()
-
-                if (dlHref.startsWith("http") &&
-                    !dlHref.contains("gdflix") &&
-                    !dlHref.contains("t.me") &&
-                    !dlHref.contains("/login")
-                ) {
-                    val label = when {
-                        dlHref.contains("workers.dev") -> "Fast Cloud [Workers.dev]"
-                        dlHref.contains("cloudpaglu") -> "Fast Cloud [CloudPaglu]"
-                        btnText.isNotEmpty() -> "Fast Cloud [$btnText]"
-                        else -> "Fast Cloud [Direct]"
-                    }
-
-                    callback.invoke(
-                        newExtractorLink(
-                            source = this.name,
-                            name = "$name - $label",
-                            url = dlHref,
-                            type = ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = cloudUrl
-                            this.quality = quality
-                        }
-                    )
-                }
-            }
-        } catch (_: Exception) {}
+        KatServerLogic.extractGdFlixServers(url, referer, subtitleCallback, callback)
     }
 }
 
@@ -261,7 +88,7 @@ class GDFlixNew9 : KatGDFlixExtractor() {
 }
 
 // =========================================================================
-// 3. Standalone Extractors
+// 3. Standalone Extractors (PixelDrain, HBPlay, FuckingFast, GoFlix)
 // =========================================================================
 class KatPixelDrainExtractor : ExtractorApi() {
     override val name = "PixelServer"
@@ -274,7 +101,7 @@ class KatPixelDrainExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        extractKatPixelDrain(url, getQualityFromName(referer.orEmpty()), callback)
+        KatServerLogic.extractPixelDrain(url, getQualityFromName(referer.orEmpty()), callback)
     }
 }
 
@@ -289,7 +116,7 @@ class KatHBPlayExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        extractKatHbPlay(url, getQualityFromName(referer.orEmpty()), callback)
+        KatServerLogic.extractHbPlay(url, getQualityFromName(referer.orEmpty()), callback)
     }
 }
 
@@ -304,83 +131,392 @@ class KatFuckingFastExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        extractKatFuckingFast(url, getQualityFromName(referer.orEmpty()), callback)
+        KatServerLogic.extractFuckingFast(url, getQualityFromName(referer.orEmpty()), callback)
+    }
+}
+
+class KatGoFlixExtractor : ExtractorApi() {
+    override val name = "GoFlix"
+    override val mainUrl = "https://goflix.sbs"
+    override val requiresReferer = false
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        KatServerLogic.extractGoFlixMirror(url, getQualityFromName(referer.orEmpty()), subtitleCallback, callback)
     }
 }
 
 // =========================================================================
-// Helper Functions
+// Singleton Object containing all Core Extraction Logic (Zero Ambiguity)
 // =========================================================================
-suspend fun extractKatPixelDrain(
-    url: String,
-    quality: Int,
-    callback: (ExtractorLink) -> Unit
-) {
-    val fileId = url.substringAfter("/u/").substringAfter("/file/").substringBefore("?").substringBefore("/")
-    if (fileId.isNotBlank()) {
-        val host = if (url.contains("pixeldrain.dev")) "https://pixeldrain.dev" else "https://pixeldrain.com"
-        callback.invoke(
-            newExtractorLink(
-                source = "PixelServer",
-                name = "PixelServer [Direct]",
-                url = "$host/api/file/$fileId?download",
-                type = ExtractorLinkType.VIDEO
-            ) {
-                this.referer = "$host/"
-                this.quality = quality
-            }
-        )
-    }
-}
+object KatServerLogic {
 
-suspend fun extractKatHbPlay(
-    url: String,
-    quality: Int,
-    callback: (ExtractorLink) -> Unit
-) {
-    val encodedU = url.substringAfter("u=", "").substringBefore("&")
-    if (encodedU.isNotBlank()) {
+    private fun cleanUrl(raw: String): String {
+        return raw.replace("&amp;", "&").replace("\\/", "/").trim()
+    }
+
+    suspend fun extractHubCloudServers(
+        url: String,
+        referer: String?,
+        callback: (ExtractorLink) -> Unit
+    ) {
         try {
-            val decodedUrl = String(Base64.decode(encodedU, Base64.DEFAULT)).trim()
-            if (decodedUrl.startsWith("http")) {
-                val finalQuality = if (quality != Qualities.Unknown.value) quality else getQualityFromName(decodedUrl)
+            val cleanedInputUrl = cleanUrl(url)
+            val response = app.get(cleanedInputUrl, headers = katBrowserHeaders, referer = referer, interceptor = katCfKiller)
+            val doc = response.document
+            val htmlText = response.text
+            val currentUrl = response.url.ifEmpty { cleanedInputUrl }
+
+            // Detect quality from card header or title
+            val headerText = "${doc.title()} ${doc.selectFirst("div.card-header, h5, h6")?.text().orEmpty()} ${referer.orEmpty()}"
+            val detectedQuality = Regex("""(\d{3,4}p)""", RegexOption.IGNORE_CASE).find(headerText)?.groupValues?.get(1)
+                ?.let { getQualityFromName(it) } ?: Qualities.Unknown.value
+
+            // Step 1: Find gamerxyt.com/hubcloud.php link
+            val gamerLinkRaw = if (currentUrl.contains("hubcloud.php")) {
+                currentUrl
+            } else {
+                doc.selectFirst("a#download, a[href*='hubcloud.php']")?.attr("href")
+                    ?: Regex("""(?:href|url)\s*=\s*['"](https?://[^'"]*hubcloud\.php[^'"]*)['"]""")
+                        .find(htmlText)?.groupValues?.get(1)
+            }
+
+            val gamerDoc = if (!gamerLinkRaw.isNullOrBlank()) {
+                val finalGamerUrl = cleanUrl(gamerLinkRaw)
+                app.get(finalGamerUrl, headers = katBrowserHeaders, referer = currentUrl, interceptor = katCfKiller).document
+            } else {
+                doc
+            }
+
+            val gamerRef = cleanUrl(gamerLinkRaw ?: currentUrl)
+
+            // 1. FSL Server (r2.cloudflarestorage.com)
+            gamerDoc.select("a#fsl, a:contains(FSL Server), a[href*='r2.cloudflarestorage.com']").forEach { a ->
+                val fslUrl = cleanUrl(a.attr("href"))
+                if (fslUrl.startsWith("http")) {
+                    val q = if (detectedQuality != Qualities.Unknown.value) detectedQuality else getQualityFromName(fslUrl)
+                    callback.invoke(
+                        newExtractorLink(
+                            source = "HubCloud",
+                            name = "HubCloud [FSL Server]",
+                            url = fslUrl,
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = "" // R2 signed URLs fail if custom referer is sent
+                            this.quality = q
+                        }
+                    )
+                }
+            }
+
+            // 2. HBPlay Watch Online (hbplay.pages.dev/?u=Base64)
+            gamerDoc.select("a[href*='hbplay.pages.dev']").forEach { a ->
+                val hbUrl = cleanUrl(a.attr("href"))
+                extractHbPlay(hbUrl, detectedQuality, callback)
+            }
+
+            // 3. PixelServer (pixeldrain.dev/u/... or /file/...)
+            gamerDoc.select("a#pxl-1, a[href*='pixeldrain']").forEach { a ->
+                val pxlUrl = cleanUrl(a.attr("href"))
+                extractPixelDrain(pxlUrl, detectedQuality, callback)
+            }
+
+            // 4. Server : 10Gbps (pixel.hubcloud.pw/?id=...)
+            gamerDoc.select("a[href*='pixel.hubcloud'], a:contains(10Gbps)").forEach { a ->
+                val tenUrl = cleanUrl(a.attr("href"))
+                if (tenUrl.startsWith("http")) {
+                    callback.invoke(
+                        newExtractorLink(
+                            source = "HubCloud",
+                            name = "HubCloud [Server : 10Gbps]",
+                            url = tenUrl,
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = gamerRef
+                            this.quality = detectedQuality
+                        }
+                    )
+                }
+            }
+
+            // 5. Buzz Server (fuckingfast.net)
+            gamerDoc.select("a[href*='fuckingfast.net'], a:contains(Buzz Server)").forEach { a ->
+                val buzzUrl = cleanUrl(a.attr("href"))
+                if (buzzUrl.startsWith("http")) {
+                    extractFuckingFast(buzzUrl, detectedQuality, callback)
+                }
+            }
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    suspend fun extractGdFlixServers(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val cleanedUrl = cleanUrl(url)
+            val response = app.get(cleanedUrl, headers = katBrowserHeaders, referer = referer, interceptor = katCfKiller)
+            val doc = response.document
+            val htmlText = response.text
+            val finalUrl = response.url.ifEmpty { cleanedUrl }
+
+            val baseOrigin = try {
+                val u = URI(finalUrl)
+                "${u.scheme}://${u.host}"
+            } catch (_: Exception) {
+                "https://new9.gdflix.io"
+            }
+
+            val pageInfo = "${doc.title()} ${doc.text()} ${referer.orEmpty()}"
+            val detectedQuality = Regex("""(\d{3,4}p)""", RegexOption.IGNORE_CASE).find(pageInfo)?.groupValues?.get(1)
+                ?.let { getQualityFromName(it) } ?: Qualities.Unknown.value
+
+            // Scan all buttons/links on GDFlix page (new9.gdflix.io / gdflix.vip)
+            doc.select("a[href]").forEach { a ->
+                val rawHref = cleanUrl(a.attr("href"))
+                if (rawHref.isEmpty() || rawHref.startsWith("#") || rawHref.startsWith("javascript") || rawHref.contains("/login")) return@forEach
+
+                val absHref = if (rawHref.startsWith("http")) rawHref else "$baseOrigin${if (rawHref.startsWith("/")) "" else "/"}$rawHref"
+                val btnText = a.text().trim()
+
+                when {
+                    // A. Fast Cloud / ZipDisk Subpage (/cloud/1794649669/...)
+                    rawHref.contains("/cloud/") || btnText.contains("FAST CLOUD", true) || btnText.contains("ZIPDISK", true) -> {
+                        extractGdFlixCloudSubpage(absHref, finalUrl, detectedQuality, callback)
+                    }
+
+                    // B. Instant DL [10GBPS] (busycdn.instadl.rest, instant.busycdn.xyz, workers.dev, cloudpaglu.site)
+                    absHref.contains("instadl.rest") ||
+                    absHref.contains("busycdn") ||
+                    absHref.contains("cloudpaglu.site") ||
+                    absHref.contains("workers.dev") ||
+                    absHref.contains("r2.cloudflarestorage.com") ||
+                    btnText.contains("INSTANT DL", true) -> {
+                        if (!absHref.contains("gdflix") && !absHref.contains("t.me")) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = "GDFlix",
+                                    name = "GDFlix [Instant DL 10Gbps]",
+                                    url = absHref,
+                                    type = ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = finalUrl
+                                    this.quality = detectedQuality
+                                }
+                            )
+                        }
+                    }
+
+                    // C. PixelDrain
+                    absHref.contains("pixeldrain") -> {
+                        extractPixelDrain(absHref, detectedQuality, callback)
+                    }
+
+                    // D. HBPlay
+                    absHref.contains("hbplay.pages.dev") -> {
+                        extractHbPlay(absHref, detectedQuality, callback)
+                    }
+
+                    // E. Buzz Server (FuckingFast)
+                    absHref.contains("fuckingfast.net") -> {
+                        extractFuckingFast(absHref, detectedQuality, callback)
+                    }
+
+                    // F. GoFile [Multiup] (goflix.sbs/en/mirror/...)
+                    absHref.contains("goflix.sbs") || absHref.contains("gofile") || btnText.contains("GOFILE", true) -> {
+                        extractGoFlixMirror(absHref, detectedQuality, subtitleCallback, callback)
+                    }
+                }
+            }
+
+            // Fallback: DriveBot commented link if present in raw HTML
+            val driveBotMatch = Regex("""href=["'](https?://drivebot\.[a-z]+/download\?id=[^"']+)["']""")
+                .find(htmlText)?.groupValues?.get(1)
+            if (!driveBotMatch.isNullOrBlank()) {
+                val dbUrl = cleanUrl(driveBotMatch)
+                try {
+                    val dbDoc = app.get(dbUrl, headers = katBrowserHeaders, referer = finalUrl).document
+                    dbDoc.select("a.btn, a[href*='download']").forEach { btn ->
+                        val dl = cleanUrl(btn.attr("href"))
+                        if (dl.startsWith("http") && !dl.contains("drivebot")) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = "GDFlix",
+                                    name = "GDFlix [DriveBot]",
+                                    url = dl,
+                                    type = ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = dbUrl
+                                    this.quality = detectedQuality
+                                }
+                            )
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private suspend fun extractGdFlixCloudSubpage(
+        cloudUrl: String,
+        refererUrl: String,
+        quality: Int,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val resp = app.get(cloudUrl, headers = katBrowserHeaders, referer = refererUrl, interceptor = katCfKiller)
+            val doc = resp.document
+
+            doc.select("a[href]").forEach { a ->
+                val dlHref = cleanUrl(a.attr("href"))
+                val text = a.text().trim()
+
+                if (dlHref.startsWith("http") &&
+                    !dlHref.contains("gdflix") &&
+                    !dlHref.contains("/login") &&
+                    !dlHref.contains("t.me")
+                ) {
+                    val serverLabel = when {
+                        dlHref.contains("workers.dev") -> "GDFlix [Fast Cloud - Workers.dev]"
+                        dlHref.contains("cloudpaglu.site") -> "GDFlix [Fast Cloud - CloudPaglu]"
+                        dlHref.contains("instadl.rest") || dlHref.contains("busycdn") -> "GDFlix [Fast Cloud - BusyCDN]"
+                        text.isNotEmpty() -> "GDFlix [Fast Cloud - $text]"
+                        else -> "GDFlix [Fast Cloud]"
+                    }
+
+                    callback.invoke(
+                        newExtractorLink(
+                            source = "GDFlix",
+                            name = serverLabel,
+                            url = dlHref,
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = cloudUrl
+                            this.quality = quality
+                        }
+                    )
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    suspend fun extractPixelDrain(
+        url: String,
+        quality: Int,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val cleaned = cleanUrl(url)
+        val fileId = cleaned.substringAfter("/u/").substringAfter("/file/").substringBefore("?").substringBefore("/")
+        if (fileId.isNotBlank()) {
+            val host = if (cleaned.contains("pixeldrain.dev")) "https://pixeldrain.dev" else "https://pixeldrain.com"
+            callback.invoke(
+                newExtractorLink(
+                    source = "PixelServer",
+                    name = "PixelServer [Direct]",
+                    url = "$host/api/file/$fileId?download",
+                    type = ExtractorLinkType.VIDEO
+                ) {
+                    this.referer = "$host/"
+                    this.quality = quality
+                }
+            )
+        }
+    }
+
+    suspend fun extractHbPlay(
+        url: String,
+        quality: Int,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val cleaned = cleanUrl(url)
+        val encodedU = cleaned.substringAfter("u=", "").substringBefore("&").trim()
+        if (encodedU.isNotBlank()) {
+            try {
+                // Clean any whitespace or URL encoding before Base64 decode
+                val decodedBytes = try {
+                    Base64.decode(encodedU, Base64.DEFAULT)
+                } catch (_: Exception) {
+                    Base64.decode(encodedU, Base64.URL_SAFE)
+                }
+                val decodedUrl = cleanUrl(String(decodedBytes))
+                if (decodedUrl.startsWith("http")) {
+                    val finalQuality = if (quality != Qualities.Unknown.value) quality else getQualityFromName(decodedUrl)
+                    callback.invoke(
+                        newExtractorLink(
+                            source = "HBPlay",
+                            name = "HubCloud [HBPlay Watch Online]",
+                            url = decodedUrl,
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = ""
+                            this.quality = finalQuality
+                        }
+                    )
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    suspend fun extractFuckingFast(
+        url: String,
+        quality: Int,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val cleaned = cleanUrl(url)
+            val responseText = app.get(cleaned, headers = katBrowserHeaders, interceptor = katCfKiller).text
+            val directLink = Regex("""window\.open\(["'](https?://fuckingfast\.net/dl/[^"']+)["']\)""")
+                .find(responseText)?.groupValues?.get(1)
+                ?: Regex("""["'](https?://fuckingfast\.net/dl/[^"']+)["']""")
+                    .find(responseText)?.groupValues?.get(1)
+
+            if (!directLink.isNullOrBlank()) {
                 callback.invoke(
                     newExtractorLink(
-                        source = "HBPlay",
-                        name = "HubCloud [HBPlay Direct]",
-                        url = decodedUrl,
+                        source = "BuzzServer",
+                        name = "HubCloud [Buzz Server]",
+                        url = cleanUrl(directLink),
                         type = ExtractorLinkType.VIDEO
                     ) {
-                        this.referer = "https://hbplay.pages.dev/"
-                        this.quality = finalQuality
+                        this.referer = cleaned
+                        this.quality = quality
                     }
                 )
             }
         } catch (_: Exception) {}
     }
-}
 
-suspend fun extractKatFuckingFast(
-    url: String,
-    quality: Int,
-    callback: (ExtractorLink) -> Unit
-) {
-    try {
-        val responseText = app.get(url, headers = defaultHeaders, interceptor = cfKiller).text
-        val directLink = Regex("""window\.open\(["'](https://fuckingfast\.net/dl/[^"']+)["']\)""")
-            .find(responseText)?.groupValues?.get(1)
-        if (!directLink.isNullOrBlank()) {
-            callback.invoke(
-                newExtractorLink(
-                    source = "BuzzServer",
-                    name = "HubCloud [Buzz Server]",
-                    url = directLink,
-                    type = ExtractorLinkType.VIDEO
-                ) {
-                    this.referer = url
-                    this.quality = quality
+    suspend fun extractGoFlixMirror(
+        url: String,
+        quality: Int,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val cleaned = cleanUrl(url)
+            val doc = app.get(cleaned, headers = katBrowserHeaders, interceptor = katCfKiller).document
+            doc.select("a[href]").forEach { a ->
+                val href = cleanUrl(a.attr("href"))
+                if (href.startsWith("http") && !href.contains("goflix.sbs") && !href.contains("t.me")) {
+                    when {
+                        href.contains("pixeldrain") -> extractPixelDrain(href, quality, callback)
+                        href.contains("fuckingfast") -> extractFuckingFast(href, quality, callback)
+                        else -> loadExtractor(href, cleaned, subtitleCallback, callback)
+                    }
                 }
-            )
-        }
-    } catch (_: Exception) {}
+            }
+        } catch (_: Exception) {}
+    }
 }
