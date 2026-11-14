@@ -90,6 +90,8 @@ class ToonPlayProvider : MainAPI() {
                 "latest" -> "section#latest .group"
                 "series" -> "section#series .group"
                 "movies" -> "section#movies .group"
+                "anime" -> "section#anime .group, section .group"
+                "cartoons" -> "section#cartoons .group, section .group"
                 else -> "section .group"
             }
 
@@ -147,11 +149,15 @@ class ToonPlayProvider : MainAPI() {
             "movies" -> "POPULARITY_DESC"
             else -> "POPULARITY_DESC"
         }
-        val format = if (section == "movies") "MOVIE" else "TV"
+        val format = when (section) {
+            "movies" -> "MOVIE"
+            "cartoons" -> "TV_SHORT"
+            else -> "TV"
+        }
 
         val query = """
             query {
-              Page(page: $page, perPage: 18) {
+              Page(page: $page, perPage: 50) {
                 media(type: ANIME, format: $format, sort: [$sort]) {
                   id
                   title { english romaji }
@@ -212,7 +218,7 @@ class ToonPlayProvider : MainAPI() {
 
         val gql = """
             query {
-              Page(page: 1, perPage: 20) {
+              Page(page: 1, perPage: 50) {
                 media(search: "$cleanQuery", type: ANIME, sort: [POPULARITY_DESC]) {
                   id
                   title { english romaji }
