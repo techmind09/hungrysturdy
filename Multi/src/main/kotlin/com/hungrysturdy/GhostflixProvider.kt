@@ -3,6 +3,7 @@ package com.hungrysturdy
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.nodes.Document
 
 class GhostflixProvider : MainAPI() {
@@ -83,7 +84,6 @@ class GhostflixProvider : MainAPI() {
             }
         } catch (_: Exception) {}
 
-        // Fallback to ghostflix html if TMDB fails
         try {
             val document = app.get(mainUrl, headers = cfHeaders).document
             val trendingItems = extractNextFlightTrending(document)
@@ -106,7 +106,7 @@ class GhostflixProvider : MainAPI() {
             val match = regex.find(unescaped) ?: continue
             val jsonArray = match.groupValues[1]
 
-            val parsed = AppUtils.tryParseJson<List<TrendingItem>>(jsonArray) ?: continue
+            val parsed = tryParseJson<List<TrendingItem>>(jsonArray) ?: continue
             parsed.forEach { item ->
                 val title = item.title ?: item.name ?: item.originalTitle ?: item.originalName ?: return@forEach
                 val mediaId = item.id ?: return@forEach
@@ -193,50 +193,43 @@ class GhostflixProvider : MainAPI() {
                         val epsList: List<TmdbEpisode> = sResp?.episodes ?: emptyList()
                         epsList.forEach { ep ->
                             val epNum = ep.episodeNumber ?: return@forEach
-                            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
+                            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
 
-                            val episodeName = ep.name ?: "Episode $epNum"
-                            val episodePoster = ep.stillPath?.let { "$TMDB_IMAGE_BASE$it" }
-                            val episodeDesc = ep.overview
-                            
                             episodes.add(
-                                Episode(
-                                    data = playData,
-                                    name = episodeName,
-                                    season = sNum,
-                                    episode = epNum,
-                                    posterUrl = episodePoster,
-                                    description = episodeDesc
-                                )
+                                newEpisode(playData) {
+                                    this.name = ep.name ?: "Episode $epNum"
+                                    this.season = sNum
+                                    this.episode = epNum
+                                    this.posterUrl = ep.stillPath?.let { "$TMDB_IMAGE_BASE$it" }
+                                    this.description = ep.overview
+                                }
                             )
                         }
                     } catch (_: Exception) {
                         val epCount = (season.episodeCount ?: 12).coerceAtLeast(1)
                         for (epNum in 1..epCount) {
-                            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
+                            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
 
                             episodes.add(
-                                Episode(
-                                    data = playData,
-                                    name = "Episode $epNum",
-                                    season = sNum,
-                                    episode = epNum
-                                )
+                                newEpisode(playData) {
+                                    this.name = "Episode $epNum"
+                                    this.season = sNum
+                                    this.episode = epNum
+                                }
                             )
                         }
                     }
                 }
             } else {
                 for (ep in 1..24) {
-                    val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "tv", season = 1, episode = ep))
+                    val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = 1, episode = ep))
 
                     episodes.add(
-                        Episode(
-                            data = playData,
-                            name = "Episode $ep",
-                            season = 1,
-                            episode = ep
-                        )
+                        newEpisode(playData) {
+                            this.name = "Episode $ep"
+                            this.season = 1
+                            this.episode = ep
+                        }
                     )
                 }
             }
@@ -248,7 +241,7 @@ class GhostflixProvider : MainAPI() {
                 this.year = year
             }
         } else {
-            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "movie"))
+            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "movie"))
             newMovieLoadResponse(title, url, TvType.Movie, playData) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = backdrop ?: poster
@@ -264,7 +257,7 @@ class GhostflixProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val loadData = AppUtils.tryParseJson<LoadData>(data) ?: return false
+        val loadData = tryParseJson<LoadData>(data) ?: return false
         val id = loadData.id
         val isTv = loadData.type == "tv"
         val s = loadData.season ?: 1
@@ -290,7 +283,6 @@ class GhostflixProvider : MainAPI() {
                 )
             }
 
-            // Apply exact Cloudflare bypass headers dynamically
             val reqHeaders = cfHeaders.toMutableMap().apply {
                 put("Origin", baseHost)
                 put("Referer", "$baseHost/")
@@ -309,7 +301,6 @@ class GhostflixProvider : MainAPI() {
             }
         }
 
-        // Run fallback embed extractors natively
         val embedUrls = if (isTv) {
             listOf(
                 "https://vidsrc.xyz/embed/tv/$id/$s-$e",
@@ -366,20 +357,20 @@ class GhostflixProvider : MainAPI() {
                 else -> Qualities.Unknown.value
             }
 
-            // Injected Cloudflare Bypass Headers inside ExtractorLink so ExoPlayer handles it smoothly
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = name,
                     name = "$name - $serverName",
                     url = streamUrl,
-                    referer = referer,
-                    quality = quality,
-                    type = if (isM3u8) INFER_TYPE else ExtractorLinkType.VIDEO,
-                    headers = cfHeaders.toMutableMap().apply {
+                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.referer = referer
+                    this.quality = quality
+                    this.headers = cfHeaders.toMutableMap().apply {
                         put("Origin", referer.removeSuffix("/"))
                         put("Referer", referer)
                     }
-                )
+                }
             )
         }
 
