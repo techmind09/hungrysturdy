@@ -78,12 +78,10 @@ class ToonPlayProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        if (page > 1) return newHomePageResponse(request.name, emptyList(), hasNext = false)
-
         val sectionId = request.data
         val results = mutableListOf<SearchResponse>()
 
-        if (!sectionId.startsWith("lang:")) {
+        if (page == 1 && !sectionId.startsWith("lang:")) {
             val doc = fetchRenderedDom(mainUrl)
             val sectionSelector = when (sectionId) {
                 "trending" -> "section#trending .group"
@@ -100,12 +98,12 @@ class ToonPlayProvider : MainAPI() {
             }
         }
 
-        if (results.isEmpty()) {
-            val anilistItems = fetchCatalogForToonPlay(sectionId, page)
-            results.addAll(anilistItems)
-        }
+        // Always fetch paginated items so posters are never limited
+        val anilistItems = fetchCatalogForToonPlay(sectionId, page)
+        results.addAll(anilistItems)
 
-        return newHomePageResponse(request.name, results.distinctBy { it.url }, hasNext = false)
+        val uniqueResults = results.distinctBy { it.url }
+        return newHomePageResponse(request.name, uniqueResults, hasNext = anilistItems.isNotEmpty())
     }
 
     private fun Element.toToonPlayCard(): SearchResponse? {
@@ -157,7 +155,7 @@ class ToonPlayProvider : MainAPI() {
 
         val query = """
             query {
-              Page(page: $page, perPage: 50) {
+              Page(page: $page, perPage: 30) {
                 media(type: ANIME, format: $format, sort: [$sort]) {
                   id
                   title { english romaji }
@@ -218,7 +216,7 @@ class ToonPlayProvider : MainAPI() {
 
         val gql = """
             query {
-              Page(page: 1, perPage: 50) {
+              Page(page: 1, perPage: 30) {
                 media(search: "$cleanQuery", type: ANIME, sort: [POPULARITY_DESC]) {
                   id
                   title { english romaji }
@@ -423,7 +421,11 @@ class ToonPlayProvider : MainAPI() {
                             val langName = obj.optString("language", "Multi")
                             val playerLink = obj.optString("link").replace("\\/", "/").trim()
                             if (playerLink.isNotBlank()) {
+                                val collected = mutableListOf<ExtractorLink>()
                                 val success = loadExtractor(playerLink, "$mainUrl/", subtitleCallback) { link ->
+                                    collected.add(link)
+                                }
+                                for (link in collected) {
                                     callback.invoke(
                                         newExtractorLink(
                                             source = name,
@@ -437,7 +439,7 @@ class ToonPlayProvider : MainAPI() {
                                         }
                                     )
                                 }
-                                if (success) foundLinks = true
+                                if (success || collected.isNotEmpty()) foundLinks = true
                             }
                         }
                     } catch (_: Exception) {}
