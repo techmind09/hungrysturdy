@@ -346,18 +346,22 @@ class GhostflixProvider : MainAPI() {
             }
 
             callback.invoke(
-                newExtractorLink(
-                    source = name,
-                    name = "$name - $serverName",
-                    url = streamUrl,
-                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                ) {
-                    this.referer = referer
-                    this.quality = quality
-                    this.headers = mapOf("Origin" to referer.removeSuffix("/"))
-                }
-            )
-        }
+    newExtractorLink(
+        source = name,
+        name = "$name - $serverName",
+        url = streamUrl,
+        type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+    ) {
+        this.referer = referer
+        this.quality = quality
+        this.headers = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Referer" to referer,
+            "Origin" to referer.removeSuffix("/")
+        )
+    }
+)
+
 
         Regex("""https?://[^\s"'<>\\]+\.(?:vtt|srt)(?:\?[^\s"'<>\\]*)?""").findAll(unescaped).forEach { match ->
             val subUrl = match.value
