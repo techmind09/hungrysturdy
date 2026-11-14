@@ -2,7 +2,7 @@ package com.hungrysturdy
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
@@ -175,43 +175,43 @@ class GhostflixProvider : MainAPI() {
                         val sResp = app.get(sUrl, headers = tmdbHeaders).parsedSafe<TmdbSeasonDetails>()
                         sResp?.episodes?.forEach { ep ->
                             val epNum = ep.episodeNumber ?: return@forEach
-                            val playData = "{\"id\":\"$tmdbId\",\"type\":\"tv\",\"season\":$sNum,\"episode\":$epNum}"
+                            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
+                            
                             episodes.add(
-                                Episode(
-                                    data = playData,
-                                    name = ep.name ?: "Episode $epNum",
-                                    season = sNum,
-                                    episode = epNum,
-                                    posterUrl = ep.stillPath?.let { "$TMDB_IMAGE_BASE$it" },
-                                    description = ep.overview
-                                )
+                                newEpisode(playData).apply {
+                                    this.name = ep.name ?: "Episode $epNum"
+                                    this.season = sNum
+                                    this.episode = epNum
+                                    this.posterUrl = ep.stillPath?.let { "$TMDB_IMAGE_BASE$it" }
+                                    this.description = ep.overview
+                                }
                             )
                         }
                     } catch (_: Exception) {
                         val epCount = (season.episodeCount ?: 12).coerceAtLeast(1)
                         for (epNum in 1..epCount) {
-                            val playData = "{\"id\":\"$tmdbId\",\"type\":\"tv\",\"season\":$sNum,\"episode\":$epNum}"
+                            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
+                            
                             episodes.add(
-                                Episode(
-                                    data = playData,
-                                    name = "Episode $epNum",
-                                    season = sNum,
-                                    episode = epNum
-                                )
+                                newEpisode(playData).apply {
+                                    this.name = "Episode $epNum"
+                                    this.season = sNum
+                                    this.episode = epNum
+                                }
                             )
                         }
                     }
                 }
             } else {
                 for (ep in 1..24) {
-                    val playData = "{\"id\":\"$tmdbId\",\"type\":\"tv\",\"season\":1,\"episode\":$ep}"
+                    val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "tv", season = 1, episode = ep))
+                    
                     episodes.add(
-                        Episode(
-                            data = playData,
-                            name = "Episode $ep",
-                            season = 1,
-                            episode = ep
-                        )
+                        newEpisode(playData).apply {
+                            this.name = "Episode $ep"
+                            this.season = 1
+                            this.episode = ep
+                        }
                     )
                 }
             }
@@ -223,7 +223,7 @@ class GhostflixProvider : MainAPI() {
                 this.year = year
             }
         } else {
-            val playData = "{\"id\":\"$tmdbId\",\"type\":\"movie\"}"
+            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "movie"))
             newMovieLoadResponse(title, url, TvType.Movie, playData) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = backdrop ?: poster
