@@ -74,23 +74,27 @@ class GokuHDProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val titleEl = this.selectFirst("p.poster-title") 
-            ?: this.selectFirst(".entry-title a") 
-            ?: this.selectFirst("h2.entry-title a") 
-            ?: this.selectFirst("a[href]")
+        val titleEl = this.selectFirst("p.poster-title, .poster-title, .entry-title a, h2.entry-title a, h3.entry-title a, h2 a, h3 a, .post-title a, a[title]")
+            ?: (if (this.tagName() == "a") this else this.selectFirst("a[href]"))
             ?: return null
-            
-        val title = titleEl.text().trim()
+
+        val rawTitle = titleEl.attr("title").takeIf { it.isNotBlank() }
+            ?: titleEl.text().trim()
+            .ifBlank { this.selectFirst("img")?.attr("alt")?.trim().orEmpty() }
+
+        val title = rawTitle.replace("Permalink to ", "", ignoreCase = true).trim()
         if (title.isBlank()) return null
-        
-        val hrefTag = if (this.tagName() == "a") this else this.selectFirst("a[href]")
-        val href = fixUrl(hrefTag?.attr("href") ?: titleEl.attr("href"))
-        if (href.isBlank()) return null
-        
+
+        val hrefTag = if (this.tagName() == "a") this else (titleEl.takeIf { it.tagName() == "a" } ?: this.selectFirst("a[href]"))
+        val href = fixUrl(hrefTag?.attr("href").orEmpty())
+        if (href.isBlank() || href == mainUrl || href == "$mainUrl/") return null
+
+        val img = this.selectFirst("img")
         val posterUrl = fixUrl(
-            this.selectFirst("img")?.attr("src") 
-                ?: this.selectFirst("img")?.attr("data-src") 
-                ?: ""
+            img?.attr("data-lazy-src")?.takeIf { it.isNotBlank() }
+                ?: img?.attr("data-src")?.takeIf { it.isNotBlank() }
+                ?: img?.attr("srcset")?.substringBefore(" ")?.takeIf { it.isNotBlank() }
+                ?: img?.attr("src").orEmpty()
         )
 
         val isDub = title.contains("Hindi", true) || title.contains("Dub", true)
@@ -103,15 +107,70 @@ class GokuHDProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val encodedQuery = java.net.URLEncoder.encode(query.trim(), "UTF-8")
-        val searchUrl = "$mainUrl/?s=$encodedQuery"
-        
-        val html = VegaNet.fetchWithCf(searchUrl, referer = mainUrl)?.text ?: return emptyList()
-        val doc = Jsoup.parse(html)
-        
-        return doc.select("a:has(p.poster-title), article.post, div.post, div.item, div.result-item")
-            .mapNotNull { it.toSearchResult() }
-            .distinctBy { it.url }
+        val cleanQuery = query.trim()
+        if (cleanQuery.isBlank()) return emptyList()
+        val encodedQuery = java.net.URLEncoder.encode(cleanQuery, "UTF-8")
+
+        val searchUrls = listOf(
+            "$mainUrl/?s=$encodedQuery",
+            "$mainUrl/search/$encodedQuery/"
+        )
+
+        val cardSelectors = "a:has(p.poster-title), article, div.post, div.item, div.result-item, .blog-items > *, .post-item, .movie-item, .grid-item, .archive-post, ul.products li"
+
+        for (sUrl in searchUrls) {
+            val html = VegaNet.fetchWithCf(sUrl, referer = "$mainUrl/")?.text
+            if (!html.isNullOrBlank()) {
+                val doc = Jsoup.parse(html)
+                val results = doc.select(cardSelectors)
+                    .mapNotNull { it.toSearchResult() }
+                    .filter { !it.url.contains("/category/") && !it.url.contains("/tag/") && !it.url.contains("/page/") }
+                    .distinctBy { it.url }
+
+                if (results.isNotEmpty()) return results
+            }
+        }
+
+        return try {
+            val apiUrl = "$mainUrl/wp-json/wp/v2/posts?search=$encodedQuery&per_page=20&_embed"
+            val jsonText = VegaNet.fetchWithCf(apiUrl, referer = "$mainUrl/")?.text ?: return emptyList()
+            val array = org.json.JSONArray(jsonText)
+            val apiResults = mutableListOf<SearchResponse>()
+
+            for (i in 0 until array.length()) {
+                val obj = array.optJSONObject(i) ?: continue
+                val link = obj.optString("link").takeIf { it.isNotBlank() } ?: continue
+                val titleHtml = obj.optJSONObject("title")?.optString("rendered").orEmpty()
+                val title = Jsoup.parse(titleHtml).text().trim()
+                if (title.isBlank()) continue
+
+                var poster = obj.optString("jetpack_featured_media_url")
+                if (poster.isBlank()) {
+                    val embedded = obj.optJSONObject("_embedded")
+                    val mediaArr = embedded?.optJSONArray("wp:featuredmedia")
+                    poster = mediaArr?.optJSONObject(0)?.optString("source_url").orEmpty()
+                }
+                if (poster.isBlank()) {
+                    val contentHtml = obj.optJSONObject("content")?.optString("rendered").orEmpty()
+                    poster = Jsoup.parse(contentHtml).selectFirst("img")?.let {
+                        it.attr("data-src").ifBlank { it.attr("src") }
+                    }.orEmpty()
+                }
+
+                val isDub = title.contains("Hindi", true) || title.contains("Dub", true)
+                val isSub = title.contains("Sub", true)
+
+                apiResults.add(
+                    newAnimeSearchResponse(title, link, TvType.Anime) {
+                        this.posterUrl = fixUrl(poster)
+                        this.addDubStatus(isDub, isSub)
+                    }
+                )
+            }
+            apiResults.distinctBy { it.url }
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     override suspend fun load(url: String): LoadResponse {
