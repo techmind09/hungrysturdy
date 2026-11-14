@@ -76,7 +76,6 @@ internal object GokuHDSources {
                 ?: continue
             val links = mutableListOf<Pair<String, String>>()
             
-            // Agar links usi <p> tag ke andar hain jisme Episode heading hai
             for (a in head.select("a[href]")) {
                 val href = a.attr("href").trim()
                 val label = a.selectFirst("button")?.text()?.replace(Regex("""\s+"""), " ")?.trim()
@@ -88,7 +87,6 @@ internal object GokuHDSources {
 
             var sib = head.nextElementSibling()
             while (sib != null && !listOf("h3", "h4", "h5").contains(sib.tagName())) {
-                // Agar next paragraph mein naya episode number hai toh break karein
                 if (sib.tagName() == "p" && Regex("""(?i)ep(?:isode)?s?\s*:?\s*0*(\d{1,3})""").containsMatchIn(sib.text())) {
                     break
                 }
@@ -512,20 +510,5 @@ internal object GokuHDSources {
     fun resetSession() {
         verified.clear()
         pageCache.clear()
-    }
-
-    suspend fun alive(url: String, headers: Map<String, String> = emptyMap()): Boolean {
-        if (!url.startsWith("http")) return false
-        if (url in verified) return true
-        val ok = try {
-            val h = VegaNet.browserHeaders().toMutableMap()
-            h.putAll(headers)
-            h["Range"] = "bytes=0-1023"
-            app.get(url, headers = h, timeout = 10L).code in 200..399
-        } catch (_: Exception) {
-            false
-        }
-        if (ok) verified.add(url)
-        return ok
     }
 }
