@@ -3,7 +3,6 @@ package com.hungrysturdy
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.nodes.Document
 
@@ -47,7 +46,7 @@ class GhostflixProvider : MainAPI() {
 
         try {
             val response = app.get(tmdbUrl, headers = tmdbHeaders).parsedSafe<TmdbPageResponse>()
-            val resultsList = response?.results ?: emptyList()
+            val resultsList: List<TrendingItem> = response?.results ?: emptyList()
             val items = resultsList.mapNotNull { item ->
                 val title = item.title ?: item.name ?: item.originalTitle ?: item.originalName ?: return@mapNotNull null
                 val mediaId = item.id ?: return@mapNotNull null
@@ -116,7 +115,7 @@ class GhostflixProvider : MainAPI() {
 
         try {
             val response = app.get(searchUrl, headers = tmdbHeaders).parsedSafe<TmdbPageResponse>()
-            val resultsList = response?.results ?: emptyList()
+            val resultsList: List<TrendingItem> = response?.results ?: emptyList()
             val results = resultsList.mapNotNull { item ->
                 if (item.mediaType == "person") return@mapNotNull null
                 val title = item.title ?: item.name ?: item.originalTitle ?: item.originalName ?: return@mapNotNull null
@@ -152,7 +151,7 @@ class GhostflixProvider : MainAPI() {
         var poster: String? = null
         var backdrop: String? = null
         var year: Int? = null
-        var seasonsList: List<TmdbSeason>? = null
+        var seasonsList: List<TmdbSeason> = emptyList()
 
         try {
             val tmdbResp = app.get(tmdbUrl, headers = tmdbHeaders).parsedSafe<TmdbDetails>()
@@ -162,13 +161,13 @@ class GhostflixProvider : MainAPI() {
                 poster = tmdbResp.posterPath?.let { "$TMDB_IMAGE_BASE$it" }
                 backdrop = tmdbResp.backdropPath?.let { "$TMDB_BACKDROP_BASE$it" }
                 year = (tmdbResp.releaseDate ?: tmdbResp.firstAirDate)?.take(4)?.toIntOrNull()
-                seasonsList = tmdbResp.seasons
+                seasonsList = tmdbResp.seasons ?: emptyList()
             }
         } catch (_: Exception) {}
 
         return if (isTv) {
             val episodes = mutableListOf<Episode>()
-            val validSeasons = seasonsList?.filter { it.seasonNumber != null && it.seasonNumber > 0 } ?: emptyList()
+            val validSeasons = seasonsList.filter { it.seasonNumber != null && it.seasonNumber > 0 }
 
             if (validSeasons.isNotEmpty()) {
                 validSeasons.forEach { season ->
@@ -176,10 +175,10 @@ class GhostflixProvider : MainAPI() {
                     try {
                         val sUrl = "https://api.themoviedb.org/3/tv/$tmdbId/season/$sNum?api_key=$TMDB_API_KEY"
                         val sResp = app.get(sUrl, headers = tmdbHeaders).parsedSafe<TmdbSeasonDetails>()
-                        val epsList = sResp?.episodes ?: emptyList()
+                        val epsList: List<TmdbEpisode> = sResp?.episodes ?: emptyList()
                         epsList.forEach { ep ->
                             val epNum = ep.episodeNumber ?: return@forEach
-                            val playData = LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum).toJson()
+                            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
 
                             episodes.add(
                                 newEpisode(playData) {
@@ -194,7 +193,7 @@ class GhostflixProvider : MainAPI() {
                     } catch (_: Exception) {
                         val epCount = (season.episodeCount ?: 12).coerceAtLeast(1)
                         for (epNum in 1..epCount) {
-                            val playData = LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum).toJson()
+                            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
 
                             episodes.add(
                                 newEpisode(playData) {
@@ -208,7 +207,7 @@ class GhostflixProvider : MainAPI() {
                 }
             } else {
                 for (ep in 1..24) {
-                    val playData = LoadData(id = tmdbId, type = "tv", season = 1, episode = ep).toJson()
+                    val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = 1, episode = ep))
 
                     episodes.add(
                         newEpisode(playData) {
@@ -227,7 +226,7 @@ class GhostflixProvider : MainAPI() {
                 this.year = year
             }
         } else {
-            val playData = LoadData(id = tmdbId, type = "movie").toJson()
+            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "movie"))
             newMovieLoadResponse(title, url, TvType.Movie, playData) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = backdrop ?: poster
@@ -250,20 +249,20 @@ class GhostflixProvider : MainAPI() {
         val e = loadData.episode ?: 1
 
         val resolveHosts = listOf(
-            "Bolt (Direct)" to "https://vidbolt.pro",
-            "Orion (VidCore)" to "https://vidcore.net"
+            "Bolt" to "https://vidbolt.pro",
+            "Orion" to "https://vidcore.net"
         )
 
         resolveHosts.amap { (serverName, baseHost) ->
             val resolveEndpoints = if (isTv) {
                 listOf(
                     "$baseHost/api/resolve?type=tv&id=$id&season=$s&episode=$e",
-                    "$baseHost/resolve?type=tv&id=$id&season=$s&episode=$e"
+                    "$baseHost/tv/$id/$s/$e?theme=E50914&autoPlay=true"
                 )
             } else {
                 listOf(
                     "$baseHost/api/resolve?type=movie&id=$id",
-                    "$baseHost/resolve?type=movie&id=$id"
+                    "$baseHost/movie/$id?theme=E50914&autoPlay=true"
                 )
             }
 
@@ -272,54 +271,17 @@ class GhostflixProvider : MainAPI() {
                     val resText = app.get(
                         endpoint,
                         referer = "$baseHost/",
-                        headers = mapOf("Origin" to baseHost, "Accept" to "*/*")
+                        headers = mapOf(
+                            "Origin" to baseHost,
+                            "Referer" to "$baseHost/",
+                            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                            "Accept" to "*/*"
+                        )
                     ).text
 
                     extractStreamsFromText(resText, serverName, "$baseHost/", subtitleCallback, callback)
                 } catch (_: Exception) {}
             }
-
-            val embedPage = if (isTv) {
-                "$baseHost/tv/$id/$s/$e?theme=E50914&autoPlay=true"
-            } else {
-                "$baseHost/movie/$id?theme=E50914&autoPlay=true"
-            }
-            try {
-                val pageText = app.get(embedPage, referer = "$mainUrl/").text
-                extractStreamsFromText(pageText, serverName, "$baseHost/", subtitleCallback, callback)
-            } catch (_: Exception) {}
-        }
-
-        val embedUrls = if (isTv) {
-            listOf(
-                "https://vidsrc.xyz/embed/tv/$id/$s-$e",
-                "https://vidsrc.cc/v2/embed/tv/$id/$s/$e",
-                "https://vidsrc.pro/embed/tv/$id/$s/$e",
-                "https://vidlink.pro/tv/$id/$s/$e",
-                "https://autoembed.cc/embed/tv/$id/$s/$e",
-                "https://player.autoembed.cc/embed/tv/$id/$s/$e",
-                "https://multiembed.mov/directstream.php?video_id=$id&tmdb=1&s=$s&e=$e",
-                "https://embed.su/embed/tv/$id/$s/$e",
-                "https://NontonGo.win/embed/tv/?id=$id&s=$s&e=$e"
-            )
-        } else {
-            listOf(
-                "https://vidsrc.xyz/embed/movie/$id",
-                "https://vidsrc.cc/v2/embed/movie/$id",
-                "https://vidsrc.pro/embed/movie/$id",
-                "https://vidlink.pro/movie/$id",
-                "https://autoembed.cc/embed/movie/$id",
-                "https://player.autoembed.cc/embed/movie/$id",
-                "https://multiembed.mov/directstream.php?video_id=$id&tmdb=1",
-                "https://embed.su/embed/movie/$id",
-                "https://NontonGo.win/embed/movie/$id"
-            )
-        }
-
-        embedUrls.amap { embedUrl ->
-            try {
-                loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
-            } catch (_: Exception) {}
         }
 
         return true
@@ -358,9 +320,11 @@ class GhostflixProvider : MainAPI() {
                     this.referer = referer
                     this.quality = quality
                     this.headers = mapOf(
-                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                         "Referer" to referer,
-                        "Origin" to referer.removeSuffix("/")
+                        "Origin" to referer.removeSuffix("/"),
+                        "Accept" to "*/*",
+                        "Connection" to "keep-alive"
                     )
                 }
             )
