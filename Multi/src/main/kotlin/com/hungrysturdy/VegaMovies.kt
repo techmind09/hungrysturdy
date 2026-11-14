@@ -1,4 +1,4 @@
-Package com.hungrysturdy
+package com.hungrysturdy
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.lagradost.cloudstream3.*
