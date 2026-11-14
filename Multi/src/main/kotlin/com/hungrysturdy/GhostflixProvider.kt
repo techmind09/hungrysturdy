@@ -3,7 +3,6 @@ package com.hungrysturdy
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
@@ -42,7 +41,6 @@ class GhostflixProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val homePageList = mutableListOf<HomePageList>()
-
         val sep = if (request.data.contains("?")) "&" else "?"
         val tmdbUrl = "https://api.themoviedb.org/3/${request.data}${sep}api_key=$TMDB_API_KEY&page=$page"
 
@@ -92,7 +90,7 @@ class GhostflixProvider : MainAPI() {
             val match = regex.find(unescaped) ?: continue
             val jsonArray = match.groupValues[1]
 
-            val parsed = tryParseJson<List<TrendingItem>>(jsonArray) ?: continue
+            val parsed = AppUtils.tryParseJson<List<TrendingItem>>(jsonArray) ?: continue
             parsed.forEach { item ->
                 val title = item.title ?: item.name ?: item.originalTitle ?: item.originalName ?: return@forEach
                 val mediaId = item.id ?: return@forEach
@@ -177,7 +175,7 @@ class GhostflixProvider : MainAPI() {
                         val sResp = app.get(sUrl, headers = tmdbHeaders).parsedSafe<TmdbSeasonDetails>()
                         sResp?.episodes?.forEach { ep ->
                             val epNum = ep.episodeNumber ?: return@forEach
-                            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
+                            val playData = "{\"id\":\"$tmdbId\",\"type\":\"tv\",\"season\":$sNum,\"episode\":$epNum}"
                             episodes.add(
                                 Episode(
                                     data = playData,
@@ -192,7 +190,7 @@ class GhostflixProvider : MainAPI() {
                     } catch (_: Exception) {
                         val epCount = (season.episodeCount ?: 12).coerceAtLeast(1)
                         for (epNum in 1..epCount) {
-                            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
+                            val playData = "{\"id\":\"$tmdbId\",\"type\":\"tv\",\"season\":$sNum,\"episode\":$epNum}"
                             episodes.add(
                                 Episode(
                                     data = playData,
@@ -206,7 +204,7 @@ class GhostflixProvider : MainAPI() {
                 }
             } else {
                 for (ep in 1..24) {
-                    val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = 1, episode = ep))
+                    val playData = "{\"id\":\"$tmdbId\",\"type\":\"tv\",\"season\":1,\"episode\":$ep}"
                     episodes.add(
                         Episode(
                             data = playData,
@@ -225,7 +223,7 @@ class GhostflixProvider : MainAPI() {
                 this.year = year
             }
         } else {
-            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "movie"))
+            val playData = "{\"id\":\"$tmdbId\",\"type\":\"movie\"}"
             newMovieLoadResponse(title, url, TvType.Movie, playData) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = backdrop ?: poster
@@ -241,7 +239,7 @@ class GhostflixProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val loadData = tryParseJson<LoadData>(data) ?: return false
+        val loadData = AppUtils.tryParseJson<LoadData>(data) ?: return false
         val id = loadData.id
         val isTv = loadData.type == "tv"
         val s = loadData.season ?: 1
