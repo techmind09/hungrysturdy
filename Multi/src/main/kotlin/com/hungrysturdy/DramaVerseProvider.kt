@@ -125,10 +125,11 @@ class DramaVerseProvider : MainAPI() {
             (lower.contains("google.com") && !lower.contains("drive.google.com") && !lower.contains("docs.google.com") && !lower.contains("googleusercontent.com"))
     }
 
-    // Shortener (safe.sohojgyan.com -> mydverse02.blogspot.com) ko resolve karta hai
     private suspend fun resolveIntermediateUrl(url: String): String {
         var current = url
-        repeat(4) {
+        var attempts = 0
+        while (attempts < 4) {
+            attempts++
             try {
                 val resp = app.get(current, headers = defaultHeaders, allowRedirects = true)
                 val finalUrl = resp.url.ifEmpty { current }
@@ -137,7 +138,6 @@ class DramaVerseProvider : MainAPI() {
                 }
                 val html = resp.text
 
-                // Meta refresh check
                 val metaMatch = Regex("""content\s*=\s*["'][0-9]+;\s*url=([^"']+)["']""", RegexOption.IGNORE_CASE).find(html)
                 if (metaMatch != null) {
                     val nextUrl = resolveRelativeUrl(current, metaMatch.groupValues[1])
@@ -147,7 +147,6 @@ class DramaVerseProvider : MainAPI() {
                     }
                 }
 
-                // JS redirect check (ignore ad scripts)
                 val jsMatch = Regex("""(?:window\.location|location\.href|location\.replace)\s*=\s*["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
                     .findAll(html)
                     .map { it.groupValues[1] }
@@ -165,13 +164,12 @@ class DramaVerseProvider : MainAPI() {
         return current
     }
 
-    // Element ke aas-paas se "Episode 01", "Episode 02" heading dhoondhta hai
     private fun findEpisodeLabel(el: Element, fallbackIndex: Int): String {
         val epRegex = Regex("(?i)(?:episode|ep)\\s*0*(\\d+)")
         var curr: Element? = el
-        repeat(4) {
-            if (curr == null) return@repeat
-            // Previous siblings check karo (e.g., <h3>Episode 03</h3> ke neeche <div class="EpFile">GDrive</div>)
+        var steps = 0
+        while (curr != null && steps < 4) {
+            steps++
             var prev = curr?.previousElementSibling()
             while (prev != null) {
                 val t = prev.text().trim()
@@ -187,9 +185,7 @@ class DramaVerseProvider : MainAPI() {
         return "Episode $fallbackIndex"
     }
 
-    // mydverse02.blogspot.com / safe.sohojgyan.com se GDrive + XCloud dono links nikalta hai
     private suspend fun scrapeEpisodeLinksFromIntermediate(pageUrl: String, refererUrl: String): List<Pair<Int, String>> {
-        // Pair(episodeNumber, url)
         val rawItems = mutableListOf<Pair<Int, String>>()
         val seenUrls = mutableSetOf<String>()
 
@@ -201,7 +197,6 @@ class DramaVerseProvider : MainAPI() {
 
             var autoIdx = 1
 
-            // 1. Standard <a href="..."> aur onclick wale buttons check karo
             doc.select("a[href], [onclick], [data-href], [data-url], div.EpFile").forEach { el ->
                 val rawHref = when {
                     el.hasAttr("href") -> el.absUrl("href")
@@ -226,7 +221,6 @@ class DramaVerseProvider : MainAPI() {
                 }
             }
 
-            // 2. Fallback: Agar Blogger page mein links JS array/variables ke andar chhupe hon
             if (rawItems.isEmpty()) {
                 val hostRegex = Regex(
                     """https?://[^"'\s<>\\]+(?:xcloud|drive\.google\.com|docs\.google\.com|gdflix|gdtot|filepress|hubcloud|hubdrive|gdrive|workers\.dev)[^"'\s<>\\]*""",
@@ -253,7 +247,6 @@ class DramaVerseProvider : MainAPI() {
         }
         val description = document.selectFirst(".entry-content p")?.text()
 
-        // Episode number ke hisaab se multiple links (GDrive + XCloud) ko group karo
         val episodeMap = linkedMapOf<Int, MutableList<String>>()
         val btnSlides = document.select("a.btn-slide, .entry-content a[href*='sohojgyan'], .entry-content a[href*='blogspot'], .entry-content a[href*='xcloud'], .entry-content a[href*='drive.google.com'], .entry-content a[href*='gdflix']")
 
@@ -285,7 +278,6 @@ class DramaVerseProvider : MainAPI() {
 
         val episodes = mutableListOf<Episode>()
         for ((epNum, urls) in episodeMap) {
-            // Multiple links (e.g. GDrive + XCloud) ko "|||" se join karke data mein bhejo
             val combinedData = urls.distinct().joinToString("|||")
             episodes.add(
                 newEpisode(combinedData) {
@@ -321,7 +313,6 @@ class DramaVerseProvider : MainAPI() {
         for (itemUrl in rawLinks) {
             val currentUrl = resolveIntermediateUrl(itemUrl)
 
-            // 1. Agar abhi bhi intermediate Blogger/Sohojgyan page hai
             if (currentUrl.contains("sohojgyan") || currentUrl.contains("blogspot")) {
                 val scraped = scrapeEpisodeLinksFromIntermediate(currentUrl, "$mainUrl/")
                 for ((_, link) in scraped) {
@@ -330,7 +321,6 @@ class DramaVerseProvider : MainAPI() {
                 continue
             }
 
-            // 2. Single host link (XCloud, GDrive, GDFlix, HubCloud, etc.)
             processSingleHostLink(currentUrl, "$mainUrl/", subtitleCallback, callback)
         }
 
@@ -355,10 +345,8 @@ class DramaVerseProvider : MainAPI() {
                 extractGDrive(url, subtitleCallback, callback)
             }
             else -> {
-                // GDFlix, HubCloud, FilePress, GDTot, Streamtape, etc. ke liye pehle CloudStream extractors try karo
                 val handled = loadExtractor(url, referer, subtitleCallback, callback)
                 if (!handled) {
-                    // Agar wrapper page ke andar GDrive ya XCloud link ho to use bhi nikal lo
                     try {
                         val doc = app.get(url, headers = defaultHeaders, referer = referer).document
                         doc.select("a[href]").forEach { a ->
@@ -380,7 +368,6 @@ class DramaVerseProvider : MainAPI() {
         }
     }
 
-    // Google Drive Direct Extractor (drive.google.com/file/d/<ID>/view -> Direct Stream)
     private suspend fun extractGDrive(
         url: String,
         subtitleCallback: (SubtitleFile) -> Unit,
@@ -390,14 +377,12 @@ class DramaVerseProvider : MainAPI() {
         val fileId = Regex("""(?:/d/|id=)([a-zA-Z0-9_-]{15,})""").find(url)?.groupValues?.get(1)
 
         if (!fileId.isNullOrEmpty()) {
-            // 1. Direct drive.usercontent.google.com download/stream endpoint (confirm=t bypasses virus scan warning)
             val directConfirmUrl = "https://drive.usercontent.google.com/download?id=$fileId&export=download&confirm=t"
             try {
                 val resp = app.get(directConfirmUrl, headers = defaultHeaders, allowRedirects = true)
                 val finalUrl = resp.url.ifEmpty { directConfirmUrl }
                 val html = resp.text
 
-                // Agar confirmation form aaye to uske action + hidden inputs se URL banao
                 val formAction = resp.document.selectFirst("form#download-form")?.attr("action")
                 if (!formAction.isNullOrEmpty()) {
                     val params = resp.document.select("form#download-form input[name]").joinToString("&") {
@@ -431,7 +416,6 @@ class DramaVerseProvider : MainAPI() {
             } catch (_: Exception) {
             }
 
-            // 2. Fallback direct link
             if (!found) {
                 callback.invoke(
                     newExtractorLink(
@@ -447,7 +431,6 @@ class DramaVerseProvider : MainAPI() {
             }
         }
 
-        // Built-in extractor bhi saath mein call karo
         loadExtractor(url, "https://drive.google.com/", subtitleCallback, callback)
         return found
     }
@@ -500,7 +483,6 @@ class DramaVerseProvider : MainAPI() {
                 val finalPlayerUrl = streamResp.url.ifEmpty { streamPageUrl }
                 val streamHtml = streamResp.text
 
-                // Subtitles
                 Regex("""\{[^{}]*"lang"\s*:\s*"([^"]+)"[^{}]*"tgid"\s*:\s*(\d+)[^{}]*\}""")
                     .findAll(streamHtml)
                     .forEach { m ->
