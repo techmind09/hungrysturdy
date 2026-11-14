@@ -2,9 +2,10 @@ package com.hungrysturdy
 
 import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.AppUtils
+import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.toJson
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
 
 class GhostflixProvider : MainAPI() {
     override var mainUrl = "https://ghostflix.st"
@@ -90,7 +91,7 @@ class GhostflixProvider : MainAPI() {
             val match = regex.find(unescaped) ?: continue
             val jsonArray = match.groupValues[1]
 
-            val parsed = AppUtils.tryParseJson<List<TrendingItem>>(jsonArray) ?: continue
+            val parsed = tryParseJson<List<TrendingItem>>(jsonArray) ?: continue
             parsed.forEach { item ->
                 val title = item.title ?: item.name ?: item.originalTitle ?: item.originalName ?: return@forEach
                 val mediaId = item.id ?: return@forEach
@@ -175,10 +176,10 @@ class GhostflixProvider : MainAPI() {
                         val sResp = app.get(sUrl, headers = tmdbHeaders).parsedSafe<TmdbSeasonDetails>()
                         sResp?.episodes?.forEach { ep ->
                             val epNum = ep.episodeNumber ?: return@forEach
-                            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
-                            
+                            val playData = LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum).toJson()
+
                             episodes.add(
-                                newEpisode(playData).apply {
+                                newEpisode(playData) {
                                     this.name = ep.name ?: "Episode $epNum"
                                     this.season = sNum
                                     this.episode = epNum
@@ -190,10 +191,10 @@ class GhostflixProvider : MainAPI() {
                     } catch (_: Exception) {
                         val epCount = (season.episodeCount ?: 12).coerceAtLeast(1)
                         for (epNum in 1..epCount) {
-                            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum))
-                            
+                            val playData = LoadData(id = tmdbId, type = "tv", season = sNum, episode = epNum).toJson()
+
                             episodes.add(
-                                newEpisode(playData).apply {
+                                newEpisode(playData) {
                                     this.name = "Episode $epNum"
                                     this.season = sNum
                                     this.episode = epNum
@@ -204,10 +205,10 @@ class GhostflixProvider : MainAPI() {
                 }
             } else {
                 for (ep in 1..24) {
-                    val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "tv", season = 1, episode = ep))
-                    
+                    val playData = LoadData(id = tmdbId, type = "tv", season = 1, episode = ep).toJson()
+
                     episodes.add(
-                        newEpisode(playData).apply {
+                        newEpisode(playData) {
                             this.name = "Episode $ep"
                             this.season = 1
                             this.episode = ep
@@ -223,7 +224,7 @@ class GhostflixProvider : MainAPI() {
                 this.year = year
             }
         } else {
-            val playData = AppUtils.toJson(LoadData(id = tmdbId, type = "movie"))
+            val playData = LoadData(id = tmdbId, type = "movie").toJson()
             newMovieLoadResponse(title, url, TvType.Movie, playData) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = backdrop ?: poster
@@ -239,7 +240,7 @@ class GhostflixProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val loadData = AppUtils.tryParseJson<LoadData>(data) ?: return false
+        val loadData = tryParseJson<LoadData>(data) ?: return false
         val id = loadData.id
         val isTv = loadData.type == "tv"
         val s = loadData.season ?: 1
