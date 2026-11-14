@@ -13,6 +13,7 @@ class Plugin : Plugin() {
         registerMainAPI(DramaVerseProvider())
         registerMainAPI(GhostflixProvider())
         registerMainAPI(GokuHDProvider())
+        registerMainAPI(ToonPlayProvider())
 
         // Extractors Registration
         registerExtractorAPI(GokuHDExtractor())
