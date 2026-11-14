@@ -1,4 +1,4 @@
-package com.hungrysturdy
+Package com.hungrysturdy
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.lagradost.cloudstream3.*
@@ -192,7 +192,6 @@ class VegaMovies : MainAPI() {
         }
         val groups = parsed.groups
         if (groups.isEmpty()) return false
-        GokuHDSources.resetSession()
 
         val claimed = ConcurrentHashMap.newKeySet<String>()
         val seenUrls = ConcurrentHashMap.newKeySet<String>()
@@ -210,7 +209,6 @@ class VegaMovies : MainAPI() {
             if (!seenUrls.add(server.url)) return
             val key = "${server.name}|$tier|$lang|${if (dv) "dv" else ""}"
             if (key in claimed) return
-            if (!GokuHDSources.alive(server.url)) return
             if (claimed.add(key)) {
                 val extras = buildString {
                     if (lang.isNotBlank()) append(" [").append(lang).append("]")
@@ -229,6 +227,8 @@ class VegaMovies : MainAPI() {
                         type = ExtractorLinkType.VIDEO
                     ) {
                         this.quality = tier
+                        this.headers = server.headers
+                        this.referer = mainUrl
                     }
                 )
             }
