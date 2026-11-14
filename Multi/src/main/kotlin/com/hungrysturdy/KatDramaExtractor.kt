@@ -19,7 +19,7 @@ class Filemoon : Filesim() {
 }
 
 // =========================================================================
-// 1. HubCloud Extractor
+// 1. HubCloud Extractor (FSL R2, 10Gbps, PixelDrain, HBPlay, Buzz Server)
 // =========================================================================
 open class KatHubCloudExtractor : ExtractorApi() {
     override val name = "HubCloud"
@@ -53,7 +53,7 @@ open class KatHubCloudExtractor : ExtractorApi() {
 
             val gamerDoc = app.get(gamerLink, headers = defaultHeaders, referer = response.url).document
 
-            // 1. FSL Server
+            // 1. FSL Server (Cloudflare R2 Storage Direct Link)
             gamerDoc.selectFirst("a#fsl, a:contains(FSL Server), a[href*='r2.cloudflarestorage.com']")?.attr("href")?.let { fslUrl ->
                 if (fslUrl.isNotBlank()) {
                     val fslQuality = if (detectedQuality != Qualities.Unknown.value) detectedQuality else getQualityFromName(fslUrl)
@@ -71,7 +71,7 @@ open class KatHubCloudExtractor : ExtractorApi() {
                 }
             }
 
-            // 2. HBPlay Direct Link
+            // 2. HBPlay Direct Link (Watch Online)
             gamerDoc.selectFirst("a[href*='hbplay.pages.dev']")?.attr("href")?.let { hbUrl ->
                 extractHbPlayLink(hbUrl, detectedQuality, callback)
             }
@@ -81,7 +81,7 @@ open class KatHubCloudExtractor : ExtractorApi() {
                 extractPixelDrainLink(pxlUrl, detectedQuality, callback)
             }
 
-            // 4. 10Gbps Server
+            // 4. 10Gbps Server (pixel.hubcloud.pw)
             gamerDoc.selectFirst("a[href*='pixel.hubcloud'], a:contains(10Gbps)")?.attr("href")?.let { tenGbpsUrl ->
                 if (tenGbpsUrl.isNotBlank()) {
                     callback.invoke(
@@ -98,9 +98,11 @@ open class KatHubCloudExtractor : ExtractorApi() {
                 }
             }
 
-            // 5. Buzz Server
+            // 5. Buzz Server (fuckingfast.net)
             gamerDoc.selectFirst("a[href*='fuckingfast.net'], a:contains(Buzz Server)")?.attr("href")?.let { buzzUrl ->
-                extractFuckingFastLink(buzzUrl, detectedQuality, callback)
+                if (buzzUrl.isNotBlank()) {
+                    extractFuckingFastLink(buzzUrl, detectedQuality, callback)
+                }
             }
 
         } catch (e: Exception) {
@@ -123,7 +125,7 @@ class GamerXYTExtractor : KatHubCloudExtractor() {
 }
 
 // =========================================================================
-// 2. GDFlix Extractor (Supports gdflix.vip, new9.gdflix.io, /cloud/..., workers.dev, cloudpaglu)
+// 2. GDFlix Extractor (Supports gdflix.vip, new9.gdflix.io, busycdn.instadl.rest, workers.dev)
 // =========================================================================
 open class KatGDFlixExtractor : ExtractorApi() {
     override val name = "GDFlix"
@@ -147,13 +149,11 @@ open class KatGDFlixExtractor : ExtractorApi() {
                 mainUrl
             }
 
-            // File Name / Title se quality (480p / 720p / 1080p) nikalna
             val pageInfo = "${doc.title()} ${doc.selectFirst("div.card-body, ul.list-group")?.text().orEmpty()}"
             val quality = Regex("""(\d{3,4}p)""", RegexOption.IGNORE_CASE).find(pageInfo)?.groupValues?.get(1)
                 ?.let { getQualityFromName(it) }
                 ?: getQualityFromName(referer.orEmpty())
 
-            // 1. INSTANT DL [10GBPS] (busycdn / instant. /cloudpaglu / workers.dev)
             doc.select("a.btn, a[href]").forEach { btn ->
                 val rawHref = btn.attr("href").trim()
                 if (rawHref.isEmpty() || rawHref.startsWith("#") || rawHref.contains("/login")) return@forEach
@@ -162,7 +162,7 @@ open class KatGDFlixExtractor : ExtractorApi() {
                 val text = btn.text().trim()
 
                 when {
-                    // Fast Cloud / ZipDisk subpage: https://new9.gdflix.io/cloud/1794641883/...
+                    // Fast Cloud / ZipDisk subpage (e.g. new9.gdflix.io/cloud/...)
                     rawHref.contains("/cloud/") || text.contains("FAST CLOUD", true) || text.contains("ZIPDISK", true) -> {
                         extractGdFlixCloudPage(absHref, finalUrl, quality, callback)
                     }
@@ -175,7 +175,10 @@ open class KatGDFlixExtractor : ExtractorApi() {
                     absHref.contains("fuckingfast.net") -> {
                         extractFuckingFastLink(absHref, quality, callback)
                     }
-                    // Direct servers on main GDFlix page (Instant DL 10Gbps, CloudPaglu, Workers.dev, R2)
+                    absHref.contains("goflix.sbs") || absHref.contains("gofile") -> {
+                        loadExtractor(absHref, finalUrl, subtitleCallback, callback)
+                    }
+                    // Direct Instant DL / busycdn / workers.dev / cloudpaglu
                     absHref.contains("busycdn") ||
                     absHref.contains("cloudpaglu") ||
                     absHref.contains("workers.dev") ||
@@ -202,7 +205,6 @@ open class KatGDFlixExtractor : ExtractorApi() {
         }
     }
 
-    // Subpage parser for https://new9.gdflix.io/cloud/... -> workers.dev & quick.cloudpaglu.site
     private suspend fun extractGdFlixCloudPage(
         cloudUrl: String,
         refererUrl: String,
