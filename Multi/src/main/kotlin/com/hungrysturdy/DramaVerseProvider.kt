@@ -8,7 +8,7 @@ import java.net.URI
 class DramaVerseProvider : MainAPI() {
     override var mainUrl = "https://mydverse.com"
     override var name = "DramaVerse"
-    override val supportedTypes = setOf(TvType.AsianDrama)
+    override val supportedTypes = setOf(TvType.AsianDrama, TvType.Movie)
     override var lang = "hi"
     override val hasMainPage = true
 
@@ -94,122 +94,155 @@ class DramaVerseProvider : MainAPI() {
             }
     }
 
-    private fun isValidVideoLink(href: String): Boolean {
-        if (href.isBlank() || href.startsWith("#") || href.startsWith("javascript")) return false
-        val lower = href.lowercase()
-        return !(lower.contains("t.me") || lower.contains("telegram") || lower.contains("whatsapp") ||
-                lower.contains("privacy") || lower.contains("cookie") || lower.contains("/category/") ||
-                lower.contains("/tag/") || lower.contains("?s=") || lower.contains("/page/") ||
-                lower.contains("sohojgyan.com") || lower.contains("mydverse.com") ||
-                lower.contains("blogspot.com") || lower.contains("blogger.com") ||
-                lower.contains("google.com/search") || lower.contains("facebook.com") ||
-                lower.contains("twitter.com") || lower.contains("instagram.com"))
-    }
-
-    private fun getServerName(btnText: String, href: String): String {
-        val lowerText = btnText.lowercase()
-        val lowerHref = href.lowercase()
-        return when {
-            lowerHref.contains("drive.google.com") || lowerHref.contains("docs.google.com") || lowerText.contains("gdrive") || lowerText.contains("drive") -> "GDrive"
-            lowerHref.contains("xcloud") || lowerText.contains("xcloud") -> "XCloud"
-            lowerHref.contains("filego") || lowerHref.contains("fdownload") || lowerText.contains("filego") -> "FileGo"
-            lowerHref.contains("hubcloud") || lowerText.contains("hubcloud") -> "HubCloud"
-            lowerHref.contains("gdflix") || lowerText.contains("gdflix") -> "GDFlix"
-            lowerHref.contains("pixeldrain") || lowerText.contains("pixel") -> "PixelDrain"
-            else -> btnText.trim().takeIf { it.isNotEmpty() && it.length <= 15 } ?: "Server"
+    private fun resolveRelativeUrl(baseUrl: String, rawPath: String): String {
+        val cleaned = rawPath.replace("\\/", "/").trim()
+        if (cleaned.startsWith("http://") || cleaned.startsWith("https://")) return cleaned
+        return try {
+            URI(baseUrl).resolve(cleaned).toString()
+        } catch (_: Exception) {
+            cleaned
         }
     }
 
-    private data class ParsedPageResult(
-        val episodes: Map<Int, List<Pair<String, String>>>,
-        val zipPacks: List<Triple<String, String, String>> // Title, ServerName, URL
-    )
+    private fun isIgnoredOrAdUrl(href: String): Boolean {
+        val lower = href.lowercase()
+        return !lower.startsWith("http") ||
+            lower.contains("ardance.org") ||
+            lower.contains("invoke_layer") ||
+            lower.contains("fifa2026") ||
+            lower.contains("5gvci.com") ||
+            lower.contains("llvpn.com") ||
+            lower.contains("sohojgyan.com") ||
+            lower.contains("mydverse.com") ||
+            lower.contains("blogspot.com") ||
+            lower.contains("blogger.com") ||
+            lower.contains("telegram") ||
+            lower.contains("t.me/") ||
+            lower.contains("whatsapp") ||
+            lower.contains("facebook.com") ||
+            lower.contains("twitter.com") ||
+            lower.contains("instagram.com") ||
+            (lower.contains("google.com") && !lower.contains("drive.google.com") && !lower.contains("docs.google.com") && !lower.contains("googleusercontent.com"))
+    }
 
-    // Sequential Top-to-Bottom DOM Scanner for Blogger / Intermediate pages
-    private suspend fun scrapeEpisodeLinksFromIntermediate(pageUrl: String, refererUrl: String): ParsedPageResult {
-        val episodeMap = mutableMapOf<Int, MutableList<Pair<String, String>>>()
-        val zipList = mutableListOf<Triple<String, String, String>>()
-        val visitedLinks = mutableSetOf<String>()
+    // Shortener (safe.sohojgyan.com -> mydverse02.blogspot.com) ko resolve karta hai
+    private suspend fun resolveIntermediateUrl(url: String): String {
+        var current = url
+        repeat(4) {
+            try {
+                val resp = app.get(current, headers = defaultHeaders, allowRedirects = true)
+                val finalUrl = resp.url.ifEmpty { current }
+                if (finalUrl != current && !finalUrl.contains("ardance.org")) {
+                    current = finalUrl
+                }
+                val html = resp.text
 
-        try {
-            val resp = app.get(pageUrl, headers = defaultHeaders, referer = refererUrl)
-            val doc = resp.document
-            val contentRoot = doc.selectFirst(".post-body, .entry-content, article, main") ?: doc.body()
-
-            var currentEp: Int? = null
-            var inZipSection = false
-            var currentZipLabel = "All Episodes (ZIP)"
-
-            // Regex patterns
-            val rangeRegex = Regex("""(?i)(?:episode|ep|e)\s*0*(\d+)\s*[-– to]+\s*0*(\d+)""")
-            val singleEpRegex = Regex("""(?i)\b(?:episode|ep|e)\s*0*(\d+)\b""")
-            val zipKeywordRegex = Regex("""(?i)(?:\bzip\b|all\s*episodes?|complete\s*pack|batch|\d+(?:\.\d+)?\s*gb)""")
-
-            // Traverse every element in document order
-            for (el in contentRoot.select("*")) {
-                val ownText = el.ownText().trim()
-
-                // 1. Check headings/labels (only on elements that aren't huge wrappers)
-                if (ownText.isNotEmpty() && ownText.length < 100 && el.tagName() != "a") {
-                    val rangeMatch = rangeRegex.find(ownText)
-                    val singleMatch = singleEpRegex.find(ownText)
-
-                    when {
-                        rangeMatch != null -> {
-                            inZipSection = true
-                            currentZipLabel = ownText.replace(Regex("""[-–=]{2,}"""), "").trim()
-                        }
-                        zipKeywordRegex.containsMatchIn(ownText) && singleMatch == null -> {
-                            inZipSection = true
-                            val cleaned = ownText.replace(Regex("""[-–=]{2,}"""), "").trim()
-                            if (cleaned.isNotEmpty() && !cleaned.equals("ZIP FILE", ignoreCase = true)) {
-                                currentZipLabel = cleaned
-                            }
-                        }
-                        singleMatch != null -> {
-                            val epNum = singleMatch.groupValues[1].toIntOrNull()
-                            if (epNum != null && epNum in 1..500) {
-                                currentEp = epNum
-                                inZipSection = false
-                            }
-                        }
+                // Meta refresh check
+                val metaMatch = Regex("""content\s*=\s*["'][0-9]+;\s*url=([^"']+)["']""", RegexOption.IGNORE_CASE).find(html)
+                if (metaMatch != null) {
+                    val nextUrl = resolveRelativeUrl(current, metaMatch.groupValues[1])
+                    if (nextUrl != current && !nextUrl.contains("ardance.org")) {
+                        current = nextUrl
+                        continue
                     }
                 }
 
-                // 2. Check if current element is a valid video/download link
-                if (el.tagName() == "a") {
-                    val href = el.absUrl("href").trim()
-                    if (!isValidVideoLink(href) || !visitedLinks.add(href)) continue
+                // JS redirect check (ignore ad scripts)
+                val jsMatch = Regex("""(?:window\.location|location\.href|location\.replace)\s*=\s*["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
+                    .findAll(html)
+                    .map { it.groupValues[1] }
+                    .firstOrNull { !it.contains("ardance.org") && !it.contains("fifa2026") }
 
-                    val btnText = el.text().trim()
-                    if (btnText.contains("----------") && href.isEmpty()) continue
+                if (jsMatch != null && jsMatch != current) {
+                    current = resolveRelativeUrl(current, jsMatch)
+                    continue
+                }
+                break
+            } catch (_: Exception) {
+                break
+            }
+        }
+        return current
+    }
 
-                    val serverName = getServerName(btnText, href)
+    // Element ke aas-paas se "Episode 01", "Episode 02" heading dhoondhta hai
+    private fun findEpisodeLabel(el: Element, fallbackIndex: Int): String {
+        val epRegex = Regex("(?i)(?:episode|ep)\\s*0*(\\d+)")
+        var curr: Element? = el
+        repeat(4) {
+            if (curr == null) return@repeat
+            // Previous siblings check karo (e.g., <h3>Episode 03</h3> ke neeche <div class="EpFile">GDrive</div>)
+            var prev = curr?.previousElementSibling()
+            while (prev != null) {
+                val t = prev.text().trim()
+                if (epRegex.containsMatchIn(t)) return t
+                prev = prev.previousElementSibling()
+            }
+            val own = curr?.ownText()?.trim().orEmpty()
+            if (epRegex.containsMatchIn(own)) return own
+            curr = curr?.parent()
+        }
+        val text = el.text().trim()
+        if (epRegex.containsMatchIn(text)) return text
+        return "Episode $fallbackIndex"
+    }
 
-                    // Check if the button text itself specifies a range or episode
-                    val btnRangeMatch = rangeRegex.find(btnText)
-                    val btnSingleMatch = singleEpRegex.find(btnText)
-                    val btnIsZip = btnRangeMatch != null || (zipKeywordRegex.containsMatchIn(btnText) && btnSingleMatch == null)
+    // mydverse02.blogspot.com / safe.sohojgyan.com se GDrive + XCloud dono links nikalta hai
+    private suspend fun scrapeEpisodeLinksFromIntermediate(pageUrl: String, refererUrl: String): List<Pair<Int, String>> {
+        // Pair(episodeNumber, url)
+        val rawItems = mutableListOf<Pair<Int, String>>()
+        val seenUrls = mutableSetOf<String>()
 
-                    if (inZipSection || btnIsZip) {
-                        val zipTitle = when {
-                            btnRangeMatch != null -> btnText
-                            currentZipLabel.isNotBlank() -> currentZipLabel
-                            else -> "All Episodes (ZIP)"
-                        }
-                        zipList.add(Triple(zipTitle, serverName, href))
-                    } else {
-                        val epNum = btnSingleMatch?.groupValues?.get(1)?.toIntOrNull()
-                            ?: currentEp
-                            ?: 1
-                        episodeMap.getOrPut(epNum) { mutableListOf() }.add(serverName to href)
+        try {
+            val resolvedStart = resolveIntermediateUrl(pageUrl)
+            val resp = app.get(resolvedStart, headers = defaultHeaders, referer = refererUrl)
+            val doc = resp.document
+            val html = resp.text
+
+            var autoIdx = 1
+
+            // 1. Standard <a href="..."> aur onclick wale buttons check karo
+            doc.select("a[href], [onclick], [data-href], [data-url], div.EpFile").forEach { el ->
+                val rawHref = when {
+                    el.hasAttr("href") -> el.absUrl("href")
+                    el.hasAttr("data-href") -> el.absUrl("data-href")
+                    el.hasAttr("data-url") -> el.absUrl("data-url")
+                    el.hasAttr("onclick") -> {
+                        Regex("""["'](https?://[^"']+)["']""").find(el.attr("onclick"))?.groupValues?.get(1).orEmpty()
+                    }
+                    el.parent()?.hasAttr("href") == true -> el.parent()!!.absUrl("href")
+                    el.parent()?.hasAttr("onclick") == true -> {
+                        Regex("""["'](https?://[^"']+)["']""").find(el.parent()!!.attr("onclick"))?.groupValues?.get(1).orEmpty()
+                    }
+                    else -> ""
+                }
+
+                if (rawHref.isNotEmpty() && !isIgnoredOrAdUrl(rawHref) && seenUrls.add(rawHref)) {
+                    val label = findEpisodeLabel(el, autoIdx)
+                    val epNum = Regex("(?i)(?:episode|ep|e)\\s*0*(\\d+)").find(label)?.groupValues?.get(1)?.toIntOrNull()
+                        ?: autoIdx
+                    rawItems.add(epNum to rawHref)
+                    autoIdx++
+                }
+            }
+
+            // 2. Fallback: Agar Blogger page mein links JS array/variables ke andar chhupe hon
+            if (rawItems.isEmpty()) {
+                val hostRegex = Regex(
+                    """https?://[^"'\s<>\\]+(?:xcloud|drive\.google\.com|docs\.google\.com|gdflix|gdtot|filepress|hubcloud|hubdrive|gdrive|workers\.dev)[^"'\s<>\\]*""",
+                    RegexOption.IGNORE_CASE
+                )
+                hostRegex.findAll(html).forEach { m ->
+                    val href = m.value.replace("\\/", "/")
+                    if (!isIgnoredOrAdUrl(href) && seenUrls.add(href)) {
+                        rawItems.add(autoIdx to href)
+                        autoIdx++
                     }
                 }
             }
         } catch (_: Exception) {
         }
-
-        return ParsedPageResult(episodeMap, zipList)
+        return rawItems
     }
 
     override suspend fun load(url: String): LoadResponse {
@@ -220,87 +253,52 @@ class DramaVerseProvider : MainAPI() {
         }
         val description = document.selectFirst(".entry-content p")?.text()
 
-        val allEpLinks = mutableMapOf<Int, MutableList<Pair<String, String>>>()
-        val allZipPacks = mutableListOf<Triple<String, String, String>>()
-        val scrapedSubPages = mutableSetOf<String>()
+        // Episode number ke hisaab se multiple links (GDrive + XCloud) ko group karo
+        val episodeMap = linkedMapOf<Int, MutableList<String>>()
+        val btnSlides = document.select("a.btn-slide, .entry-content a[href*='sohojgyan'], .entry-content a[href*='blogspot'], .entry-content a[href*='xcloud'], .entry-content a[href*='drive.google.com'], .entry-content a[href*='gdflix']")
 
-        // Find intermediate Blogger / Sohojgyan / Episode Wise buttons
-        val candidateLinks = document.select("a.btn-slide, .entry-content a[href], .post-body a[href]")
+        for (slide in btnSlides) {
+            val slideUrl = slide.absUrl("href").ifEmpty { continue }
+            val slideTitle = slide.selectFirst(".btn-title")?.text()?.trim()
+                ?: slide.text().trim()
+                .ifEmpty { "Episode" }
 
-        for (link in candidateLinks) {
-            val href = link.absUrl("href").ifEmpty { continue }
-            val text = link.text().trim()
-
-            // Ignore pure separator lines without real links
-            if (text.contains("----") && !isValidVideoLink(href)) continue
-
-            val isIntermediatePage = href.contains("sohojgyan") ||
-                    href.contains("blogspot.com") ||
-                    href.contains("blogger.com") ||
-                    text.contains("Episode Wise", ignoreCase = true)
-
-            if (isIntermediatePage) {
-                if (scrapedSubPages.add(href)) {
-                    val parsed = scrapeEpisodeLinksFromIntermediate(href, url)
-                    parsed.episodes.forEach { (epNum, list) ->
-                        allEpLinks.getOrPut(epNum) { mutableListOf() }.addAll(list)
+            if (slideUrl.contains("sohojgyan") ||
+                slideUrl.contains("blogspot") ||
+                slideTitle.contains("Episode Wise", ignoreCase = true)
+            ) {
+                val scraped = scrapeEpisodeLinksFromIntermediate(slideUrl, url)
+                if (scraped.isNotEmpty()) {
+                    for ((epNum, epHref) in scraped) {
+                        episodeMap.getOrPut(epNum) { mutableListOf() }.add(epHref)
                     }
-                    allZipPacks.addAll(parsed.zipPacks)
+                } else {
+                    val nextEp = (episodeMap.keys.maxOrNull() ?: 0) + 1
+                    episodeMap.getOrPut(nextEp) { mutableListOf() }.add(slideUrl)
                 }
+            } else if (!isIgnoredOrAdUrl(slideUrl)) {
+                val epNum = Regex("(?i)(?:episode|ep|e)\\s*0*(\\d+)").find(slideTitle)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: ((episodeMap.keys.maxOrNull() ?: 0) + 1)
+                episodeMap.getOrPut(epNum) { mutableListOf() }.add(slideUrl)
             }
-        }
-
-        // If no intermediate page had episodes, scan the main page directly using the same state machine
-        if (allEpLinks.isEmpty()) {
-            val mainParsed = scrapeEpisodeLinksFromIntermediate(url, "$mainUrl/")
-            mainParsed.episodes.forEach { (epNum, list) ->
-                allEpLinks.getOrPut(epNum) { mutableListOf() }.addAll(list)
-            }
-            allZipPacks.addAll(mainParsed.zipPacks)
         }
 
         val episodes = mutableListOf<Episode>()
-
-        // 1. Add all regular episodes in strict sequential order (1, 2, 3... N)
-        val sortedEpNums = allEpLinks.keys.sorted()
-        for (epNum in sortedEpNums) {
-            val links = allEpLinks[epNum].orEmpty().distinctBy { it.second }
-            if (links.isEmpty()) continue
-
-            val serverNames = links.map { it.first }.distinct().joinToString(" • ")
-            val serializedData = links.joinToString(";;;") { "${it.first}|${it.second}" }
-
+        for ((epNum, urls) in episodeMap) {
+            // Multiple links (e.g. GDrive + XCloud) ko "|||" se join karke data mein bhejo
+            val combinedData = urls.distinct().joinToString("|||")
             episodes.add(
-                newEpisode(serializedData) {
-                    this.name = "Episode $epNum [$serverNames]"
+                newEpisode(combinedData) {
+                    this.name = "Episode $epNum"
                     this.episode = epNum
                 }
             )
         }
 
-        // 2. Group and add ZIP / Batch packs at the very end
-        if (allZipPacks.isNotEmpty()) {
-            val groupedZips = allZipPacks.groupBy { it.first }
-            var zipEpCounter = (sortedEpNums.maxOrNull() ?: episodes.size) + 1
-
-            for ((zipTitle, items) in groupedZips) {
-                val uniqueItems = items.distinctBy { it.third }
-                val serverNames = uniqueItems.map { it.second }.distinct().joinToString(" • ")
-                val serializedData = uniqueItems.joinToString(";;;") { "${it.second}|${it.third}" }
-
-                episodes.add(
-                    newEpisode(serializedData) {
-                        this.name = "📦 $zipTitle [$serverNames]"
-                        this.episode = zipEpCounter++
-                    }
-                )
-            }
-        }
-
         if (episodes.isEmpty()) {
             episodes.add(
                 newEpisode(url) {
-                    this.name = "Full Episode / Stream"
+                    this.name = "Full Movie / Stream"
                     this.episode = 1
                 }
             )
@@ -318,127 +316,140 @@ class DramaVerseProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val items = data.split(";;;").filter { it.isNotBlank() }
-        if (items.isEmpty()) {
-            return loadSingleLink(data, "Server", subtitleCallback, callback)
+        val rawLinks = data.split("|||").map { it.trim() }.filter { it.isNotEmpty() }
+
+        for (itemUrl in rawLinks) {
+            val currentUrl = resolveIntermediateUrl(itemUrl)
+
+            // 1. Agar abhi bhi intermediate Blogger/Sohojgyan page hai
+            if (currentUrl.contains("sohojgyan") || currentUrl.contains("blogspot")) {
+                val scraped = scrapeEpisodeLinksFromIntermediate(currentUrl, "$mainUrl/")
+                for ((_, link) in scraped) {
+                    processSingleHostLink(link, currentUrl, subtitleCallback, callback)
+                }
+                continue
+            }
+
+            // 2. Single host link (XCloud, GDrive, GDFlix, HubCloud, etc.)
+            processSingleHostLink(currentUrl, "$mainUrl/", subtitleCallback, callback)
         }
 
-        items.amap { item ->
-            val parts = item.split("|", limit = 2)
-            val serverName = if (parts.size == 2) parts[0] else "Server"
-            val url = if (parts.size == 2) parts[1] else parts[0]
-
-            loadSingleLink(url, serverName, subtitleCallback, callback)
-        }
         return true
     }
 
-    private suspend fun loadSingleLink(
+    private suspend fun processSingleHostLink(
+        rawUrl: String,
+        referer: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val url = resolveIntermediateUrl(rawUrl)
+
+        when {
+            url.contains("xcloud", ignoreCase = true) || url.contains("xcloud1.lol", ignoreCase = true) -> {
+                extractXCloud(url, subtitleCallback, callback)
+            }
+            url.contains("drive.google.com", ignoreCase = true) ||
+            url.contains("docs.google.com", ignoreCase = true) ||
+            url.contains("drive.usercontent.google.com", ignoreCase = true) -> {
+                extractGDrive(url, subtitleCallback, callback)
+            }
+            else -> {
+                // GDFlix, HubCloud, FilePress, GDTot, Streamtape, etc. ke liye pehle CloudStream extractors try karo
+                val handled = loadExtractor(url, referer, subtitleCallback, callback)
+                if (!handled) {
+                    // Agar wrapper page ke andar GDrive ya XCloud link ho to use bhi nikal lo
+                    try {
+                        val doc = app.get(url, headers = defaultHeaders, referer = referer).document
+                        doc.select("a[href]").forEach { a ->
+                            val href = a.absUrl("href")
+                            if (href.contains("xcloud", ignoreCase = true)) {
+                                extractXCloud(href, subtitleCallback, callback)
+                            } else if (href.contains("drive.google.com") || href.contains("drive.usercontent.google.com")) {
+                                extractGDrive(href, subtitleCallback, callback)
+                            } else if (href.contains("googleusercontent.com") || href.contains("r2.dev") || href.contains("workers.dev")) {
+                                callback.invoke(
+                                    newExtractorLink("GDrive", "GDrive Direct", href, ExtractorLinkType.VIDEO)
+                                )
+                            }
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+        }
+    }
+
+    // Google Drive Direct Extractor (drive.google.com/file/d/<ID>/view -> Direct Stream)
+    private suspend fun extractGDrive(
         url: String,
-        serverName: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val quality = getQualityFromName(serverName)
-        return when {
-            url.contains("drive.google.com", ignoreCase = true) || url.contains("docs.google.com", ignoreCase = true) -> {
-                extractGDrive(url, quality, callback)
-                true
-            }
-            url.contains("xcloud", ignoreCase = true) -> {
-                extractXCloud(url, subtitleCallback, callback)
-            }
-            else -> {
-                loadExtractor(url, "$mainUrl/", subtitleCallback, callback)
-                true
-            }
-        }
-    }
+        var found = false
+        val fileId = Regex("""(?:/d/|id=)([a-zA-Z0-9_-]{15,})""").find(url)?.groupValues?.get(1)
 
-    private suspend fun extractGDrive(
-        url: String,
-        quality: Int,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        try {
-            val fileId = Regex("""(?:file/d/|id=)([a-zA-Z0-9_-]+)""").find(url)?.groupValues?.get(1)
-            if (!fileId.isNullOrBlank()) {
-                // 1. Check Google Drive page title for 480p / 720p / 1080p quality
-                val viewUrl = "https://drive.google.com/file/d/$fileId/view"
-                val driveResp = app.get(viewUrl, headers = defaultHeaders)
-                val pageTitle = driveResp.document.title()
-                val detectedQuality = getQualityFromName(pageTitle).let {
-                    if (it == Qualities.Unknown.value) quality else it
+        if (!fileId.isNullOrEmpty()) {
+            // 1. Direct drive.usercontent.google.com download/stream endpoint (confirm=t bypasses virus scan warning)
+            val directConfirmUrl = "https://drive.usercontent.google.com/download?id=$fileId&export=download&confirm=t"
+            try {
+                val resp = app.get(directConfirmUrl, headers = defaultHeaders, allowRedirects = true)
+                val finalUrl = resp.url.ifEmpty { directConfirmUrl }
+                val html = resp.text
+
+                // Agar confirmation form aaye to uske action + hidden inputs se URL banao
+                val formAction = resp.document.selectFirst("form#download-form")?.attr("action")
+                if (!formAction.isNullOrEmpty()) {
+                    val params = resp.document.select("form#download-form input[name]").joinToString("&") {
+                        "${it.attr("name")}=${it.attr("value")}"
+                    }
+                    val confirmedStreamUrl = if (params.isNotEmpty()) "$formAction?$params" else formAction
+                    callback.invoke(
+                        newExtractorLink(
+                            source = "GDrive",
+                            name = "GDrive Direct",
+                            url = confirmedStreamUrl,
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = "https://drive.google.com/"
+                        }
+                    )
+                    found = true
+                } else if (!html.contains("<html", ignoreCase = true) || finalUrl.contains("googleusercontent.com")) {
+                    callback.invoke(
+                        newExtractorLink(
+                            source = "GDrive",
+                            name = "GDrive Direct",
+                            url = finalUrl,
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = "https://drive.google.com/"
+                        }
+                    )
+                    found = true
                 }
-
-                // 2. Fetch drive.usercontent.google.com direct download form if confirmation is required
-                val ucUrl = "https://drive.usercontent.google.com/download?id=$fileId&export=download&confirm=t"
-                val ucResp = app.get(ucUrl, headers = defaultHeaders, referer = "https://drive.google.com/")
-                val ucDoc = ucResp.document
-
-                // Parse hidden form inputs if virus scan warning page appears
-                val formAction = ucDoc.selectFirst("form#download-form")?.attr("action")
-                val finalDirectUrl = if (!formAction.isNullOrBlank()) {
-                    val params = ucDoc.select("form#download-form input[name]").mapNotNull { input ->
-                        val name = input.attr("name")
-                        val value = input.attr("value")
-                        if (name.isNotBlank()) "$name=$value" else null
-                    }.joinToString("&")
-                    if (params.isNotBlank()) "$formAction?$params" else ucUrl
-                } else {
-                    ucUrl
-                }
-
-                callback.invoke(
-                    newExtractorLink(
-                        source = "GDrive",
-                        name = "GDrive [Direct Server]",
-                        url = finalDirectUrl,
-                        type = ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = "https://drive.google.com/"
-                        this.quality = detectedQuality
-                    }
-                )
-
-                // Fallback direct export link
-                callback.invoke(
-                    newExtractorLink(
-                        source = "GDrive",
-                        name = "GDrive [Mirror]",
-                        url = "https://drive.google.com/uc?export=download&id=$fileId&confirm=t",
-                        type = ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = "https://drive.google.com/"
-                        this.quality = detectedQuality
-                    }
-                )
-            } else {
-                callback.invoke(
-                    newExtractorLink(
-                        source = "GDrive",
-                        name = "GDrive",
-                        url = url,
-                        type = ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = "https://drive.google.com/"
-                        this.quality = quality
-                    }
-                )
+            } catch (_: Exception) {
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-    }
 
-    private fun resolveRelativeUrl(baseUrl: String, rawPath: String): String {
-        val cleaned = rawPath.replace("\\/", "/").trim()
-        if (cleaned.startsWith("http://") || cleaned.startsWith("https://")) return cleaned
-        return try {
-            URI(baseUrl).resolve(cleaned).toString()
-        } catch (_: Exception) {
-            cleaned
+            // 2. Fallback direct link
+            if (!found) {
+                callback.invoke(
+                    newExtractorLink(
+                        source = "GDrive",
+                        name = "GDrive Stream",
+                        url = directConfirmUrl,
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = "https://drive.google.com/"
+                    }
+                )
+                found = true
+            }
         }
+
+        // Built-in extractor bhi saath mein call karo
+        loadExtractor(url, "https://drive.google.com/", subtitleCallback, callback)
+        return found
     }
 
     private suspend fun resolveFinalStreamUrl(startUrl: String, refererUrl: String): String {
@@ -456,83 +467,80 @@ class DramaVerseProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         var found = false
-        try {
-            val xCloudResponse = app.get(url, headers = defaultHeaders)
-            val xCloudDoc = xCloudResponse.document
-            val resolvedPageUrl = xCloudResponse.url.ifEmpty { url }
-            val baseCookies = xCloudResponse.cookies
+        val resolvedUrl = resolveIntermediateUrl(url)
+        val xCloudResponse = app.get(resolvedUrl, headers = defaultHeaders)
+        val xCloudDoc = xCloudResponse.document
+        val resolvedPageUrl = xCloudResponse.url.ifEmpty { resolvedUrl }
+        val baseCookies = xCloudResponse.cookies
 
-            val fileTitle = xCloudDoc.title()
-            val detectedQuality = getQualityFromName(fileTitle)
+        val emittedUrls = mutableSetOf<String>()
 
-            val emittedUrls = mutableSetOf<String>()
-            val mediaId = resolvedPageUrl.substringAfterLast("/").substringBefore("?").trim()
-            val baseUri = try {
-                val u = URI(resolvedPageUrl)
-                "${u.scheme}://${u.host}"
-            } catch (_: Exception) {
-                "https://xcloud.tattoo"
-            }
+        val mediaId = resolvedPageUrl.substringAfterLast("/").substringBefore("?").trim()
+        val baseUri = try {
+            val u = URI(resolvedPageUrl)
+            "${u.scheme}://${u.host}"
+        } catch (_: Exception) {
+            "https://xcloud.tattoo"
+        }
 
-            val streamCandidates = linkedSetOf<String>()
-            xCloudDoc.selectFirst("div.vd a[href*='stream_'], a[href*='/stream_']")
-                ?.absUrl("href")
-                ?.takeIf { it.isNotEmpty() }
-                ?.let { streamCandidates.add(it) }
+        val streamCandidates = linkedSetOf<String>()
+        xCloudDoc.selectFirst("div.vd a[href*='stream_'], a[href*='/stream_']")
+            ?.absUrl("href")
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { streamCandidates.add(resolveIntermediateUrl(it)) }
 
-            if (mediaId.isNotEmpty()) {
-                streamCandidates.add("$baseUri/stream_$mediaId")
-                streamCandidates.add("https://stream.xcloud1.lol/$mediaId")
-            }
+        if (mediaId.isNotEmpty() && mediaId.length > 2) {
+            streamCandidates.add("$baseUri/stream_$mediaId")
+            streamCandidates.add("https://stream.xcloud1.lol/$mediaId")
+        }
 
-            for (streamPageUrl in streamCandidates) {
-                try {
-                    val streamResp = app.get(streamPageUrl, headers = defaultHeaders, cookies = baseCookies)
-                    val finalPlayerUrl = streamResp.url.ifEmpty { streamPageUrl }
-                    val streamHtml = streamResp.text
+        for (streamPageUrl in streamCandidates) {
+            try {
+                val streamResp = app.get(streamPageUrl, headers = defaultHeaders, cookies = baseCookies)
+                val finalPlayerUrl = streamResp.url.ifEmpty { streamPageUrl }
+                val streamHtml = streamResp.text
 
-                    Regex("""\{[^{}]*"lang"\s*:\s*"([^"]+)"[^{}]*"tgid"\s*:\s*(\d+)[^{}]*\}""")
-                        .findAll(streamHtml)
-                        .forEach { m ->
-                            subtitleCallback.invoke(
-                                SubtitleFile(m.groupValues[1], "https://sub.xcloud.icu/${m.groupValues[2]}")
+                // Subtitles
+                Regex("""\{[^{}]*"lang"\s*:\s*"([^"]+)"[^{}]*"tgid"\s*:\s*(\d+)[^{}]*\}""")
+                    .findAll(streamHtml)
+                    .forEach { m ->
+                        subtitleCallback.invoke(
+                            SubtitleFile(m.groupValues[1], "https://sub.xcloud.icu/${m.groupValues[2]}")
+                        )
+                    }
+
+                val varPatterns = listOf(
+                    "PRIMARY_URL" to ("XCloud Server 1" to ExtractorLinkType.VIDEO),
+                    "WASABI_URL" to ("XCloud Server 2" to ExtractorLinkType.VIDEO),
+                    "HLS_URL" to ("XCloud HLS" to ExtractorLinkType.M3U8)
+                )
+
+                for ((varName, info) in varPatterns) {
+                    val match = Regex("""var\s+$varName\s*=\s*["']([^"']+)["']""").find(streamHtml)
+                    val rawVal = match?.groupValues?.get(1)
+                    if (!rawVal.isNullOrEmpty() && rawVal != "null") {
+                        val redirectUrl = resolveRelativeUrl(finalPlayerUrl, rawVal)
+                        val directCdnUrl = resolveFinalStreamUrl(redirectUrl, finalPlayerUrl)
+
+                        if (emittedUrls.add(directCdnUrl)) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = "XCloud",
+                                    name = info.first,
+                                    url = directCdnUrl,
+                                    type = info.second
+                                ) {
+                                    this.referer = ""
+                                }
                             )
-                        }
-
-                    val varPatterns = listOf(
-                        "PRIMARY_URL" to ("XCloud [Server 1]" to ExtractorLinkType.VIDEO),
-                        "WASABI_URL" to ("XCloud [Server 2]" to ExtractorLinkType.VIDEO),
-                        "HLS_URL" to ("XCloud [HLS]" to ExtractorLinkType.M3U8)
-                    )
-
-                    for ((varName, info) in varPatterns) {
-                        val match = Regex("""var\s+$varName\s*=\s*["']([^"']+)["']""").find(streamHtml)
-                        val rawVal = match?.groupValues?.get(1)
-                        if (!rawVal.isNullOrEmpty() && rawVal != "null") {
-                            val redirectUrl = resolveRelativeUrl(finalPlayerUrl, rawVal)
-                            val directCdnUrl = resolveFinalStreamUrl(redirectUrl, finalPlayerUrl)
-
-                            if (emittedUrls.add(directCdnUrl)) {
-                                callback.invoke(
-                                    newExtractorLink(
-                                        source = "XCloud",
-                                        name = info.first,
-                                        url = directCdnUrl,
-                                        type = info.second
-                                    ) {
-                                        this.referer = ""
-                                        this.quality = detectedQuality
-                                    }
-                                )
-                                found = true
-                            }
+                            found = true
                         }
                     }
-                } catch (_: Exception) {
                 }
+            } catch (_: Exception) {
             }
-        } catch (_: Exception) {
         }
+
         return found
     }
 }
