@@ -91,7 +91,7 @@ class ToonPlayProvider : MainAPI() {
                 else -> "section .group"
             }
 
-            doc.select(sectionSelector).forEach { card ->
+            for (card in doc.select(sectionSelector)) {
                 card.toToonPlayCard()?.let { results.add(it) }
             }
         }
@@ -319,7 +319,7 @@ class ToonPlayProvider : MainAPI() {
         val episodes = mutableListOf<Episode>()
 
         if (domEpButtons.isNotEmpty()) {
-            domEpButtons.forEach { btn ->
+            for (btn in domEpButtons) {
                 val epTitle = btn.attr("title").trim()
                 val epNum = btn.selectFirst("span.tabular-nums")?.text()?.trim()?.toIntOrNull() ?: (episodes.size + 1)
                 val epData = EpisodeData(
@@ -409,8 +409,8 @@ class ToonPlayProvider : MainAPI() {
                             val langName = obj.optString("language", "Multi")
                             val playerLink = obj.optString("link").replace("\\/", "/")
                             if (playerLink.isNotBlank()) {
-                                foundLinks = true
                                 loadExtractor(playerLink, "$mainUrl/", subtitleCallback) { link ->
+                                    foundLinks = true
                                     callback.invoke(
                                         newExtractorLink(
                                             source = this.name,
@@ -429,8 +429,8 @@ class ToonPlayProvider : MainAPI() {
                     } catch (_: Exception) {}
                 }
 
-                loadExtractor(fixUrl(iframeSrc), "$mainUrl/", subtitleCallback, callback)
-                foundLinks = true
+                val success = loadExtractor(fixUrl(iframeSrc), "$mainUrl/", subtitleCallback, callback)
+                if (success) foundLinks = true
             }
         }
 
