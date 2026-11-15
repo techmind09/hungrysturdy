@@ -1,27 +1,27 @@
-package com.hungrysturdy.ext.providers
+package com.hungrysturdy
 
-import com.hungrysturdy.ext.HungrysturdyCatalog
-import com.hungrysturdy.ext.HungrysturdyEpisode
-import com.hungrysturdy.ext.HungrysturdyMedia
-import com.hungrysturdy.ext.HungrysturdyMediaType
-import com.hungrysturdy.ext.HungrysturdyNet
-import com.hungrysturdy.ext.HungrysturdyProvider
-import com.hungrysturdy.ext.HungrysturdyStream
-import com.hungrysturdy.ext.HungrysturdySubtitle
+import com.hikari.ext.HikariCatalog
+import com.hikari.ext.HikariEpisode
+import com.hikari.ext.HikariMedia
+import com.hikari.ext.HikariMediaType
+import com.hikari.ext.HikariNet
+import com.hikari.ext.HikariProvider
+import com.hikari.ext.HikariStream
+import com.hikari.ext.HikariSubtitle
 import kotlinx.coroutines.CancellationException
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLEncoder
 import java.security.MessageDigest
 
-class MovieBoxProvider : HungrysturdyProvider {
+class MovieBoxProvider : HikariProvider {
 
     override val id = "moviebox"
     override val name = "MovieBox"
     override val mainUrl = "https://api3.aoneroom.com"
     override val description = "Movies & TV series — trending, latest, top rated, search with subtitles."
     override val version = 1
-    override val tvTypes = setOf(HungrysturdyMediaType.SERIES, HungrysturdyMediaType.MOVIE)
+    override val tvTypes = setOf(HikariMediaType.SERIES, HikariMediaType.MOVIE)
 
     private val UA =
         "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
@@ -40,7 +40,7 @@ class MovieBoxProvider : HungrysturdyProvider {
     }
 
     // Helper extension for clean ID extraction
-    private val HungrysturdyMedia.sid: String
+    private val HikariMedia.sid: String
         get() = id.substringAfter("mb:", "").substringBefore(":")
 
     private fun clientToken(): String {
@@ -67,7 +67,7 @@ class MovieBoxProvider : HungrysturdyProvider {
             for (auth in listOf(true, false)) {
                 try {
                     val hd = if (auth) headers() else headers() - "x-client-token"
-                    val txt = HungrysturdyNet.postString("$h$path", body.toString(), hd, "application/json")
+                    val txt = HikariNet.postString("$h$path", body.toString(), hd, "application/json")
                         ?: continue
                     
                     val o = runCatching { JSONObject(txt) }.getOrNull() ?: continue
@@ -88,7 +88,7 @@ class MovieBoxProvider : HungrysturdyProvider {
     private suspend fun get(path: String): JSONObject? {
         for (h in HOSTS) {
             try {
-                val o = HungrysturdyNet.getJson("$h$path", headers()) ?: continue
+                val o = HikariNet.getJson("$h$path", headers()) ?: continue
                 host = h
                 return o
             } catch (e: CancellationException) {
@@ -100,16 +100,16 @@ class MovieBoxProvider : HungrysturdyProvider {
         return null
     }
 
-    override fun catalogs(): List<HungrysturdyCatalog> = listOf(
-        HungrysturdyCatalog("trendmov", "Trending Movies", HungrysturdyMediaType.MOVIE),
-        HungrysturdyCatalog("latestmov", "Latest Movies", HungrysturdyMediaType.MOVIE),
-        HungrysturdyCatalog("topmov", "Top Movies", HungrysturdyMediaType.MOVIE),
-        HungrysturdyCatalog("trendtv", "Trending Series", HungrysturdyMediaType.SERIES),
-        HungrysturdyCatalog("latesttv", "Latest Series", HungrysturdyMediaType.SERIES),
-        HungrysturdyCatalog("anime", "Anime", HungrysturdyMediaType.SERIES),
+    override fun catalogs(): List<HikariCatalog> = listOf(
+        HikariCatalog("trendmov", "Trending Movies", HikariMediaType.MOVIE),
+        HikariCatalog("latestmov", "Latest Movies", HikariMediaType.MOVIE),
+        HikariCatalog("topmov", "Top Movies", HikariMediaType.MOVIE),
+        HikariCatalog("trendtv", "Trending Series", HikariMediaType.SERIES),
+        HikariCatalog("latesttv", "Latest Series", HikariMediaType.SERIES),
+        HikariCatalog("anime", "Anime", HikariMediaType.SERIES),
     )
 
-    override suspend fun getCatalog(catalog: HungrysturdyCatalog, page: Int): List<HungrysturdyMedia> {
+    override suspend fun getCatalog(catalog: HikariCatalog, page: Int): List<HikariMedia> {
         val p = page.coerceAtLeast(1)
         val body = JSONObject().put("page", p).put("perPage", 24)
         
@@ -129,7 +129,7 @@ class MovieBoxProvider : HungrysturdyProvider {
         return subjectsToMedia(extractList(root))
     }
 
-    override suspend fun search(query: String, page: Int): List<HungrysturdyMedia> {
+    override suspend fun search(query: String, page: Int): List<HikariMedia> {
         val q = query.trim()
         if (q.isBlank()) return emptyList()
         val p = page.coerceAtLeast(1)
@@ -143,7 +143,7 @@ class MovieBoxProvider : HungrysturdyProvider {
         return subjectsToMedia(extractList(root))
     }
 
-    override suspend fun getMeta(media: HungrysturdyMedia): HungrysturdyMedia {
+    override suspend fun getMeta(media: HikariMedia): HikariMedia {
         val subjectId = media.sid
         if (subjectId.isBlank()) return media
         
@@ -161,18 +161,18 @@ class MovieBoxProvider : HungrysturdyProvider {
         )
     }
 
-    override suspend fun getEpisodes(media: HungrysturdyMedia): List<HungrysturdyEpisode>? {
+    override suspend fun getEpisodes(media: HikariMedia): List<HikariEpisode>? {
         val subjectId = media.sid
         if (subjectId.isBlank()) return null
         
         if (media.rawType == "movie") {
-            return listOf(HungrysturdyEpisode(number = 1, id = "${media.id}#ep1", name = media.title, image = media.posterUrl))
+            return listOf(HikariEpisode(number = 1, id = "${media.id}#ep1", name = media.title, image = media.posterUrl))
         }
         
         val root = get("/wefeed-mobile-bff/subject-api/season-info?subjectId=${URLEncoder.encode(subjectId, "UTF-8")}")
-            ?: return listOf(HungrysturdyEpisode(number = 1, id = "${media.id}#ep1", name = media.title, image = media.posterUrl))
+            ?: return listOf(HikariEpisode(number = 1, id = "${media.id}#ep1", name = media.title, image = media.posterUrl))
             
-        val out = ArrayList<HungrysturdyEpisode>()
+        val out = ArrayList<HikariEpisode>()
         val seasons = root.optJSONObject("data")?.optJSONArray("seasons") ?: root.optJSONArray("seasons")
         
         if (seasons != null) {
@@ -186,7 +186,7 @@ class MovieBoxProvider : HungrysturdyProvider {
                         val e = eps.optJSONObject(j) ?: continue
                         val n = e.optInt("episode", e.optInt("episodeNumber", j + 1))
                         out.add(
-                            HungrysturdyEpisode(
+                            HikariEpisode(
                                 number = n, 
                                 season = sn, 
                                 id = "${media.id}#s${sn}e$n", 
@@ -197,7 +197,7 @@ class MovieBoxProvider : HungrysturdyProvider {
                 } else {
                     val count = s.optInt("episodeCount", s.optInt("totalEpisode", 0))
                     for (n in 1..count) {
-                        out.add(HungrysturdyEpisode(number = n, season = sn, id = "${media.id}#s${sn}e$n", name = "S${sn} E$n"))
+                        out.add(HikariEpisode(number = n, season = sn, id = "${media.id}#s${sn}e$n", name = "S${sn} E$n"))
                     }
                 }
             }
@@ -205,7 +205,7 @@ class MovieBoxProvider : HungrysturdyProvider {
         return out.ifEmpty { null }
     }
 
-    override suspend fun getStreams(media: HungrysturdyMedia, episode: HungrysturdyEpisode?): List<HungrysturdyStream> {
+    override suspend fun getStreams(media: HikariMedia, episode: HikariEpisode?): List<HikariStream> {
         val ref = episode?.id ?: media.id
         val subjectId = ref.substringAfter("mb:", "").substringBefore(":")
         if (subjectId.isBlank()) return emptyList()
@@ -218,7 +218,7 @@ class MovieBoxProvider : HungrysturdyProvider {
             ?: post("/wefeed-mobile-bff/subject-api/play-info", JSONObject().put("subjectId", subjectId).put("season", season).put("episode", ep))
             ?: return emptyList()
             
-        val out = ArrayList<HungrysturdyStream>()
+        val out = ArrayList<HikariStream>()
         val seen = HashSet<String>()
         val data = root.optJSONObject("data") ?: root
         val playList = data.optJSONArray("playList") ?: data.optJSONArray("sources") ?: data.optJSONArray("streams")
@@ -231,7 +231,7 @@ class MovieBoxProvider : HungrysturdyProvider {
                 
                 val q = s.optString("quality").ifBlank { s.optString("resolution") }
                 out.add(
-                    HungrysturdyStream(
+                    HikariStream(
                         name = "MovieBox" + (if (q.isNotBlank()) " $q" else ""),
                         url = url,
                         headers = mapOf("User-Agent" to UA, "Referer" to "https://api3.aoneroom.com/"),
@@ -247,12 +247,12 @@ class MovieBoxProvider : HungrysturdyProvider {
             val arr = caps?.optJSONObject("data")?.optJSONArray("captions") ?: caps?.optJSONArray("captions")
             
             if (arr != null && out.isNotEmpty()) {
-                val subs = ArrayList<HungrysturdySubtitle>()
+                val subs = ArrayList<HikariSubtitle>()
                 for (i in 0 until arr.length()) {
                     val c = arr.optJSONObject(i) ?: continue
                     val u = c.optString("url")
                     if (u.startsWith("http")) {
-                        subs.add(HungrysturdySubtitle(c.optString("lang").ifBlank { c.optString("language") }.ifBlank { "Subtitle" }, u))
+                        subs.add(HikariSubtitle(c.optString("lang").ifBlank { c.optString("language") }.ifBlank { "Subtitle" }, u))
                     }
                 }
                 if (subs.isNotEmpty()) return out.map { it.copy(subtitles = it.subtitles + subs) }
@@ -279,8 +279,8 @@ class MovieBoxProvider : HungrysturdyProvider {
             ?: data.optJSONArray("items")
     }
 
-    private fun subjectsToMedia(arr: JSONArray?): List<HungrysturdyMedia> {
-        val out = ArrayList<HungrysturdyMedia>()
+    private fun subjectsToMedia(arr: JSONArray?): List<HikariMedia> {
+        val out = ArrayList<HikariMedia>()
         if (arr == null) return out
         
         for (i in 0 until arr.length()) {
@@ -295,10 +295,10 @@ class MovieBoxProvider : HungrysturdyProvider {
             val poster = o.optString("poster").ifBlank { o.optString("cover") }.takeIf { it.startsWith("http") }
             
             out.add(
-                HungrysturdyMedia(
+                HikariMedia(
                     id = "mb:$sid:${if (isMovie) "movie" else "tv"}",
                     title = title,
-                    type = if (isMovie) HungrysturdyMediaType.MOVIE else HungrysturdyMediaType.SERIES,
+                    type = if (isMovie) HikariMediaType.MOVIE else HikariMediaType.SERIES,
                     posterUrl = poster,
                     year = o.optInt("year", 0).takeIf { it > 0 },
                     rawType = if (isMovie) "movie" else "tv",
