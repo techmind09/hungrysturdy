@@ -68,7 +68,7 @@ class ToonPlayProvider : MainAPI() {
                             }, 400);
                         });
                     """.trimIndent(),
-                    timeout = 8000L
+                    timeout = 9000L
                 )
             )
             Jsoup.parse(response.text)
@@ -98,7 +98,6 @@ class ToonPlayProvider : MainAPI() {
             }
         }
 
-        // Always fetch paginated items so posters are never limited
         val anilistItems = fetchCatalogForToonPlay(sectionId, page)
         results.addAll(anilistItems)
 
@@ -115,15 +114,14 @@ class ToonPlayProvider : MainAPI() {
             val src = it.attr("src")
             src.isNotBlank() && !src.contains("placeholder.webp")
         }
-        val poster = img?.let {
-            it.attr("src").ifBlank { it.attr("data-src") }.ifBlank { it.attr("data-lazy-src") }
-        }?.trim() ?: ""
+        val poster = img?.attr("src")?.trim() ?: ""
 
         val badgeText = this.selectFirst("span:contains(MOVIE), span:contains(SERIES), span:contains(ONA), span:contains(TV_SHORT)")?.text().orEmpty()
         val isMovie = badgeText.contains("MOVIE", true) || title.contains("Movie", true)
 
         val slug = createSlug(title)
-        val prefix = if (isMovie) "movie" else "series"
+        // Matches dom.htmla.html ("movies-") and dom.htmltoon_2.html ("series-")
+        val prefix = if (isMovie) "movies" else "series"
 
         val anilistId = Regex("""/bx?(\d+)-""").find(poster)?.groupValues?.get(1) ?: ""
         val watchUrl = if (anilistId.isNotBlank()) {
@@ -194,7 +192,7 @@ class ToonPlayProvider : MainAPI() {
 
                 val isMovie = item.optString("format") == "MOVIE"
                 val slug = createSlug(title)
-                val prefix = if (isMovie) "movie" else "series"
+                val prefix = if (isMovie) "movies" else "series"
                 val langCode = if (section.startsWith("lang:")) section.substringAfter("lang:") else "hin"
 
                 val url = "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-1&lang=$langCode&anilistid=$id"
@@ -254,7 +252,7 @@ class ToonPlayProvider : MainAPI() {
 
                 val isMovie = item.optString("format") == "MOVIE"
                 val slug = createSlug(title)
-                val prefix = if (isMovie) "movie" else "series"
+                val prefix = if (isMovie) "movies" else "series"
                 val watchUrl = "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-1&lang=hin&anilistid=$id"
 
                 results.add(
@@ -276,6 +274,7 @@ class ToonPlayProvider : MainAPI() {
         val fallbackSlugTitle = url.substringAfter("/watch/")
             .substringBefore("?")
             .removePrefix("series-")
+            .removePrefix("movies-")
             .removePrefix("movie-")
             .replace("-", " ")
             .replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
@@ -284,9 +283,7 @@ class ToonPlayProvider : MainAPI() {
             ?: doc.selectFirst("meta[property='og:title']")?.attr("content")?.substringBefore(" - ToonPlay")?.trim()?.takeIf { it.isNotBlank() }
             ?: fallbackSlugTitle
 
-        var poster = doc.selectFirst("div.aspect-\\[3\\/4\\] img")?.let {
-            it.attr("src").ifBlank { it.attr("data-src") }.ifBlank { it.attr("data-lazy-src") }
-        }?.takeIf { it.isNotBlank() }
+        var poster = doc.selectFirst("div.aspect-\\[3\\/4\\] img")?.attr("src")?.takeIf { it.isNotBlank() }
             ?: doc.selectFirst("meta[property='og:image']")?.attr("content")?.takeIf { it.isNotBlank() }
             ?: ""
 
@@ -323,7 +320,7 @@ class ToonPlayProvider : MainAPI() {
             } catch (_: Exception) {}
         }
 
-        val isMovie = url.contains("/watch/movie-")
+        val isMovie = url.contains("/watch/movies-") || url.contains("/watch/movie-")
         val baseWatchUrl = url.substringBefore("?")
         val anilistParam = if (anilistId != null) "&anilistid=$anilistId" else ""
 
@@ -390,165 +387,162 @@ class ToonPlayProvider : MainAPI() {
         }
     }
 
-    /**
-     * Resolve the selected ToonPlay server.
-     *
-     * ToonPlay currently exposes a direct iframe URL in
-     * #watchpage-active-iframe. Some server variants may instead expose
-     * a Base64 JSON array in the iframe's `data` query parameter.
-     */
+    // Extracts direct .m3u8 / .mp4 streams from ravok.buzz or abyssplayer via WebView interception + regex
+    private suspend fun extractPlayerStreams(
+        playerUrl: String,
+        refererUrl: String,
+        serverLabel: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        var found = false
+
+        // 1. Try built-in CloudStream extractors first (in case host is supported)
+        val builtInLinks = mutableListOf<ExtractorLink>()
+        loadExtractor(playerUrl, refererUrl, subtitleCallback) { link ->
+            builtInLinks.add(link)
+        }
+        for (link in builtInLinks) {
+            found = true
+            callback.invoke(
+                newExtractorLink(
+                    source = name,
+                    name = "$serverLabel - ${link.name}",
+                    url = link.url,
+                    type = link.type
+                ) {
+                    this.referer = link.referer
+                    this.quality = link.quality
+                    this.headers = link.headers
+                }
+            )
+        }
+        if (found) return true
+
+        // 2. Direct HTML/JS scraping for ravok.buzz & abyssplayer
+        try {
+            val resText = app.get(playerUrl, referer = refererUrl).text
+            val streamRegex = Regex("""["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""")
+            val matches = streamRegex.findAll(resText).map { it.groupValues[1].replace("\\/", "/") }.distinct().toList()
+            for (streamUrl in matches) {
+                found = true
+                val isM3u8 = streamUrl.contains(".m3u8", true)
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = serverLabel,
+                        url = streamUrl,
+                        type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = playerUrl
+                        this.quality = Qualities.Unknown.value
+                    }
+                )
+            }
+        } catch (_: Exception) {}
+
+        if (found) return true
+
+        // 3. WebView network interception fallback (captures encrypted/blob-backed .m3u8/.mp4 requests)
+        try {
+            val intercepted = app.get(
+                playerUrl,
+                referer = refererUrl,
+                interceptor = WebViewResolver(
+                    interceptUrl = Regex("""(\.m3u8|\.mp4|master\.txt|playlist\.m3u8|index\.m3u8)"""),
+                    additionalUrls = listOf(Regex("""(\.m3u8|\.mp4|master\.txt|playlist|hls)""")),
+                    timeout = 10000L
+                )
+            )
+            val finalUrl = intercepted.url
+            if (finalUrl.contains(".m3u8", true) || finalUrl.contains(".mp4", true) || finalUrl.contains("master.txt", true)) {
+                found = true
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = serverLabel,
+                        url = finalUrl,
+                        type = if (finalUrl.contains(".mp4", true)) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
+                    ) {
+                        this.referer = playerUrl
+                        this.quality = Qualities.Unknown.value
+                    }
+                )
+            }
+        } catch (_: Exception) {}
+
+        return found
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val episodeData = tryParseJson<EpisodeData>(data)
-        val targetUrl = episodeData?.watchUrl?.takeIf { it.isNotBlank() } ?: data.trim()
-        if (targetUrl.isBlank()) return false
+        val epData = tryParseJson<EpisodeData>(data)
+        val targetUrl = epData?.watchUrl ?: data
+        var foundLinks = false
 
-        val serverOptions = listOf("options-1", "options-0", "options-2")
-        val attemptedPages = linkedSetOf<String>()
-        val emittedUrls = hashSetOf<String>()
-        var foundAny = false
-
-        fun withServer(url: String, server: String): String {
-            val withoutFragment = url.substringBefore("#")
-            val fragment = url.substringAfter("#", "").let {
-                if (it.isNotEmpty()) "#$it" else ""
-            }
-            val serverParameterRegex = Regex("[?&]server=[^&]*")
-            val serverParameterMatch = serverParameterRegex.find(withoutFragment)
-            val updated = if (serverParameterMatch != null) {
-                val separator = serverParameterMatch.value.substring(0, 1)
-                withoutFragment.replaceRange(
-                    serverParameterMatch.range,
-                    "${separator}server=$server"
-                )
+        // Build URLs for options-1 (AnimeSalt multi-audio) and options-0 (Ravok)
+        val serverUrls = listOf("options-1", "options-0").map { serverOpt ->
+            if (targetUrl.contains("server=")) {
+                targetUrl.replace(Regex("server=[^&]+"), "server=$serverOpt")
             } else {
-                withoutFragment + (if (withoutFragment.contains("?")) "&" else "?") + "server=$server"
+                "$targetUrl${if (targetUrl.contains("?")) "&" else "?"}server=$serverOpt"
             }
-            return updated + fragment
-        }
+        }.distinct()
 
-        fun decodePlayerList(iframeUrl: String): List<Pair<String, String>> {
-            val dataValue = Regex("""[?&]data=([^&#]+)""")
-                .find(iframeUrl)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?: return emptyList()
-
-            val decodedParameter = try {
-                URLDecoder.decode(dataValue, "UTF-8").replace(" ", "+")
-            } catch (_: Exception) {
-                dataValue.replace(" ", "+")
-            }
-
-            val decodedJson = try {
-                val bytes = try {
-                    Base64.decode(decodedParameter, Base64.URL_SAFE or Base64.NO_WRAP)
-                } catch (_: Exception) {
-                    Base64.decode(decodedParameter, Base64.DEFAULT)
-                }
-                String(bytes, Charsets.UTF_8)
-            } catch (_: Exception) {
-                return emptyList()
-            }
-
-            return try {
-                val array = org.json.JSONArray(decodedJson)
-                buildList {
-                    for (index in 0 until array.length()) {
-                        val item = array.optJSONObject(index) ?: continue
-                        val playerUrl = item.optString("link")
-                            .replace("\\/", "/")
-                            .trim()
-                        if (playerUrl.isBlank() || playerUrl == "null") continue
-                        val language = item.optString("language")
-                            .takeIf { it.isNotBlank() && it != "null" }
-                            ?: "Multi"
-                        add(playerUrl to language)
-                    }
-                }
-            } catch (_: Exception) {
-                emptyList()
-            }
-        }
-
-        suspend fun resolve(url: String, label: String) {
-            val normalizedUrl = fixUrl(url)
-            if (normalizedUrl.isBlank() || normalizedUrl in emittedUrls) return
-
-            val extracted = mutableListOf<ExtractorLink>()
-            try {
-                loadExtractor(
-                    normalizedUrl,
-                    "$mainUrl/",
-                    subtitleCallback
-                ) { link ->
-                    if (link.url !in emittedUrls) {
-                        emittedUrls.add(link.url)
-                        extracted.add(link)
-                    }
-                }
-            } catch (_: Exception) {
-                // Try the next player/server if this extractor fails.
-            }
-
-            extracted.forEach { link ->
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = if (label.isBlank()) link.name else "${link.name} - $label",
-                        url = link.url,
-                        type = link.type
-                    ) {
-                        this.referer = link.referer
-                        this.quality = link.quality
-                        this.headers = link.headers
-                    }
-                )
-                foundAny = true
-            }
-        }
-
-        for (server in serverOptions) {
-            val pageUrl = withServer(targetUrl, server)
-            if (!attemptedPages.add(pageUrl)) continue
-
-            val doc = try {
-                fetchRenderedDom(pageUrl)
-            } catch (_: Exception) {
-                continue
-            }
-
-            // Prefer ToonPlay's active player iframe; ignore analytics/hidden iframes.
-            val iframe = doc.selectFirst("#watchpage-active-iframe[src]")
-                ?: doc.select("iframe[src]").firstOrNull { element ->
-                    val src = element.absUrl("src").ifBlank { element.attr("src") }
-                    src.isNotBlank() &&
-                        !src.contains("sharethis", true) &&
-                        !src.contains("pxcel", true)
-                }
-
-            val iframeSrc = iframe?.let {
-                it.absUrl("src").ifBlank { it.attr("src").trim() }
-            }.orEmpty()
+        for (sUrl in serverUrls) {
+            val doc = fetchRenderedDom(sUrl)
+            val iframeSrc = doc.selectFirst("iframe#watchpage-active-iframe, iframe[src*='ravok'], iframe[src*='animesalt'], iframe[src*='abyss']")
+                ?.attr("src")?.trim().orEmpty()
 
             if (iframeSrc.isBlank()) continue
 
-            // First resolve any language-specific links encoded in `data=`.
-            val playerEntries = decodePlayerList(iframeSrc)
-            for ((playerUrl, language) in playerEntries) {
-                resolve(playerUrl, language)
-            }
+            // Case A: AnimeSalt Multi-Audio Base64 JSON (from dom.htmltoo_2.html)
+            if (iframeSrc.contains("data=")) {
+                try {
+                    // Decode twice if double-encoded (%253D -> %3D -> =)
+                    var decodedUrl = URLDecoder.decode(iframeSrc, "UTF-8")
+                    if (decodedUrl.contains("%3D") || decodedUrl.contains("%2F")) {
+                        decodedUrl = URLDecoder.decode(decodedUrl, "UTF-8")
+                    }
+                    val rawBase64 = decodedUrl.substringAfter("data=").substringBefore("&").replace(" ", "+")
+                    val jsonStr = String(Base64.decode(rawBase64, Base64.DEFAULT))
+                    val jsonArray = org.json.JSONArray(jsonStr)
 
-            // The current ToonPlay DOM uses a direct iframe URL (e.g. ravok.buzz/video/...).
-            // Resolve it as well; duplicate extracted URLs are filtered above.
-            resolve(iframeSrc, "")
+                    for (i in 0 until jsonArray.length()) {
+                        val obj = jsonArray.optJSONObject(i) ?: continue
+                        val langName = obj.optString("language", "Multi")
+                        val playerLink = obj.optString("link").replace("\\/", "/").trim()
+                        if (playerLink.isNotBlank()) {
+                            val ok = extractPlayerStreams(
+                                playerUrl = playerLink,
+                                refererUrl = "https://animesalt.streamindia.co.in/",
+                                serverLabel = "ToonPlay ($langName)",
+                                subtitleCallback = subtitleCallback,
+                                callback = callback
+                            )
+                            if (ok) foundLinks = true
+                        }
+                    }
+                } catch (_: Exception) {}
+            } else {
+                // Case B: Direct iframe like https://ravok.buzz/video/... (from dom.htmltoon_2.html & dom.htmla.html)
+                val serverLabel = if (iframeSrc.contains("ravok")) "Ravok Server" else "ToonPlay Direct"
+                val ok = extractPlayerStreams(
+                    playerUrl = fixUrl(iframeSrc),
+                    refererUrl = "$mainUrl/",
+                    serverLabel = serverLabel,
+                    subtitleCallback = subtitleCallback,
+                    callback = callback
+                )
+                if (ok) foundLinks = true
+            }
         }
 
-        return foundAny
+        return foundLinks
     }
 
     data class EpisodeData(
