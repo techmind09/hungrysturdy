@@ -132,7 +132,6 @@ class KatDramaProvider : MainAPI() {
         }
     }
 
-    // Sequential Top-to-Bottom Scanner for links.dramashindi.online/archives/...
     private fun parseArchiveDocument(doc: org.jsoup.nodes.Document, fallbackQuality: String, episodeMap: MutableMap<Int, MutableList<String>>) {
         val contentRoot = doc.selectFirst("div.entry-content, article, main") ?: doc.body()
         var currentEp = 1
@@ -179,15 +178,20 @@ class KatDramaProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url, headers = customHeaders).document
 
-        val rawTitle = document.selectFirst("h1.entry-title, h1.post-title, h1")?.text()?.trim() ?: return null
+        // Strictly target main article to avoid mixing titles/posters with sidebar/related posts
+        val mainArticle = document.selectFirst("article.post, article, main, div.site-main, div.entry-content") ?: document
+
+        val rawTitle = mainArticle.selectFirst("h1.entry-title, h1.post-title, h1")?.text()?.trim()
+            ?: document.selectFirst("h1.entry-title, h1.post-title, h1")?.text()?.trim()
+            ?: return null
         val title = cleanTitle(rawTitle)
 
         val poster = fixUrlNull(
-            document.selectFirst("meta[property=og:image]")?.attr("content")
-                ?: document.selectFirst("div.post-thumbnail img, div.latest-poster img")?.attr("src")
+            mainArticle.selectFirst("div.post-thumbnail img, div.entry-content img, .featured-image img")?.attr("src")
+                ?: document.selectFirst("meta[property=og:image]")?.attr("content")
         )
-        val plot = document.selectFirst("meta[property=og:description]")?.attr("content")?.trim()
-            ?: document.selectFirst("div.entry-content p")?.text()?.trim()
+        val plot = mainArticle.selectFirst("div.entry-content p")?.text()?.trim()
+            ?: document.selectFirst("meta[property=og:description]")?.attr("content")?.trim()
 
         val tags = document.select("div.tags a, a[rel=tag]").map { it.text().trim() }
 
