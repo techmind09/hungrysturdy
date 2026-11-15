@@ -258,119 +258,41 @@ class GhostflixProvider : MainAPI() {
         val s = loadData.season ?: 1
         val e = loadData.episode ?: 1
 
-        val resolveHosts = listOf(
-            "CineSrc" to "https://cinesrc.ru",
-            "Vidcore" to "https://vidcore.net",
-            "Vidrift" to "https://embed.vidrift.net",
-            "Vidy" to "https://www.viduki.net",
-            "VidLink" to "https://vidlink.pro"
-        )
-
-        resolveHosts.amap { (serverName, baseHost) ->
-            val resolveEndpoints = if (isTv) {
-                listOf(
-                    "$baseHost/embed/tv/$id/$s/$e",
-                    "$baseHost/api/resolve?type=tv&id=$id&season=$s&episode=$e",
-                    "$baseHost/4/tv/$id/$s/$e?color=E50914"
-                )
-            } else {
-                listOf(
-                    "$baseHost/embed/movie/$id",
-                    "$baseHost/api/resolve?type=movie&id=$id",
-                    "$baseHost/movie/$id?theme=E50914&autoPlay=true"
-                )
-            }
-
-            val reqHeaders = cfHeaders.toMutableMap().apply {
-                put("Origin", baseHost)
-                put("Referer", "$baseHost/")
-            }
-
-            for (endpoint in resolveEndpoints) {
-                try {
-                    val resText = app.get(endpoint, headers = reqHeaders, timeout = 15).text
-                    extractStreamsFromText(resText, serverName, "$baseHost/", subtitleCallback, callback)
-                } catch (_: Exception) {}
-            }
-        }
-
         val embedUrls = if (isTv) {
             listOf(
-                "https://cinesrc.ru/embed/tv/$id/$s/$e",
-                "https://vidsrc.xyz/embed/tv/$id/$s-$e",
-                "https://vidsrc.cc/v2/embed/tv/$id/$s/$e",
-                "https://vidsrc.pro/embed/tv/$id/$s/$e",
-                "https://vidlink.pro/tv/$id/$s/$e",
-                "https://autoembed.cc/embed/tv/$id/$s/$e",
-                "https://embed.su/embed/tv/$id/$s/$e"
+                "CineSrc" to "https://cinesrc.ru/embed/tv/$id/$s/$e",
+                "Vidcore" to "https://vidcore.net/embed/tv/$id/$s/$e",
+                "Vidrift" to "https://embed.vidrift.net/embed/tv/$id/$s/$e",
+                "Vidy" to "https://www.viduki.net/embed/tv/$id/$s/$e",
+                "VidLink" to "https://vidlink.pro/tv/$id/$s/$e",
+                "EmbedSu" to "https://embed.su/embed/tv/$id/$s/$e",
+                "VidSrcXYZ" to "https://vidsrc.xyz/embed/tv/$id/$s-$e",
+                "VidSrcCC" to "https://vidsrc.cc/v2/embed/tv/$id/$s/$e"
             )
         } else {
             listOf(
-                "https://cinesrc.ru/embed/movie/$id",
-                "https://vidsrc.xyz/embed/movie/$id",
-                "https://vidsrc.cc/v2/embed/movie/$id",
-                "https://vidsrc.pro/embed/movie/$id",
-                "https://vidlink.pro/movie/$id",
-                "https://autoembed.cc/embed/movie/$id",
-                "https://embed.su/embed/movie/$id"
+                "CineSrc" to "https://cinesrc.ru/embed/movie/$id",
+                "Vidcore" to "https://vidcore.net/embed/movie/$id",
+                "Vidrift" to "https://embed.vidrift.net/embed/movie/$id",
+                "Vidy" to "https://www.viduki.net/embed/movie/$id",
+                "VidLink" to "https://vidlink.pro/movie/$id",
+                "EmbedSu" to "https://embed.su/embed/movie/$id",
+                "VidSrcXYZ" to "https://vidsrc.xyz/embed/movie/$id",
+                "VidSrcCC" to "https://vidsrc.cc/v2/embed/movie/$id"
             )
         }
 
-        embedUrls.amap { embedUrl ->
+        embedUrls.amap { (serverName, embedUrl) ->
             try {
-                loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
+                loadExtractor(embedUrl, "$mainUrl/", subtitleCallback) { link ->
+                    callback.invoke(
+                        link.copy(name = "$name - $serverName")
+                    )
+                }
             } catch (_: Exception) {}
         }
 
         return true
-    }
-
-    private suspend fun extractStreamsFromText(
-        text: String,
-        serverName: String,
-        referer: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        val unescaped = text.replace("\\/", "/").replace("\\u0026", "&")
-
-        Regex("""https?://[^\s"'<>\\]+\.(?:m3u8|mp4)(?:\?[^\s"'<>\\]*)?""").findAll(unescaped).forEach { match ->
-            val streamUrl = match.value
-            if (streamUrl.contains("track_") && !streamUrl.contains("video")) return@forEach
-
-            val isM3u8 = streamUrl.contains(".m3u8")
-            val quality = when {
-                streamUrl.contains("2160") || streamUrl.contains("4k", true) -> Qualities.P2160.value
-                streamUrl.contains("1080") -> Qualities.P1080.value
-                streamUrl.contains("720") -> Qualities.P720.value
-                streamUrl.contains("480") -> Qualities.P480.value
-                streamUrl.contains("360") -> Qualities.P360.value
-                else -> Qualities.Unknown.value
-            }
-
-            callback.invoke(
-                newExtractorLink(
-                    source = name,
-                    name = "$name - $serverName",
-                    url = streamUrl,
-                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                ) {
-                    this.referer = referer
-                    this.quality = quality
-                    this.headers = cfHeaders.toMutableMap().apply {
-                        put("Origin", referer.removeSuffix("/"))
-                        put("Referer", referer)
-                    }
-                }
-            )
-        }
-
-        Regex("""https?://[^\s"'<>\\]+\.(?:vtt|srt)(?:\?[^\s"'<>\\]*)?""").findAll(unescaped).forEach { match ->
-            val subUrl = match.value
-            if (!subUrl.contains("thumbs.vtt", ignoreCase = true)) {
-                subtitleCallback.invoke(SubtitleFile("English", subUrl))
-            }
-        }
     }
 
     data class LoadData(
