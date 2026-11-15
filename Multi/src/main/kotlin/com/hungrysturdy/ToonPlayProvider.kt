@@ -386,89 +386,6 @@ class ToonPlayProvider : MainAPI() {
         }
     }
 
-    private suspend fun extractPlayerStreams(
-        playerUrl: String,
-        refererUrl: String,
-        serverLabel: String,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ): Boolean {
-        var found = false
-
-        val builtInLinks = mutableListOf<ExtractorLink>()
-        loadExtractor(playerUrl, refererUrl, subtitleCallback) { link ->
-            builtInLinks.add(link)
-        }
-        for (link in builtInLinks) {
-            found = true
-            callback.invoke(
-                newExtractorLink(
-                    source = name,
-                    name = "$serverLabel - ${link.name}",
-                    url = link.url,
-                    type = link.type
-                ) {
-                    this.referer = link.referer
-                    this.quality = link.quality
-                    this.headers = link.headers
-                }
-            )
-        }
-        if (found) return true
-
-        try {
-            val resText = app.get(playerUrl, referer = refererUrl).text
-            val streamRegex = Regex("""["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""")
-            val matches = streamRegex.findAll(resText).map { it.groupValues[1].replace("\\/", "/") }.distinct().toList()
-            for (streamUrl in matches) {
-                found = true
-                val isM3u8 = streamUrl.contains(".m3u8", true)
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = serverLabel,
-                        url = streamUrl,
-                        type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = playerUrl
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-            }
-        } catch (_: Exception) {}
-
-        if (found) return true
-
-        try {
-            val intercepted = app.get(
-                playerUrl,
-                referer = refererUrl,
-                interceptor = WebViewResolver(
-                    interceptUrl = Regex("""(\.m3u8|\.mp4|master\.txt|playlist\.m3u8|index\.m3u8)"""),
-                    additionalUrls = listOf(Regex("""(\.m3u8|\.mp4|master\.txt|playlist|hls)""")),
-                    timeout = 10000L
-                )
-            )
-            val finalUrl = intercepted.url
-            if (finalUrl.contains(".m3u8", true) || finalUrl.contains(".mp4", true) || finalUrl.contains("master.txt", true)) {
-                found = true
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = serverLabel,
-                        url = finalUrl,
-                        type = if (finalUrl.contains(".mp4", true)) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = playerUrl
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-            }
-        } catch (_: Exception) {}
-
-        return found
-    }
-
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -509,27 +426,43 @@ class ToonPlayProvider : MainAPI() {
                         val langName = obj.optString("language", "Multi")
                         val playerLink = obj.optString("link").replace("\\/", "/").trim()
                         if (playerLink.isNotBlank()) {
-                            val ok = extractPlayerStreams(
-                                playerUrl = playerLink,
-                                refererUrl = "https://animesalt.streamindia.co.in/",
-                                serverLabel = "ToonPlay ($langName)",
-                                subtitleCallback = subtitleCallback,
-                                callback = callback
-                            )
-                            if (ok) foundLinks = true
+                            val abyssExtractor = AbyssPlayerExtractor()
+                            abyssExtractor.getUrl(playerLink, "https://animesalt.streamindia.co.in/", subtitleCallback) { link ->
+                                foundLinks = true
+                                callback.invoke(
+                                    newExtractorLink(
+                                        source = name,
+                                        name = "${link.name} - $langName",
+                                        url = link.url,
+                                        type = link.type
+                                    ) {
+                                        this.referer = link.referer
+                                        this.quality = link.quality
+                                        this.headers = link.headers
+                                    }
+                                )
+                            }
                         }
                     }
                 } catch (_: Exception) {}
             } else {
-                val serverLabel = if (iframeSrc.contains("ravok")) "Ravok Server" else "ToonPlay Direct"
-                val ok = extractPlayerStreams(
-                    playerUrl = fixUrl(iframeSrc),
-                    refererUrl = "$mainUrl/",
-                    serverLabel = serverLabel,
-                    subtitleCallback = subtitleCallback,
-                    callback = callback
-                )
-                if (ok) foundLinks = true
+                val serverLabel = if (iframeSrc.contains("ravok")) "Ravok" else "ToonPlay"
+                val ravokExtractor = RavokExtractor()
+                ravokExtractor.getUrl(fixUrl(iframeSrc), "$mainUrl/", subtitleCallback) { link ->
+                    foundLinks = true
+                    callback.invoke(
+                        newExtractorLink(
+                            source = name,
+                            name = "$serverLabel Server",
+                            url = link.url,
+                            type = link.type
+                        ) {
+                            this.referer = link.referer
+                            this.quality = link.quality
+                            this.headers = link.headers
+                        }
+                    )
+                }
             }
         }
 
