@@ -7,7 +7,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.nodes.Document
 
 class GhostflixProvider : MainAPI() {
-    override var mainUrl = "https://ghostflix.st"
+    override var mainUrl = "https://ghostflix.uk"
     override var name = "Ghostflix"
     override val hasMainPage = true
     override var lang = "en"
@@ -79,7 +79,6 @@ class GhostflixProvider : MainAPI() {
         } catch (_: Exception) {}
 
         try {
-            // Reverted back to app.get() as webViewGet was unresolved
             val html = app.get(mainUrl, headers = cfHeaders).text
             val document = org.jsoup.Jsoup.parse(html)
             val trendingItems = extractNextFlightTrending(document)
@@ -259,10 +258,13 @@ class GhostflixProvider : MainAPI() {
         val s = loadData.season ?: 1
         val e = loadData.episode ?: 1
 
+        // 1. Ghostflix native custom resolver servers (Vidrift, CineSrc, Vidy, VidLink, Vidcore)
         val resolveHosts = listOf(
-            "Bolt" to "https://vidbolt.pro",
-            "Orion" to "https://vidcore.net",
-            "Flix" to "https://www.viduki.net"
+            "Vidrift" to "https://embed.vidrift.net",
+            "CineSrc" to "https://cinesrc.ru",
+            "Vidy" to "https://www.viduki.net",
+            "VidLink" to "https://vidlink.pro",
+            "Vidcore" to "https://vidcore.net"
         )
 
         resolveHosts.amap { (serverName, baseHost) ->
@@ -286,13 +288,13 @@ class GhostflixProvider : MainAPI() {
 
             for (endpoint in resolveEndpoints) {
                 try {
-                    // Reverted back to app.get() as webViewGet was unresolved
                     val resText = app.get(endpoint, headers = reqHeaders, timeout = 15).text
                     extractStreamsFromText(resText, serverName, "$baseHost/", subtitleCallback, callback)
                 } catch (_: Exception) {}
             }
         }
 
+        // 2. Fallback third-party embed extractors
         val embedUrls = if (isTv) {
             listOf(
                 "https://vidsrc.xyz/embed/tv/$id/$s-$e",
