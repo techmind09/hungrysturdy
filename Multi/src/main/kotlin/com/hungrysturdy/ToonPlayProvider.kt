@@ -426,8 +426,15 @@ class ToonPlayProvider : MainAPI() {
                         val langName = obj.optString("language", "Multi")
                         val playerLink = obj.optString("link").replace("\\/", "/").trim()
                         if (playerLink.isNotBlank()) {
-                            val abyssExtractor = AbyssPlayerExtractor()
-                            abyssExtractor.getUrl(playerLink, "https://animesalt.streamindia.co.in/", subtitleCallback) { link ->
+                            val collected = mutableListOf<ExtractorLink>()
+                            AbyssPlayerExtractor().getUrl(
+                                url = playerLink,
+                                referer = "https://animesalt.streamindia.co.in/",
+                                subtitleCallback = subtitleCallback
+                            ) { link ->
+                                collected.add(link)
+                            }
+                            for (link in collected) {
                                 foundLinks = true
                                 callback.invoke(
                                     newExtractorLink(
@@ -447,8 +454,15 @@ class ToonPlayProvider : MainAPI() {
                 } catch (_: Exception) {}
             } else {
                 val serverLabel = if (iframeSrc.contains("ravok")) "Ravok" else "ToonPlay"
-                val ravokExtractor = RavokExtractor()
-                ravokExtractor.getUrl(fixUrl(iframeSrc), "$mainUrl/", subtitleCallback) { link ->
+                val collected = mutableListOf<ExtractorLink>()
+                RavokExtractor().getUrl(
+                    url = fixUrl(iframeSrc),
+                    referer = "$mainUrl/",
+                    subtitleCallback = subtitleCallback
+                ) { link ->
+                    collected.add(link)
+                }
+                for (link in collected) {
                     foundLinks = true
                     callback.invoke(
                         newExtractorLink(
