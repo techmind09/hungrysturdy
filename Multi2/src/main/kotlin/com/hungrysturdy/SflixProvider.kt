@@ -12,7 +12,7 @@ import java.net.URLEncoder
 class SflixProvider : MainAPI() {
     override var mainUrl = "https://sflix.film"
     private val playerUrl = "https://mzfi.me"
-    override var name = "Prmovies"
+    override var name = "Sflix"
     override var hasMainPage = true
     override var supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
 
@@ -35,7 +35,6 @@ class SflixProvider : MainAPI() {
 
         val document = app.get(targetUrl, referer = "$mainUrl/").document
 
-        // Home page ("/") par multiple category rows (section.comp-box) hoti hain
         if (request.data.trimEnd('/') == mainUrl) {
             val lists = document.select("section.comp-box").mapNotNull { section ->
                 val sectionTitle = section.selectFirst("h2.action-title")?.text()?.trim()
@@ -104,24 +103,17 @@ class SflixProvider : MainAPI() {
             .drop(1)
             .filter { it.length > 2 && it != "United States" && it != "United Kingdom" }
 
-        // Cast extraction
+        // Fixed: Mapped actors directly to List<String> to match addActors signature
         val actors = document.select("section.top-cast-warp a.star-item").mapNotNull { star ->
-            val actorName = star.selectFirst(".star-name")?.text()?.trim() ?: return@mapNotNull null
-            val character = star.selectFirst(".star-character")?.text()?.trim()
-            val avatar = star.selectFirst("img")?.let {
-                fixUrlNull(it.attr("data-src").ifEmpty { it.attr("src") })
-            }
-            ActorData(Actor(actorName, avatar), roleString = character)
+            star.selectFirst(".star-name")?.text()?.trim()
         }
 
-        // Recommendations
         val recommendations = document.select("section.more-like-warp a.video-item")
             .mapNotNull { it.toSearchResult() }
 
-        // Parse __NUXT_DATA__ SSR JSON for subjectId, subjectType, seasons/episodes & trailer
         var subjectId = Regex("""[?&]id=(\d+)""").find(url)?.groupValues?.get(1) ?: ""
         var detailPath = url.substringAfter("/detail/").substringBefore("?")
-        var subjectType = 1 // 1 = Movie, 2 = TvSeries
+        var subjectType = 1
         var trailerUrl: String? = null
         val episodes = mutableListOf<Episode>()
 
@@ -130,7 +122,6 @@ class SflixProvider : MainAPI() {
             runCatching {
                 val nuxtArr = JSONArray(nuxtRaw)
                 var rootObj = nuxtArr.optJSONObject(3)
-                // Find the state wrapper containing "subject" and "resource"
                 for (i in 0 until nuxtArr.length()) {
                     val obj = nuxtArr.optJSONObject(i) ?: continue
                     if (obj.has("subject") && obj.has("resource")) {
@@ -259,7 +250,6 @@ class SflixProvider : MainAPI() {
         val foundStreams = mutableSetOf<String>()
         val foundSubs = mutableSetOf<String>()
 
-        // Intercept actual DASH (.mpd), HLS (.m3u8), MP4 & Subtitle requests before MSE converts them to blob:
         runCatching {
             val intercepted = app.get(
                 url = cleanPlayUrl,
@@ -281,7 +271,6 @@ class SflixProvider : MainAPI() {
             }
         }
 
-        // Fallback to trailer MP4 if main stream wasn't intercepted
         if (foundStreams.isEmpty() && !fallbackTrailer.isNullOrEmpty()) {
             foundStreams.add(fallbackTrailer)
         }
