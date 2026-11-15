@@ -43,7 +43,18 @@ class GhostflixProvider : MainAPI() {
         "movie/popular" to "Popular Movies",
         "tv/popular" to "Popular TV Shows",
         "discover/tv?with_genres=16&with_original_language=ja" to "Anime",
-        "discover/tv?with_original_language=ko&sort_by=popularity.desc" to "Asian Drama"
+        "discover/tv?with_original_language=ko&sort_by=popularity.desc" to "Asian Drama",
+        "discover/movie?with_genres=28" to "Action",
+        "discover/movie?with_genres=35" to "Comedy",
+        "discover/movie?with_genres=27" to "Horror",
+        "discover/movie?with_genres=10749" to "Romance",
+        "discover/movie?with_genres=878" to "Sci-Fi",
+        "discover/movie?with_genres=16" to "Animation",
+        "discover/movie?with_genres=18" to "Drama",
+        "discover/movie?with_genres=53" to "Thriller",
+        "discover/movie?with_genres=12" to "Adventure",
+        "discover/movie?with_genres=80" to "Crime",
+        "discover/movie?with_genres=14" to "Fantasy"
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -286,7 +297,16 @@ class GhostflixProvider : MainAPI() {
             try {
                 loadExtractor(embedUrl, "$mainUrl/", subtitleCallback) { link ->
                     callback.invoke(
-                        link.copy(name = "$name - $serverName")
+                        newExtractorLink(
+                            source = link.source,
+                            name = "$name - $serverName",
+                            url = link.url,
+                            type = link.type
+                        ) {
+                            this.referer = link.referer
+                            this.quality = link.quality
+                            this.headers = link.headers
+                        }
                     )
                 }
             } catch (_: Exception) {}
