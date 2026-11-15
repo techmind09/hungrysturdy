@@ -31,17 +31,11 @@ class GhostflixProvider : MainAPI() {
         "Accept" to "application/json"
     )
 
-    // Standard Browser Headers to bypass Cloudflare
     private val cfHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
         "Accept-Language" to "en-US,en;q=0.9",
-        "Accept-Encoding" to "gzip, deflate, br",
-        "Connection" to "keep-alive",
-        "Upgrade-Insecure-Requests" to "1",
-        "Sec-Ch-Ua" to "\"Chromium\";v=\"122\", \"Not(A:Brand\";v=\"24\", \"Google Chrome\";v=\"122\"",
-        "Sec-Ch-Ua-Mobile" to "?0",
-        "Sec-Ch-Ua-Platform" to "\"Windows\""
+        "Connection" to "keep-alive"
     )
 
     override val mainPage = mainPageOf(
@@ -85,7 +79,8 @@ class GhostflixProvider : MainAPI() {
         } catch (_: Exception) {}
 
         try {
-            val document = app.get(mainUrl, headers = cfHeaders).document
+            val html = webViewGet(mainUrl)
+            val document = org.jsoup.Jsoup.parse(html)
             val trendingItems = extractNextFlightTrending(document)
             if (trendingItems.isNotEmpty()) {
                 homePageList.add(HomePageList(request.name, trendingItems))
@@ -283,19 +278,10 @@ class GhostflixProvider : MainAPI() {
                 )
             }
 
-            val reqHeaders = cfHeaders.toMutableMap().apply {
-                put("Origin", baseHost)
-                put("Referer", "$baseHost/")
-            }
-
             for (endpoint in resolveEndpoints) {
                 try {
-                    val resText = app.get(
-                        endpoint,
-                        headers = reqHeaders,
-                        timeout = 15
-                    ).text
-
+                    // Using webViewGet to bypass Cloudflare JS Challenge
+                    val resText = webViewGet(endpoint)
                     extractStreamsFromText(resText, serverName, "$baseHost/", subtitleCallback, callback)
                 } catch (_: Exception) {}
             }
