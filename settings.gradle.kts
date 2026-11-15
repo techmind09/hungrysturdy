@@ -19,4 +19,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "hungrysturdy"
 include(":Multi")
+include(":Multi2")
 
