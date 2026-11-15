@@ -33,6 +33,7 @@ class Plugin : Plugin() {
         registerExtractorAPI(Filemoon())
 
         // ToonPlay Extractors
+        registerExtractorAPI(FlixCloudExtractor())
         registerExtractorAPI(AbyssPlayerExtractor())
         registerExtractorAPI(RavokExtractor())
     }
