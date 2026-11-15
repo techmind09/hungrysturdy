@@ -258,24 +258,24 @@ class GhostflixProvider : MainAPI() {
         val s = loadData.season ?: 1
         val e = loadData.episode ?: 1
 
-        // 1. Ghostflix native custom resolver servers (Vidrift, CineSrc, Vidy, VidLink, Vidcore)
         val resolveHosts = listOf(
-            "Vidrift" to "https://embed.vidrift.net",
             "CineSrc" to "https://cinesrc.ru",
+            "Vidcore" to "https://vidcore.net",
+            "Vidrift" to "https://embed.vidrift.net",
             "Vidy" to "https://www.viduki.net",
-            "VidLink" to "https://vidlink.pro",
-            "Vidcore" to "https://vidcore.net"
+            "VidLink" to "https://vidlink.pro"
         )
 
         resolveHosts.amap { (serverName, baseHost) ->
             val resolveEndpoints = if (isTv) {
                 listOf(
+                    "$baseHost/embed/tv/$id/$s/$e",
                     "$baseHost/api/resolve?type=tv&id=$id&season=$s&episode=$e",
-                    "$baseHost/4/tv/$id/$s/$e?color=E50914",
-                    "$baseHost/tv/$id/$s/$e?theme=E50914&autoPlay=true"
+                    "$baseHost/4/tv/$id/$s/$e?color=E50914"
                 )
             } else {
                 listOf(
+                    "$baseHost/embed/movie/$id",
                     "$baseHost/api/resolve?type=movie&id=$id",
                     "$baseHost/movie/$id?theme=E50914&autoPlay=true"
                 )
@@ -294,27 +294,24 @@ class GhostflixProvider : MainAPI() {
             }
         }
 
-        // 2. Fallback third-party embed extractors
         val embedUrls = if (isTv) {
             listOf(
+                "https://cinesrc.ru/embed/tv/$id/$s/$e",
                 "https://vidsrc.xyz/embed/tv/$id/$s-$e",
                 "https://vidsrc.cc/v2/embed/tv/$id/$s/$e",
                 "https://vidsrc.pro/embed/tv/$id/$s/$e",
                 "https://vidlink.pro/tv/$id/$s/$e",
                 "https://autoembed.cc/embed/tv/$id/$s/$e",
-                "https://player.autoembed.cc/embed/tv/$id/$s/$e",
-                "https://multiembed.mov/directstream.php?video_id=$id&tmdb=1&s=$s&e=$e",
                 "https://embed.su/embed/tv/$id/$s/$e"
             )
         } else {
             listOf(
+                "https://cinesrc.ru/embed/movie/$id",
                 "https://vidsrc.xyz/embed/movie/$id",
                 "https://vidsrc.cc/v2/embed/movie/$id",
                 "https://vidsrc.pro/embed/movie/$id",
                 "https://vidlink.pro/movie/$id",
                 "https://autoembed.cc/embed/movie/$id",
-                "https://player.autoembed.cc/embed/movie/$id",
-                "https://multiembed.mov/directstream.php?video_id=$id&tmdb=1",
                 "https://embed.su/embed/movie/$id"
             )
         }
