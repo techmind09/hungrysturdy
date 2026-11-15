@@ -178,7 +178,6 @@ class KatDramaProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url, headers = customHeaders).document
 
-        // Strictly target main article to avoid mixing titles/posters with sidebar/related posts
         val mainArticle = document.selectFirst("article.post, article, main, div.site-main, div.entry-content") ?: document
 
         val rawTitle = mainArticle.selectFirst("h1.entry-title, h1.post-title, h1")?.text()?.trim()
@@ -186,10 +185,13 @@ class KatDramaProvider : MainAPI() {
             ?: return null
         val title = cleanTitle(rawTitle)
 
+        // Fixed Poster extraction (Removed global og:image fallback to prevent incorrect Doctor X poster)
         val poster = fixUrlNull(
-            mainArticle.selectFirst("div.post-thumbnail img, div.entry-content img, .featured-image img")?.attr("src")
-                ?: document.selectFirst("meta[property=og:image]")?.attr("content")
+            mainArticle.selectFirst("div.post-thumbnail img, div.entry-content img, .featured-image img, img.wp-post-image")?.attr("src")
+                ?: mainArticle.selectFirst("div.entry-content img")?.attr("src")
+                ?: document.selectFirst("div.post-thumbnail img, div.entry-content img, img.wp-post-image")?.attr("src")
         )
+        
         val plot = mainArticle.selectFirst("div.entry-content p")?.text()?.trim()
             ?: document.selectFirst("meta[property=og:description]")?.attr("content")?.trim()
 
