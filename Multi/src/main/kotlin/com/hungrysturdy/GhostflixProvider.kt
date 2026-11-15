@@ -295,7 +295,11 @@ class GhostflixProvider : MainAPI() {
 
         embedUrls.amap { (serverName, embedUrl) ->
             try {
+                val extractedLinks = mutableListOf<ExtractorLink>()
                 loadExtractor(embedUrl, "$mainUrl/", subtitleCallback) { link ->
+                    extractedLinks.add(link)
+                }
+                extractedLinks.forEach { link ->
                     callback.invoke(
                         newExtractorLink(
                             source = link.source,
