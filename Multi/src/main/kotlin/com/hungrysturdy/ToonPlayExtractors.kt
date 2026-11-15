@@ -17,18 +17,19 @@ class AbyssPlayerExtractor : ExtractorApi() {
         try {
             val res = app.get(url, referer = referer).text
             val streamRegex = Regex("""["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""")
-            streamRegex.findAll(res).forEach { match ->
+            for (match in streamRegex.findAll(res)) {
                 val streamUrl = match.groupValues[1].replace("\\/", "/")
                 val isM3u8 = streamUrl.contains(".m3u8", true)
                 callback.invoke(
-                    ExtractorLink(
-                        name,
-                        name,
-                        streamUrl,
-                        url,
-                        if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
-                        Qualities.Unknown.value
-                    )
+                    newExtractorLink(
+                        source = name,
+                        name = name,
+                        url = streamUrl,
+                        type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = url
+                        this.quality = Qualities.Unknown.value
+                    }
                 )
             }
         } catch (_: Exception) {}
@@ -49,18 +50,19 @@ class RavokExtractor : ExtractorApi() {
         try {
             val res = app.get(url, referer = referer).text
             val streamRegex = Regex("""["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""")
-            streamRegex.findAll(res).forEach { match ->
+            for (match in streamRegex.findAll(res)) {
                 val streamUrl = match.groupValues[1].replace("\\/", "/")
                 val isM3u8 = streamUrl.contains(".m3u8", true)
                 callback.invoke(
-                    ExtractorLink(
-                        name,
-                        name,
-                        streamUrl,
-                        url,
-                        if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO,
-                        Qualities.Unknown.value
-                    )
+                    newExtractorLink(
+                        source = name,
+                        name = name,
+                        url = streamUrl,
+                        type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = url
+                        this.quality = Qualities.Unknown.value
+                    }
                 )
             }
         } catch (_: Exception) {}
