@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class GhostFlixExtractor : ExtractorApi() {
     override val name: String = "GhostFlixEmbed"
@@ -32,7 +33,7 @@ class GhostFlixExtractor : ExtractorApi() {
             } else {
                 val parsedJson = tryParseJson>(response)
                 parsedJson?.let { map ->
-                    val streamUrl = map["url"] as? String ?: map["file"] as? String
+                    val streamUrl = (map["url"] ?: map["file"]) as? String
                     if (!streamUrl.isNullOrEmpty()) {
                         extractLinks(streamUrl, url, subtitleCallback, callback)
                     }
@@ -65,14 +66,15 @@ class GhostFlixExtractor : ExtractorApi() {
             }
 
             callback.invoke(
-                ExtractorLink(
+                newExtractorLink(
                     source = name,
                     name = name,
                     url = streamUrl,
-                    referer = referer,
-                    quality = quality,
-                    isM3u8 = isM3u8
-                )
+                    type = if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                ) {
+                    this.referer = referer
+                    this.quality = quality
+                }
             )
         }
 
