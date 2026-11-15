@@ -79,7 +79,7 @@ class GhostflixProvider : MainAPI() {
         } catch (_: Exception) {}
 
         try {
-            val html = webViewGet(mainUrl)
+            val html = app.webViewGet(mainUrl).text
             val document = org.jsoup.Jsoup.parse(html)
             val trendingItems = extractNextFlightTrending(document)
             if (trendingItems.isNotEmpty()) {
@@ -280,8 +280,8 @@ class GhostflixProvider : MainAPI() {
 
             for (endpoint in resolveEndpoints) {
                 try {
-                    // Using webViewGet to bypass Cloudflare JS Challenge
-                    val resText = webViewGet(endpoint)
+                    // Using app.webViewGet to bypass Cloudflare JS Challenge
+                    val resText = app.webViewGet(endpoint).text
                     extractStreamsFromText(resText, serverName, "$baseHost/", subtitleCallback, callback)
                 } catch (_: Exception) {}
             }
