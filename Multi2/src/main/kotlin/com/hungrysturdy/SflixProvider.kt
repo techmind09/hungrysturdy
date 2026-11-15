@@ -14,10 +14,12 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.io.ByteArrayInputStream
 import java.net.URLEncoder
@@ -32,40 +34,52 @@ class SflixProvider : MainAPI() {
     override var hasMainPage = true
     override var supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
 
-    private val defaultPosterHeaders = mapOf("Referer" to "$mainUrl/")
+    private val defaultPosterHeaders = mapOf(
+        "Referer" to "$mainUrl/",
+        "User-Agent" to USER_AGENT,
+        "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
+    )
 
+    // Kept well under sflix.film's rateLimitThreshold (25) while Featured loads all 15+ homepage rows
     override val mainPage = mainPageOf(
         "$mainUrl/" to "Featured",
         "$mainUrl/ranking-list?id=1232643093049001320" to "Popular Series",
         "$mainUrl/ranking-list?id=997144265920760504" to "Popular Movie",
-        "$mainUrl/search-result?keyword=Trending" to "Trending Now",
-        "$mainUrl/search-result?keyword=Cinema" to "Cinema",
         "$mainUrl/upcoming" to "Coming Soon",
-        "$mainUrl/ranking-list?id=3130672938110833528" to "Adult Animation",
-        "$mainUrl/ranking-list?id=7219449993227633120" to "Epic Fantasy",
-        "$mainUrl/ranking-list?id=62133389738001440" to "Anime [English Dubbed]",
         "$mainUrl/ranking-list?id=4380734070238626200" to "K-Drama",
         "$mainUrl/ranking-list?id=173752404280836544" to "C-Drama",
+        "$mainUrl/ranking-list?id=62133389738001440" to "Anime [English Dubbed]",
+        "$mainUrl/ranking-list?id=3130672938110833528" to "Adult Animation",
         "$mainUrl/ranking-list?id=7269188813871016696" to "Action Movies",
         "$mainUrl/ranking-list?id=8785384881686725944" to "Comedy",
-        "$mainUrl/search-result?keyword=Horror" to "Horror Movies",
-        "$mainUrl/ranking-list?id=1746633591129342248" to "Teen Romance",
+        "$mainUrl/ranking-list?id=7219449993227633120" to "Epic Fantasy",
         "$mainUrl/ranking-list?id=7317586330186645624" to "Superhero Series",
-        "$mainUrl/search-result?keyword=Hot" to "Hot stort TV",
-        "$mainUrl/search-result?keyword=Short" to "Trending Short Drama",
+        "$mainUrl/ranking-list?id=1746633591129342248" to "Teen Romance",
+        "$mainUrl/ranking-list?id=6978603205429526968" to "Action&Thriller",
         "$mainUrl/ranking-list?id=8892055635953697752" to "Bl Story",
         "$mainUrl/ranking-list?id=3741804521853438336" to "Bet+",
-        "$mainUrl/ranking-list?id=6978603205429526968" to "Action&Thriller",
         "$mainUrl/ranking-list?id=5475136475249497544" to "Gangster",
-        "$mainUrl/ranking-list?id=6934224112055632896" to "Teen Fantasy",
-        "$mainUrl/search-result?keyword=Romance" to "Romance",
-        "$mainUrl/search-result?keyword=Suggestions" to "Suggestions"
+        "$mainUrl/ranking-list?id=6934224112055632896" to "Teen Fantasy"
     )
 
-    private fun cleanPosterUrl(raw: String?): String? {
+    private fun formatPosterUrl(raw: String?): String? {
         if (raw.isNullOrBlank()) return null
-        val cleaned = raw.trim().substringBefore("?x-oss-process=")
-        return fixUrlNull(cleaned)
+        val normalized = raw.trim().replace("&amp;", "&")
+        return fixUrlNull(normalized)
+    }
+
+    private suspend fun fetchDocumentWithRetry(url: String): Document {
+        val headers = mapOf(
+            "Referer" to "$mainUrl/",
+            "User-Agent" to USER_AGENT,
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        )
+        val first = app.get(url, headers = headers)
+        if (first.code == 429 || first.text.length < 500) {
+            delay(800L)
+            return app.get(url, headers = headers).document
+        }
+        return first.document
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
@@ -76,13 +90,16 @@ class SflixProvider : MainAPI() {
             "${request.data}${separator}page=$page"
         }
 
-        val document = app.get(targetUrl, referer = "$mainUrl/").document
+        val document = fetchDocumentWithRetry(targetUrl)
 
+        // Home page ("/") contains all category sections inside section.comp-box
         if (request.data.trimEnd('/') == mainUrl) {
             val lists = document.select("section.comp-box").mapNotNull { section ->
                 val sectionTitle = section.selectFirst("h2.action-title")?.text()?.trim()
                     ?: return@mapNotNull null
-                val items = section.select("a.video-item").mapNotNull { it.toSearchResult() }
+                val items = section.select("a.video-item, a[href*='/detail/']")
+                    .mapNotNull { it.toSearchResult() }
+                    .distinctBy { it.url }
                 if (items.isEmpty()) null else HomePageList(sectionTitle, items)
             }
             if (lists.isNotEmpty()) {
@@ -90,7 +107,15 @@ class SflixProvider : MainAPI() {
             }
         }
 
-        val items = document.select("a.video-item").mapNotNull { it.toSearchResult() }
+        // Try DOM selectors first, then fallback to __NUXT_DATA__ SSR payload
+        var items = document.select("a.video-item, a[href*='/detail/']")
+            .mapNotNull { it.toSearchResult() }
+            .distinctBy { it.url }
+
+        if (items.isEmpty()) {
+            items = extractItemsFromNuxt(document)
+        }
+
         return newHomePageResponse(
             listOf(HomePageList(request.name, items)),
             hasNext = items.isNotEmpty()
@@ -98,15 +123,22 @@ class SflixProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val title = this.selectFirst("h3.text, .video-name h3, .video-name")?.text()?.trim()
-            ?: return null
-        val rawHref = this.attr("href").ifEmpty { this.selectFirst("a")?.attr("href") ?: "" }
-        if (rawHref.isEmpty()) return null
-        val href = fixUrl(rawHref)
+        val rawHref = if (this.tagName() == "a") {
+            this.attr("href")
+        } else {
+            this.selectFirst("a")?.attr("href") ?: ""
+        }
+        if (rawHref.isEmpty() || !rawHref.contains("/detail/")) return null
 
+        val title = this.selectFirst("h3.text, .video-name h3, .video-name, h3, h2")?.text()?.trim()
+            ?.ifEmpty { this.attr("title").removePrefix("go to ").removeSuffix(" detail page").trim() }
+            ?: return null
+        if (title.isEmpty()) return null
+
+        val href = fixUrl(rawHref)
         val img = this.selectFirst("img")
         val posterUrl = img?.let {
-            cleanPosterUrl(it.attr("data-src").ifEmpty { it.attr("src") })
+            formatPosterUrl(it.attr("data-src").ifEmpty { it.attr("src") })
         }
 
         return newMovieSearchResponse(title, href, TvType.TvSeries) {
@@ -115,22 +147,82 @@ class SflixProvider : MainAPI() {
         }
     }
 
+    private fun extractItemsFromNuxt(document: Document): List<SearchResponse> {
+        val nuxtRaw = document.selectFirst("script#__NUXT_DATA__")?.data() ?: return emptyList()
+        val results = mutableListOf<SearchResponse>()
+        val seenUrls = mutableSetOf<String>()
+
+        runCatching {
+            val nuxtArr = JSONArray(nuxtRaw)
+            for (i in 0 until nuxtArr.length()) {
+                val obj = nuxtArr.optJSONObject(i) ?: continue
+                if (!obj.has("title") || !obj.has("detailPath")) continue
+
+                val titleIdx = obj.optInt("title", -1)
+                val pathIdx = obj.optInt("detailPath", -1)
+                if (titleIdx < 0 || pathIdx < 0) continue
+
+                val title = nuxtArr.optString(titleIdx).trim()
+                val detailPath = nuxtArr.optString(pathIdx).trim()
+                if (title.isEmpty() || detailPath.isEmpty() || title.startsWith("{")) continue
+
+                val subjectId = obj.optInt("subjectId", -1).takeIf { it >= 0 }
+                    ?.let { nuxtArr.optString(it) } ?: ""
+
+                var posterUrl: String? = null
+                val coverIdx = obj.optInt("cover", -1)
+                if (coverIdx >= 0) {
+                    val coverObj = nuxtArr.optJSONObject(coverIdx)
+                    val urlIdx = coverObj?.optInt("url", -1) ?: -1
+                    if (urlIdx >= 0) {
+                        posterUrl = formatPosterUrl(nuxtArr.optString(urlIdx))
+                    }
+                }
+
+                val itemUrl = if (subjectId.isNotEmpty()) {
+                    "$mainUrl/detail/$detailPath?id=$subjectId"
+                } else {
+                    "$mainUrl/detail/$detailPath"
+                }
+
+                if (seenUrls.add(itemUrl)) {
+                    results.add(
+                        newMovieSearchResponse(title, itemUrl, TvType.TvSeries) {
+                            this.posterUrl = posterUrl
+                            this.posterHeaders = defaultPosterHeaders
+                        }
+                    )
+                }
+            }
+        }
+
+        return results
+    }
+
     override suspend fun search(query: String): List<SearchResponse> {
         val encoded = URLEncoder.encode(query, "UTF-8")
         val searchUrl = "$mainUrl/search-result?keyword=$encoded"
-        val document = app.get(searchUrl, referer = "$mainUrl/").document
-        return document.select("a.video-item").mapNotNull { it.toSearchResult() }
+        val document = fetchDocumentWithRetry(searchUrl)
+
+        var items = document.select("a.video-item, a[href*='/detail/']")
+            .mapNotNull { it.toSearchResult() }
+            .distinctBy { it.url }
+
+        if (items.isEmpty()) {
+            items = extractItemsFromNuxt(document)
+        }
+        return items
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val document = app.get(url, referer = "$mainUrl/").document
+        val document = fetchDocumentWithRetry(url)
 
         val title = document.selectFirst("h1.content-title")?.text()?.trim()
             ?: document.selectFirst("h2.title")?.text()?.trim()
             ?: return null
 
         val poster = document.selectFirst("div.info-image img")?.let {
-            cleanPosterUrl(it.attr("data-src").ifEmpty { it.attr("src") })
+            formatPosterUrl(it.attr("data-src").ifEmpty { it.attr("src") })
         }
         val description = document.selectFirst("p.content-desc")?.text()?.trim()
 
@@ -194,7 +286,6 @@ class SflixProvider : MainAPI() {
                         if (rd.length >= 4) year = rd.take(4).toIntOrNull() ?: year
                     }
 
-                    // Extract Trailer URL (only for trailer button, never as main movie)
                     val trailerObj = subjectObj.optInt("trailer", -1).takeIf { it >= 0 }
                         ?.let { nuxtArr.optJSONObject(it) }
                     val videoAddrObj = trailerObj?.optInt("videoAddress", -1)?.takeIf { it >= 0 }
@@ -203,7 +294,6 @@ class SflixProvider : MainAPI() {
                         ?.let { nuxtArr.optString(it) }
                         ?.takeIf { it.startsWith("http") }
 
-                    // Extract Audio/Dub Servers (e.g. Original Audio, Hindi dub, etc.)
                     val dubsArr = subjectObj.optInt("dubs", -1).takeIf { it >= 0 }
                         ?.let { nuxtArr.optJSONArray(it) }
                     if (dubsArr != null) {
@@ -371,7 +461,6 @@ class SflixProvider : MainAPI() {
         val emittedUrls = mutableSetOf<String>()
         val emittedSubs = mutableSetOf<String>()
 
-        // Resolve primary server first (and additional dubs if present, capped at 2 for speed)
         for (server in servers.take(2)) {
             val targetPlayerUrl = if (isSeries) {
                 "$playerUrl/spa/videoPlayPage/movies/${server.path}?id=${server.id}&se=$season&ep=$episode&type=/series/detail&lang=en"
@@ -411,7 +500,8 @@ class SflixProvider : MainAPI() {
                             this.referer = "$playerUrl/"
                             this.headers = mapOf(
                                 "Origin" to playerUrl,
-                                "Referer" to "$playerUrl/"
+                                "Referer" to "$playerUrl/",
+                                "User-Agent" to USER_AGENT
                             )
                             this.quality = Qualities.Unknown.value
                         }
@@ -475,7 +565,8 @@ class SflixProvider : MainAPI() {
             "adskeeper.com",
             "tsyndicate.com",
             "exoclick.com",
-            "ifunny-promo"
+            "ifunny-promo",
+            "/other/"
         )
 
         withTimeoutOrNull(18_000L) {
@@ -533,7 +624,6 @@ class SflixProvider : MainAPI() {
                             ): WebResourceResponse? {
                                 val reqUrl = request?.url?.toString() ?: return null
 
-                                // Block third-party ad networks & game popups
                                 if (adDomains.any { reqUrl.contains(it, ignoreCase = true) }) {
                                     return WebResourceResponse(
                                         "text/plain",
@@ -542,14 +632,12 @@ class SflixProvider : MainAPI() {
                                     )
                                 }
 
-                                // Capture subtitles (.vtt / .srt)
                                 if (reqUrl.contains(".vtt", ignoreCase = true) ||
                                     reqUrl.contains(".srt", ignoreCase = true)
                                 ) {
                                     foundSubs.add(reqUrl)
                                 }
 
-                                // Capture actual video streams (.mpd / .m3u8 / .mp4), ignoring trailers
                                 val isVideoStream = reqUrl.contains(".mpd", ignoreCase = true) ||
                                     reqUrl.contains(".m3u8", ignoreCase = true) ||
                                     reqUrl.contains(".mp4", ignoreCase = true)
@@ -559,7 +647,6 @@ class SflixProvider : MainAPI() {
 
                                 if (isVideoStream && !isTrailer && !reqUrl.startsWith("blob:")) {
                                     foundStreams.add(reqUrl)
-                                    // Wait 1.5s to allow subtitle tracks (.vtt) to finish requesting
                                     mainHandler.postDelayed({ finish() }, 1500L)
                                 }
 
@@ -568,7 +655,6 @@ class SflixProvider : MainAPI() {
 
                             override fun onPageFinished(view: WebView?, url: String?) {
                                 super.onPageFinished(view, url)
-                                // Trigger Artplayer initialization if waiting for user interaction
                                 view?.evaluateJavascript(
                                     """
                                     (function() {
