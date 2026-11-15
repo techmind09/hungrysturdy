@@ -406,7 +406,7 @@ class ToonPlayProvider : MainAPI() {
 
         for (sUrl in serverUrls) {
             val doc = fetchRenderedDom(sUrl)
-            val iframeSrc = doc.selectFirst("iframe#watchpage-active-iframe, iframe[src*='ravok'], iframe[src*='animesalt'], iframe[src*='abyss']")
+            val iframeSrc = doc.selectFirst("iframe#watchpage-active-iframe, iframe[src*='ravok'], iframe[src*='animesalt'], iframe[src*='abyss'], iframe[src*='flixcloud']")
                 ?.attr("src")?.trim().orEmpty()
 
             if (iframeSrc.isBlank()) continue
@@ -427,12 +427,14 @@ class ToonPlayProvider : MainAPI() {
                         val playerLink = obj.optString("link").replace("\\/", "/").trim()
                         if (playerLink.isNotBlank()) {
                             val collected = mutableListOf<ExtractorLink>()
-                            AbyssPlayerExtractor().getUrl(
-                                url = playerLink,
-                                referer = "https://animesalt.streamindia.co.in/",
-                                subtitleCallback = subtitleCallback
-                            ) { link ->
-                                collected.add(link)
+                            if (playerLink.contains("flixcloud", true)) {
+                                FlixCloudExtractor().getUrl(playerLink, "https://animesalt.streamindia.co.in/", subtitleCallback) { link ->
+                                    collected.add(link)
+                                }
+                            } else {
+                                AbyssPlayerExtractor().getUrl(playerLink, "https://animesalt.streamindia.co.in/", subtitleCallback) { link ->
+                                    collected.add(link)
+                                }
                             }
                             for (link in collected) {
                                 foundLinks = true
@@ -453,14 +455,20 @@ class ToonPlayProvider : MainAPI() {
                     }
                 } catch (_: Exception) {}
             } else {
-                val serverLabel = if (iframeSrc.contains("ravok")) "Ravok" else "ToonPlay"
+                val serverLabel = when {
+                    iframeSrc.contains("ravok", true) -> "Ravok"
+                    iframeSrc.contains("flixcloud", true) -> "FlixCloud"
+                    else -> "ToonPlay"
+                }
                 val collected = mutableListOf<ExtractorLink>()
-                RavokExtractor().getUrl(
-                    url = fixUrl(iframeSrc),
-                    referer = "$mainUrl/",
-                    subtitleCallback = subtitleCallback
-                ) { link ->
-                    collected.add(link)
+                if (iframeSrc.contains("flixcloud", true)) {
+                    FlixCloudExtractor().getUrl(fixUrl(iframeSrc), "$mainUrl/", subtitleCallback) { link ->
+                        collected.add(link)
+                    }
+                } else {
+                    RavokExtractor().getUrl(fixUrl(iframeSrc), "$mainUrl/", subtitleCallback) { link ->
+                        collected.add(link)
+                    }
                 }
                 for (link in collected) {
                     foundLinks = true
