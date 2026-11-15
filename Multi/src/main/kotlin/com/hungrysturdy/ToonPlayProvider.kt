@@ -120,7 +120,6 @@ class ToonPlayProvider : MainAPI() {
         val isMovie = badgeText.contains("MOVIE", true) || title.contains("Movie", true)
 
         val slug = createSlug(title)
-        // Matches dom.htmla.html ("movies-") and dom.htmltoon_2.html ("series-")
         val prefix = if (isMovie) "movies" else "series"
 
         val anilistId = Regex("""/bx?(\d+)-""").find(poster)?.groupValues?.get(1) ?: ""
@@ -387,7 +386,6 @@ class ToonPlayProvider : MainAPI() {
         }
     }
 
-    // Extracts direct .m3u8 / .mp4 streams from ravok.buzz or abyssplayer via WebView interception + regex
     private suspend fun extractPlayerStreams(
         playerUrl: String,
         refererUrl: String,
@@ -397,7 +395,6 @@ class ToonPlayProvider : MainAPI() {
     ): Boolean {
         var found = false
 
-        // 1. Try built-in CloudStream extractors first (in case host is supported)
         val builtInLinks = mutableListOf<ExtractorLink>()
         loadExtractor(playerUrl, refererUrl, subtitleCallback) { link ->
             builtInLinks.add(link)
@@ -419,7 +416,6 @@ class ToonPlayProvider : MainAPI() {
         }
         if (found) return true
 
-        // 2. Direct HTML/JS scraping for ravok.buzz & abyssplayer
         try {
             val resText = app.get(playerUrl, referer = refererUrl).text
             val streamRegex = Regex("""["'](https?://[^"']+\.(?:m3u8|mp4)[^"']*)["']""")
@@ -443,7 +439,6 @@ class ToonPlayProvider : MainAPI() {
 
         if (found) return true
 
-        // 3. WebView network interception fallback (captures encrypted/blob-backed .m3u8/.mp4 requests)
         try {
             val intercepted = app.get(
                 playerUrl,
@@ -484,8 +479,7 @@ class ToonPlayProvider : MainAPI() {
         val targetUrl = epData?.watchUrl ?: data
         var foundLinks = false
 
-        // Build URLs for options-1 (AnimeSalt multi-audio) and options-0 (Ravok)
-        val serverUrls = listOf("options-1", "options-0").map { serverOpt ->
+        val serverUrls = listOf("options-1", "options-0", "options-2").map { serverOpt ->
             if (targetUrl.contains("server=")) {
                 targetUrl.replace(Regex("server=[^&]+"), "server=$serverOpt")
             } else {
@@ -500,10 +494,8 @@ class ToonPlayProvider : MainAPI() {
 
             if (iframeSrc.isBlank()) continue
 
-            // Case A: AnimeSalt Multi-Audio Base64 JSON (from dom.htmltoo_2.html)
             if (iframeSrc.contains("data=")) {
                 try {
-                    // Decode twice if double-encoded (%253D -> %3D -> =)
                     var decodedUrl = URLDecoder.decode(iframeSrc, "UTF-8")
                     if (decodedUrl.contains("%3D") || decodedUrl.contains("%2F")) {
                         decodedUrl = URLDecoder.decode(decodedUrl, "UTF-8")
@@ -529,7 +521,6 @@ class ToonPlayProvider : MainAPI() {
                     }
                 } catch (_: Exception) {}
             } else {
-                // Case B: Direct iframe like https://ravok.buzz/video/... (from dom.htmltoon_2.html & dom.htmla.html)
                 val serverLabel = if (iframeSrc.contains("ravok")) "Ravok Server" else "ToonPlay Direct"
                 val ok = extractPlayerStreams(
                     playerUrl = fixUrl(iframeSrc),
