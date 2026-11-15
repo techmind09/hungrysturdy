@@ -1,0 +1,310 @@
+package com.hungrysturdy.ext.providers
+
+import com.hungrysturdy.ext.HungrysturdyCatalog
+import com.hungrysturdy.ext.HungrysturdyEpisode
+import com.hungrysturdy.ext.HungrysturdyMedia
+import com.hungrysturdy.ext.HungrysturdyMediaType
+import com.hungrysturdy.ext.HungrysturdyNet
+import com.hungrysturdy.ext.HungrysturdyProvider
+import com.hungrysturdy.ext.HungrysturdyStream
+import com.hungrysturdy.ext.HungrysturdySubtitle
+import kotlinx.coroutines.CancellationException
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.URLEncoder
+import java.security.MessageDigest
+
+class MovieBoxProvider : HungrysturdyProvider {
+
+    override val id = "moviebox"
+    override val name = "MovieBox"
+    override val mainUrl = "https://api3.aoneroom.com"
+    override val description = "Movies & TV series — trending, latest, top rated, search with subtitles."
+    override val version = 1
+    override val tvTypes = setOf(HungrysturdyMediaType.SERIES, HungrysturdyMediaType.MOVIE)
+
+    private val UA =
+        "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+
+    companion object {
+        val HOSTS = listOf(
+            "https://api3.aoneroom.com",
+            "https://api4.aoneroom.com",
+            "https://api4sg.aoneroom.com",
+            "https://api5.aoneroom.com",
+            "https://api6.aoneroom.com",
+        )
+        
+        @Volatile
+        var host = HOSTS[0]
+    }
+
+    // Helper extension for clean ID extraction
+    private val HungrysturdyMedia.sid: String
+        get() = id.substringAfter("mb:", "").substringBefore(":")
+
+    private fun clientToken(): String {
+        return try {
+            val ts = System.currentTimeMillis() / 1000
+            val rev = ts.toString().reversed()
+            val md5 = MessageDigest.getInstance("MD5").digest(rev.toByteArray())
+                .joinToString("") { "%02x".format(it) }
+            "$ts,$md5"
+        } catch (e: Exception) {
+            "${System.currentTimeMillis() / 1000},"
+        }
+    }
+
+    private fun headers(): Map<String, String> = mapOf(
+        "User-Agent" to UA,
+        "Accept" to "application/json",
+        "Content-Type" to "application/json",
+        "x-client-token" to clientToken(),
+    )
+
+    private suspend fun post(path: String, body: JSONObject): JSONObject? {
+        for (h in HOSTS) {
+            for (auth in listOf(true, false)) {
+                try {
+                    val hd = if (auth) headers() else headers() - "x-client-token"
+                    val txt = HungrysturdyNet.postString("$h$path", body.toString(), hd, "application/json")
+                        ?: continue
+                    
+                    val o = runCatching { JSONObject(txt) }.getOrNull() ?: continue
+                    if (o.optInt("code", 200) !in 200..299 && !o.optBoolean("success", true)) continue
+                    
+                    host = h
+                    return o
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) { 
+                    // Continue to next iteration
+                }
+            }
+        }
+        return null
+    }
+
+    private suspend fun get(path: String): JSONObject? {
+        for (h in HOSTS) {
+            try {
+                val o = HungrysturdyNet.getJson("$h$path", headers()) ?: continue
+                host = h
+                return o
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) { 
+                // Continue to next host
+            }
+        }
+        return null
+    }
+
+    override fun catalogs(): List<HungrysturdyCatalog> = listOf(
+        HungrysturdyCatalog("trendmov", "Trending Movies", HungrysturdyMediaType.MOVIE),
+        HungrysturdyCatalog("latestmov", "Latest Movies", HungrysturdyMediaType.MOVIE),
+        HungrysturdyCatalog("topmov", "Top Movies", HungrysturdyMediaType.MOVIE),
+        HungrysturdyCatalog("trendtv", "Trending Series", HungrysturdyMediaType.SERIES),
+        HungrysturdyCatalog("latesttv", "Latest Series", HungrysturdyMediaType.SERIES),
+        HungrysturdyCatalog("anime", "Anime", HungrysturdyMediaType.SERIES),
+    )
+
+    override suspend fun getCatalog(catalog: HungrysturdyCatalog, page: Int): List<HungrysturdyMedia> {
+        val p = page.coerceAtLeast(1)
+        val body = JSONObject().put("page", p).put("perPage", 24)
+        
+        when (catalog.id) {
+            "trendmov" -> body.put("channel", "movie").put("sort", "trending")
+            "latestmov" -> body.put("channel", "movie").put("sort", "latest")
+            "topmov" -> body.put("channel", "movie").put("sort", "rating")
+            "trendtv" -> body.put("channel", "tv").put("sort", "trending")
+            "latesttv" -> body.put("channel", "tv").put("sort", "latest")
+            "anime" -> body.put("channel", "anime").put("sort", "trending")
+        }
+        
+        val root = post("/wefeed-mobile-bff/subject-api/list", body)
+            ?: get("/wefeed-mobile-bff/subject-api/list?page=$p&perPage=24")
+            ?: return emptyList()
+            
+        return subjectsToMedia(extractList(root))
+    }
+
+    override suspend fun search(query: String, page: Int): List<HungrysturdyMedia> {
+        val q = query.trim()
+        if (q.isBlank()) return emptyList()
+        val p = page.coerceAtLeast(1)
+        
+        val root = post(
+            "/wefeed-mobile-bff/subject-api/search/v2",
+            JSONObject().put("keyword", q).put("page", p).put("perPage", 24),
+        ) ?: get("/wefeed-mobile-bff/subject-api/search/v2?keyword=${URLEncoder.encode(q, "UTF-8")}&page=$p")
+        
+        if (root == null) return emptyList()
+        return subjectsToMedia(extractList(root))
+    }
+
+    override suspend fun getMeta(media: HungrysturdyMedia): HungrysturdyMedia {
+        val subjectId = media.sid
+        if (subjectId.isBlank()) return media
+        
+        val root = get("/wefeed-mobile-bff/subject-api/get?subjectId=${URLEncoder.encode(subjectId, "UTF-8")}")
+            ?: return media
+            
+        val d = root.optJSONObject("data") ?: root.optJSONObject("subject") ?: return media
+        
+        return media.copy(
+            title = d.optString("title").ifBlank { d.optString("name") }.ifBlank { media.title },
+            posterUrl = d.optString("poster").ifBlank { d.optString("cover") }.takeIf { it.startsWith("http") } ?: media.posterUrl,
+            backdropUrl = d.optString("backdrop").takeIf { it.startsWith("http") } ?: media.backdropUrl,
+            overview = d.optString("description").ifBlank { d.optString("overview") }.takeIf { it.isNotBlank() } ?: media.overview,
+            year = d.optInt("year", 0).takeIf { it > 0 } ?: d.optString("releaseDate").take(4).toIntOrNull() ?: media.year,
+        )
+    }
+
+    override suspend fun getEpisodes(media: HungrysturdyMedia): List<HungrysturdyEpisode>? {
+        val subjectId = media.sid
+        if (subjectId.isBlank()) return null
+        
+        if (media.rawType == "movie") {
+            return listOf(HungrysturdyEpisode(number = 1, id = "${media.id}#ep1", name = media.title, image = media.posterUrl))
+        }
+        
+        val root = get("/wefeed-mobile-bff/subject-api/season-info?subjectId=${URLEncoder.encode(subjectId, "UTF-8")}")
+            ?: return listOf(HungrysturdyEpisode(number = 1, id = "${media.id}#ep1", name = media.title, image = media.posterUrl))
+            
+        val out = ArrayList<HungrysturdyEpisode>()
+        val seasons = root.optJSONObject("data")?.optJSONArray("seasons") ?: root.optJSONArray("seasons")
+        
+        if (seasons != null) {
+            for (i in 0 until seasons.length()) {
+                val s = seasons.optJSONObject(i) ?: continue
+                val sn = s.optInt("season", s.optInt("seasonNumber", i + 1))
+                val eps = s.optJSONArray("episodes") ?: s.optJSONArray("episodeList")
+                
+                if (eps != null) {
+                    for (j in 0 until eps.length()) {
+                        val e = eps.optJSONObject(j) ?: continue
+                        val n = e.optInt("episode", e.optInt("episodeNumber", j + 1))
+                        out.add(
+                            HungrysturdyEpisode(
+                                number = n, 
+                                season = sn, 
+                                id = "${media.id}#s${sn}e$n", 
+                                name = e.optString("title").ifBlank { "S${sn} E$n" }
+                            )
+                        )
+                    }
+                } else {
+                    val count = s.optInt("episodeCount", s.optInt("totalEpisode", 0))
+                    for (n in 1..count) {
+                        out.add(HungrysturdyEpisode(number = n, season = sn, id = "${media.id}#s${sn}e$n", name = "S${sn} E$n"))
+                    }
+                }
+            }
+        }
+        return out.ifEmpty { null }
+    }
+
+    override suspend fun getStreams(media: HungrysturdyMedia, episode: HungrysturdyEpisode?): List<HungrysturdyStream> {
+        val ref = episode?.id ?: media.id
+        val subjectId = ref.substringAfter("mb:", "").substringBefore(":")
+        if (subjectId.isBlank()) return emptyList()
+        
+        val se = Regex("#s(\\d+)e(\\d+)").find(ref)
+        val season = se?.groupValues?.get(1)?.toIntOrNull() ?: 1
+        val ep = se?.groupValues?.get(2)?.toIntOrNull() ?: 1
+        
+        val root = get("/wefeed-mobile-bff/subject-api/play-info?subjectId=${URLEncoder.encode(subjectId, "UTF-8")}&season=$season&episode=$ep")
+            ?: post("/wefeed-mobile-bff/subject-api/play-info", JSONObject().put("subjectId", subjectId).put("season", season).put("episode", ep))
+            ?: return emptyList()
+            
+        val out = ArrayList<HungrysturdyStream>()
+        val seen = HashSet<String>()
+        val data = root.optJSONObject("data") ?: root
+        val playList = data.optJSONArray("playList") ?: data.optJSONArray("sources") ?: data.optJSONArray("streams")
+        
+        if (playList != null) {
+            for (i in 0 until playList.length()) {
+                val s = playList.optJSONObject(i) ?: continue
+                val url = s.optString("url").ifBlank { s.optString("playUrl") }
+                if (!url.startsWith("http") || !seen.add(url)) continue
+                
+                val q = s.optString("quality").ifBlank { s.optString("resolution") }
+                out.add(
+                    HungrysturdyStream(
+                        name = "MovieBox" + (if (q.isNotBlank()) " $q" else ""),
+                        url = url,
+                        headers = mapOf("User-Agent" to UA, "Referer" to "https://api3.aoneroom.com/"),
+                        isM3u8 = url.contains(".m3u8"),
+                    )
+                )
+            }
+        }
+        
+        // Captions attached to the first stream when present.
+        try {
+            val caps = get("/wefeed-mobile-bff/subject-api/get-stream-captions?subjectId=${URLEncoder.encode(subjectId, "UTF-8")}")
+            val arr = caps?.optJSONObject("data")?.optJSONArray("captions") ?: caps?.optJSONArray("captions")
+            
+            if (arr != null && out.isNotEmpty()) {
+                val subs = ArrayList<HungrysturdySubtitle>()
+                for (i in 0 until arr.length()) {
+                    val c = arr.optJSONObject(i) ?: continue
+                    val u = c.optString("url")
+                    if (u.startsWith("http")) {
+                        subs.add(HungrysturdySubtitle(c.optString("lang").ifBlank { c.optString("language") }.ifBlank { "Subtitle" }, u))
+                    }
+                }
+                if (subs.isNotEmpty()) return out.map { it.copy(subtitles = it.subtitles + subs) }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) { 
+            // Silent catch for captions failure
+        }
+        
+        return out
+    }
+
+    // ------------------------------------------------------------------
+    // Helpers.
+    // ------------------------------------------------------------------
+
+    private fun extractList(root: JSONObject): JSONArray? {
+        val data = root.optJSONObject("data") ?: return root.optJSONArray("list")
+            ?: root.optJSONArray("subjects")
+        return data.optJSONArray("list")
+            ?: data.optJSONArray("subjects")
+            ?: data.optJSONArray("subjectList")
+            ?: data.optJSONArray("items")
+    }
+
+    private fun subjectsToMedia(arr: JSONArray?): List<HungrysturdyMedia> {
+        val out = ArrayList<HungrysturdyMedia>()
+        if (arr == null) return out
+        
+        for (i in 0 until arr.length()) {
+            val o = arr.optJSONObject(i) ?: continue
+            val sid = o.optString("subjectId").ifBlank { o.optString("id") }
+            val title = o.optString("title").ifBlank { o.optString("name") }.trim()
+            
+            if (sid.isBlank() || title.isBlank()) continue
+            
+            val kind = o.optString("type").lowercase()
+            val isMovie = kind.contains("movie") || (!kind.contains("tv") && !kind.contains("series") && !kind.contains("anime") && o.optInt("episodeCount", 0) == 0 && kind.isNotBlank())
+            val poster = o.optString("poster").ifBlank { o.optString("cover") }.takeIf { it.startsWith("http") }
+            
+            out.add(
+                HungrysturdyMedia(
+                    id = "mb:$sid:${if (isMovie) "movie" else "tv"}",
+                    title = title,
+                    type = if (isMovie) HungrysturdyMediaType.MOVIE else HungrysturdyMediaType.SERIES,
+                    posterUrl = poster,
+                    year = o.optInt("year", 0).takeIf { it > 0 },
+                    rawType = if (isMovie) "movie" else "tv",
+                )
+            )
+        }
+        return out
+    }
+}
