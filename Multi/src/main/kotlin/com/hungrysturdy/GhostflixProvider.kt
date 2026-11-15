@@ -79,7 +79,8 @@ class GhostflixProvider : MainAPI() {
         } catch (_: Exception) {}
 
         try {
-            val html = app.webViewGet(mainUrl).text
+            // Reverted back to app.get() as webViewGet was unresolved
+            val html = app.get(mainUrl, headers = cfHeaders).text
             val document = org.jsoup.Jsoup.parse(html)
             val trendingItems = extractNextFlightTrending(document)
             if (trendingItems.isNotEmpty()) {
@@ -278,10 +279,15 @@ class GhostflixProvider : MainAPI() {
                 )
             }
 
+            val reqHeaders = cfHeaders.toMutableMap().apply {
+                put("Origin", baseHost)
+                put("Referer", "$baseHost/")
+            }
+
             for (endpoint in resolveEndpoints) {
                 try {
-                    // Using app.webViewGet to bypass Cloudflare JS Challenge
-                    val resText = app.webViewGet(endpoint).text
+                    // Reverted back to app.get() as webViewGet was unresolved
+                    val resText = app.get(endpoint, headers = reqHeaders, timeout = 15).text
                     extractStreamsFromText(resText, serverName, "$baseHost/", subtitleCallback, callback)
                 } catch (_: Exception) {}
             }
