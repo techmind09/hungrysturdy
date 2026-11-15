@@ -417,10 +417,14 @@ class ToonPlayProvider : MainAPI() {
             val fragment = url.substringAfter("#", "").let {
                 if (it.isNotEmpty()) "#$it" else ""
             }
-            val updated = if (Regex("([?&])server=[^&]*").containsMatchIn(withoutFragment)) {
-                Regex("([?&])server=[^&]*").replaceFirst(withoutFragment) { match ->
-                    "${match.groupValues[1]}server=$server"
-                }
+            val serverParameterRegex = Regex("[?&]server=[^&]*")
+            val serverParameterMatch = serverParameterRegex.find(withoutFragment)
+            val updated = if (serverParameterMatch != null) {
+                val separator = serverParameterMatch.value.substring(0, 1)
+                withoutFragment.replaceRange(
+                    serverParameterMatch.range,
+                    "${separator}server=$server"
+                )
             } else {
                 withoutFragment + (if (withoutFragment.contains("?")) "&" else "?") + "server=$server"
             }
