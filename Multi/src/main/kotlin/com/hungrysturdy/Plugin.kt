@@ -31,5 +31,9 @@ class Plugin : Plugin() {
         registerExtractorAPI(KatFuckingFastExtractor())
         registerExtractorAPI(KatGoFlixExtractor())
         registerExtractorAPI(Filemoon())
+
+        // ToonPlay Extractors
+        registerExtractorAPI(AbyssPlayerExtractor())
+        registerExtractorAPI(RavokExtractor())
     }
 }
