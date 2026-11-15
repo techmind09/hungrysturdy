@@ -5,13 +5,19 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 class GhostFlixExtractor : ExtractorApi() {
     override val name: String = "GhostFlixEmbed"
     override val mainUrl: String = "https://ghostflix.uk"
-    override var requiresReferer = true
+    override val requiresReferer = true
+
+    private data class StreamResponse(
+        val url: String? = null,
+        val file: String? = null
+    )
 
     override suspend fun getUrl(
         url: String,
@@ -27,29 +33,27 @@ class GhostFlixExtractor : ExtractorApi() {
 
         try {
             val response = app.get(url, headers = headers).text
-            
+
             if (response.contains(".m3u8") || response.contains(".mp4")) {
                 extractLinks(response, url, subtitleCallback, callback)
             } else {
-                val parsedJson = tryParseJson>(response)
-                parsedJson?.let { map ->
-                    val streamUrl = (map["url"] ?: map["file"]) as? String
-                    if (!streamUrl.isNullOrEmpty()) {
-                        extractLinks(streamUrl, url, subtitleCallback, callback)
-                    }
+                val parsedJson = tryParseJson<StreamResponse>(response)
+                val streamUrl = parsedJson?.url ?: parsedJson?.file
+                if (!streamUrl.isNullOrEmpty()) {
+                    extractLinks(streamUrl, url, subtitleCallback, callback)
                 }
             }
         } catch (_: Exception) {}
     }
 
-    private fun extractLinks(
+    private suspend fun extractLinks(
         text: String,
         referer: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
         val unescaped = text.replace("\\/", "/").replace("\\u0026", "&")
-        
+
         val regex = Regex("""https?://[^\s"'<>\\]+\.(?:m3u8|mp4)(?:\?[^\s"'<>\\]*)?""")
         regex.findAll(unescaped).forEach { match ->
             val streamUrl = match.value
