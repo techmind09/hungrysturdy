@@ -1,13 +1,13 @@
 package com.hungrysturdy
 
 import com.lagradost.cloudstream3.SubtitleFile
+import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.app
 
-class GhostflixExtractor : ExtractorApi() {
+class GhostFlixExtractor : ExtractorApi() {
     override val name: String = "GhostFlixEmbed"
     override val mainUrl: String = "https://ghostflix.uk"
     override var requiresReferer = true
@@ -27,11 +27,9 @@ class GhostflixExtractor : ExtractorApi() {
         try {
             val response = app.get(url, headers = headers).text
             
-            // Check if response contains direct streaming proxy JSON or a nested HLS link
             if (response.contains(".m3u8") || response.contains(".mp4")) {
                 extractLinks(response, url, subtitleCallback, callback)
             } else {
-                // Try parsing if it's a JSON wrapper containing stream URLs
                 val parsedJson = tryParseJson>(response)
                 parsedJson?.let { map ->
                     val streamUrl = map["url"] as? String ?: map["file"] as? String
@@ -51,7 +49,6 @@ class GhostflixExtractor : ExtractorApi() {
     ) {
         val unescaped = text.replace("\\/", "/").replace("\\u0026", "&")
         
-        // Match m3u8 or mp4 stream links inside the text/JSON
         val regex = Regex("""https?://[^\s"'<>\\]+\.(?:m3u8|mp4)(?:\?[^\s"'<>\\]*)?""")
         regex.findAll(unescaped).forEach { match ->
             val streamUrl = match.value
@@ -79,7 +76,6 @@ class GhostflixExtractor : ExtractorApi() {
             )
         }
 
-        // Extract subtitles if available
         val subRegex = Regex("""https?://[^\s"'<>\\]+\.(?:vtt|srt)(?:\?[^\s"'<>\\]*)?""")
         subRegex.findAll(unescaped).forEach { match ->
             val subUrl = match.value
