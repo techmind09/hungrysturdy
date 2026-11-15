@@ -14,7 +14,7 @@ import org.json.JSONObject
 import java.net.URLEncoder
 import java.security.MessageDigest
 
-class MovieBoxProvider : HikariProvider {
+class MovieBoxProvider : MainApi {
 
     override val id = "moviebox"
     override val name = "MovieBox"
