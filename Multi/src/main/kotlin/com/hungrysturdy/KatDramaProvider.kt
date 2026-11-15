@@ -185,11 +185,11 @@ class KatDramaProvider : MainAPI() {
             ?: return null
         val title = cleanTitle(rawTitle)
 
-        // Fixed Poster extraction (Removed global og:image fallback to prevent incorrect Doctor X poster)
+        // Prioritized img.poster-img to fetch the exact drama poster correctly
         val poster = fixUrlNull(
-            mainArticle.selectFirst("div.post-thumbnail img, div.entry-content img, .featured-image img, img.wp-post-image")?.attr("src")
+            mainArticle.selectFirst("img.poster-img, .poster-img, div.post-featured-image img, div.single-featured img, div.post-thumbnail img, .featured-image img, img.wp-post-image")?.attr("src")
+                ?: document.selectFirst("img.poster-img, .poster-img, div.post-featured-image img, div.single-featured img, div.post-thumbnail img, .featured-image img, img.wp-post-image")?.attr("src")
                 ?: mainArticle.selectFirst("div.entry-content img")?.attr("src")
-                ?: document.selectFirst("div.post-thumbnail img, div.entry-content img, img.wp-post-image")?.attr("src")
         )
         
         val plot = mainArticle.selectFirst("div.entry-content p")?.text()?.trim()
