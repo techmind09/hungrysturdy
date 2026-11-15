@@ -21,9 +21,6 @@ class Filemoon : Filesim() {
     override var mainUrl = "https://filemoon.sx"
 }
 
-// =========================================================================
-// 1. HubCloud Extractors & Mirrors
-// =========================================================================
 open class KatHubCloudExtractor : ExtractorApi() {
     override val name = "HubCloud"
     override val mainUrl = "https://hubcloud.pw"
@@ -56,9 +53,6 @@ class GamerXYTExtractor : KatHubCloudExtractor() {
     override val mainUrl = "https://gamerxyt.com"
 }
 
-// =========================================================================
-// 2. GDFlix Extractors & Mirrors
-// =========================================================================
 open class KatGDFlixExtractor : ExtractorApi() {
     override val name = "GDFlix"
     override val mainUrl = "https://gdflix.vip"
@@ -86,9 +80,6 @@ class GDFlixNew9 : KatGDFlixExtractor() {
     override val mainUrl = "https://new9.gdflix.io"
 }
 
-// =========================================================================
-// 3. Standalone Extractors
-// =========================================================================
 class KatPixelDrainExtractor : ExtractorApi() {
     override val name = "PixelServer"
     override val mainUrl = "https://pixeldrain.dev"
@@ -149,9 +140,6 @@ class KatGoFlixExtractor : ExtractorApi() {
     }
 }
 
-// =========================================================================
-// Core Server Logic Object (Handles all URL sanitization & extraction)
-// =========================================================================
 object KatServerLogic {
 
     private fun cleanUrl(raw: String): String {
@@ -191,7 +179,6 @@ object KatServerLogic {
 
             val gamerRef = cleanUrl(gamerLinkRaw ?: currentUrl)
 
-            // 1. FSL Server (r2.cloudflarestorage.com)
             gamerDoc.select("a#fsl, a:contains(FSL Server), a[href*='r2.cloudflarestorage.com']").forEach { a ->
                 val fslUrl = cleanUrl(a.attr("href"))
                 if (fslUrl.startsWith("http")) {
@@ -210,19 +197,16 @@ object KatServerLogic {
                 }
             }
 
-            // 2. HBPlay Watch Online
             gamerDoc.select("a[href*='hbplay.pages.dev']").forEach { a ->
                 val hbUrl = cleanUrl(a.attr("href"))
                 extractHbPlay(hbUrl, detectedQuality, callback)
             }
 
-            // 3. PixelServer
             gamerDoc.select("a#pxl-1, a[href*='pixeldrain']").forEach { a ->
                 val pxlUrl = cleanUrl(a.attr("href"))
                 extractPixelDrain(pxlUrl, detectedQuality, callback)
             }
 
-            // 4. Server : 10Gbps
             gamerDoc.select("a[href*='pixel.hubcloud'], a:contains(10Gbps)").forEach { a ->
                 val tenUrl = cleanUrl(a.attr("href"))
                 if (tenUrl.startsWith("http")) {
@@ -235,12 +219,12 @@ object KatServerLogic {
                         ) {
                             this.referer = gamerRef
                             this.quality = detectedQuality
+                            this.headers = katBrowserHeaders
                         }
                     )
                 }
             }
 
-            // 5. Buzz Server
             gamerDoc.select("a[href*='fuckingfast.net'], a:contains(Buzz Server)").forEach { a ->
                 val buzzUrl = cleanUrl(a.attr("href"))
                 if (buzzUrl.startsWith("http")) {
@@ -305,6 +289,7 @@ object KatServerLogic {
                                 ) {
                                     this.referer = finalUrl
                                     this.quality = detectedQuality
+                                    this.headers = katBrowserHeaders
                                 }
                             )
                         }
@@ -337,6 +322,7 @@ object KatServerLogic {
                                 ) {
                                     this.referer = dbUrl
                                     this.quality = detectedQuality
+                                    this.headers = katBrowserHeaders
                                 }
                             )
                         }
@@ -385,6 +371,7 @@ object KatServerLogic {
                         ) {
                             this.referer = cloudUrl
                             this.quality = quality
+                            this.headers = katBrowserHeaders
                         }
                     )
                 }
