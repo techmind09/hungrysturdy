@@ -24,6 +24,7 @@ import org.jsoup.nodes.Element
 import java.io.ByteArrayInputStream
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 
@@ -34,82 +35,113 @@ class SflixProvider : MainAPI() {
     override var hasMainPage = true
     override var supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
 
+    private val userCookies = "sflix_i18n_lang=en; _ga=GA1.1.622965780.1794742147; sflix_token=%22eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjE5NjY4NTU1NTcyNzgwNjIyNzYsImF0cCI6MywiZXh0IjoiMTc5NDc0MjE0NyIsImV4cCI6MTgwMjUxODE0NywiaWF0IjoxNzk0NzQxODQ3fQ.8aOIckQOSKyISQdl85SAJvuMlhXfWodHmcPOIvlg0pM%22; vrk4n8fqhwc3jzy7pbsmgt6dx5lha2u9=01a1b98c-7aec-7761-b581-b09b7730a724_2; dom3ic8zudi28v8lr6fgphwffqoz0j6c=01a1b98c-7aec-7761-b581-b09b7730a724; imprCounter_53d6f18bc2561bc4f4ecc19cefe348bf_expiry=Invalid Date; imprCounter_53d6f18bc2561bc4f4ecc19cefe348bf=3; _ga_CJSG3GJM85=GS2.1.s1794753588$o3$g1$t1794754299$j60$l0$h0; sb_main_29ea333f714080c847539fb7690ac422=1; pp_main_505b167260767d732d39389d9b6ebed9=1; sb_count_29ea333f714080c847539fb7690ac422=1"
+
     private val defaultPosterHeaders = mapOf(
         "Referer" to "$mainUrl/",
         "User-Agent" to USER_AGENT,
+        "Cookie" to userCookies,
         "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
     )
 
-    // Kept well under sflix.film's rateLimitThreshold (25) while Featured loads all 15+ homepage rows
-    override val mainPage = mainPageOf(
-        "$mainUrl/" to "Featured",
-        "$mainUrl/ranking-list?id=1232643093049001320" to "Popular Series",
-        "$mainUrl/ranking-list?id=997144265920760504" to "Popular Movie",
-        "$mainUrl/upcoming" to "Coming Soon",
-        "$mainUrl/ranking-list?id=4380734070238626200" to "K-Drama",
-        "$mainUrl/ranking-list?id=173752404280836544" to "C-Drama",
-        "$mainUrl/ranking-list?id=62133389738001440" to "Anime [English Dubbed]",
-        "$mainUrl/ranking-list?id=3130672938110833528" to "Adult Animation",
-        "$mainUrl/ranking-list?id=7269188813871016696" to "Action Movies",
-        "$mainUrl/ranking-list?id=8785384881686725944" to "Comedy",
-        "$mainUrl/ranking-list?id=7219449993227633120" to "Epic Fantasy",
-        "$mainUrl/ranking-list?id=7317586330186645624" to "Superhero Series",
-        "$mainUrl/ranking-list?id=1746633591129342248" to "Teen Romance",
-        "$mainUrl/ranking-list?id=6978603205429526968" to "Action&Thriller",
-        "$mainUrl/ranking-list?id=8892055635953697752" to "Bl Story",
-        "$mainUrl/ranking-list?id=3741804521853438336" to "Bet+",
-        "$mainUrl/ranking-list?id=5475136475249497544" to "Gangster",
-        "$mainUrl/ranking-list?id=6934224112055632896" to "Teen Fantasy"
+    private val requestHeaders = mapOf(
+        "Referer" to "$mainUrl/",
+        "User-Agent" to USER_AGENT,
+        "Cookie" to userCookies,
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
     )
 
-    private fun formatPosterUrl(raw: String?): String? {
+    override val mainPage = mainPageOf(
+        "$mainUrl/" to "Featured",
+        "$mainUrl/ranking-list?id=5514044369772445984&page_from=more_SUBJECTS_MOVIE" to "Trending Now",
+        "$mainUrl/ranking-list?id=5692654647815587592&page_from=more_SUBJECTS_MOVIE" to "Cinema",
+        "$mainUrl/upcoming" to "Coming Soon",
+        "$mainUrl/ranking-list?id=1067246098818943288&page_from=more_SUBJECTS_MOVIE" to "Top Series",
+        "$mainUrl/ranking-list?id=8019599703232971616&page_from=more_SUBJECTS_MOVIE" to "Hollywood",
+        "$mainUrl/ranking-list?id=414907768299210008&page_from=more_SUBJECTS_MOVIE" to "Bollywood",
+        "$mainUrl/ranking-list?id=3859721901924910512&page_from=more_SUBJECTS_MOVIE" to "South Indian",
+        "$mainUrl/ranking-list?id=4903182713986896328&page_from=more_SUBJECTS_MOVIE" to "Indian Drama",
+        "$mainUrl/ranking-list?id=537172945375056936&page_from=more_SUBJECTS_MOVIE" to "Hot Short TV",
+        "$mainUrl/ranking-list?id=4380734070238626200&page_from=more_SUBJECTS_MOVIE" to "K-Drama",
+        "$mainUrl/ranking-list?id=8624142774394406504&page_from=more_SUBJECTS_MOVIE" to "C-Drama",
+        "$mainUrl/ranking-list?id=8434602210994128512&page_from=more_SUBJECTS_MOVIE" to "Top Anime",
+        "$mainUrl/ranking-list?id=5177200225164885656&page_from=more_SUBJECTS_MOVIE" to "Turkish Drama",
+        "$mainUrl/ranking-list?id=1440506765396822800&page_from=more_SUBJECTS_MOVIE" to "Western TV",
+        "$mainUrl/ranking-list?id=2602566563471442096&page_from=more_SUBJECTS_MOVIE" to "Trending Punjabi",
+        "$mainUrl/ranking-list?id=6843072545655603600&page_from=more_SUBJECTS_MOVIE" to "Popular Movies",
+        "$mainUrl/ranking-list?id=4516404531735022304&page_from=more_SUBJECTS_MOVIE" to "Action & Thriller"
+    )
+
+    private fun normalizePosterUrl(raw: String?): String? {
         if (raw.isNullOrBlank()) return null
-        val normalized = raw.trim().replace("&amp;", "&")
-        return fixUrlNull(normalized)
+        val trimmed = raw.trim()
+        if (trimmed.startsWith("data:")) return null
+        return fixUrlNull(trimmed.substringBefore("?x-oss-process=").substringBefore("?"))
     }
 
-    private suspend fun fetchDocumentWithRetry(url: String): Document {
-        val headers = mapOf(
-            "Referer" to "$mainUrl/",
-            "User-Agent" to USER_AGENT,
-            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-        )
-        val first = app.get(url, headers = headers)
-        if (first.code == 429 || first.text.length < 500) {
+    private suspend fun fetchDocument(url: String): Document {
+        val res = app.get(url, headers = requestHeaders)
+        if (res.code == 429) {
             delay(800L)
-            return app.get(url, headers = headers).document
+            return app.get(url, headers = requestHeaders).document
         }
-        return first.document
+        return res.document
+    }
+
+    private fun extractNuxtPosterMap(document: Document): Map<String, String> {
+        val map = mutableMapOf<String, String>()
+        val nuxtRaw = document.selectFirst("script#__NUXT_DATA__")?.data() ?: return map
+        runCatching {
+            val arr = JSONArray(nuxtRaw)
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                if (obj.has("detailPath") && obj.has("cover")) {
+                    val pathIdx = obj.optInt("detailPath", -1)
+                    val coverIdx = obj.optInt("cover", -1)
+                    if (pathIdx >= 0 && coverIdx >= 0) {
+                        val path = arr.optString(pathIdx)
+                        val coverObj = arr.optJSONObject(coverIdx)
+                        val urlIdx = coverObj?.optInt("url", -1) ?: -1
+                        if (path.isNotEmpty() && urlIdx >= 0) {
+                            val coverUrl = normalizePosterUrl(arr.optString(urlIdx))
+                            if (!coverUrl.isNullOrEmpty()) {
+                                map[path] = coverUrl
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return map
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val targetUrl = if (page <= 1) {
             request.data
         } else {
-            val separator = if (request.data.contains("?")) "&" else "?"
-            "${request.data}${separator}page=$page"
+            val sep = if (request.data.contains("?")) "&" else "?"
+            "${request.data}${sep}page=$page"
         }
 
-        val document = fetchDocumentWithRetry(targetUrl)
+        val document = fetchDocument(targetUrl)
+        val nuxtPosters = extractNuxtPosterMap(document)
 
-        // Home page ("/") contains all category sections inside section.comp-box
         if (request.data.trimEnd('/') == mainUrl) {
-            val lists = document.select("section.comp-box").mapNotNull { section ->
+            val homeLists = document.select("section.comp-box").mapNotNull { section ->
                 val sectionTitle = section.selectFirst("h2.action-title")?.text()?.trim()
                     ?: return@mapNotNull null
-                val items = section.select("a.video-item, a[href*='/detail/']")
-                    .mapNotNull { it.toSearchResult() }
+                val items = section.select("a.video-item")
+                    .mapNotNull { it.toSearchResult(nuxtPosters) }
                     .distinctBy { it.url }
                 if (items.isEmpty()) null else HomePageList(sectionTitle, items)
             }
-            if (lists.isNotEmpty()) {
-                return newHomePageResponse(lists, hasNext = false)
+            if (homeLists.isNotEmpty()) {
+                return newHomePageResponse(homeLists, hasNext = false)
             }
         }
 
-        // Try DOM selectors first, then fallback to __NUXT_DATA__ SSR payload
         var items = document.select("a.video-item, a[href*='/detail/']")
-            .mapNotNull { it.toSearchResult() }
+            .mapNotNull { it.toSearchResult(nuxtPosters) }
             .distinctBy { it.url }
 
         if (items.isEmpty()) {
@@ -122,7 +154,7 @@ class SflixProvider : MainAPI() {
         )
     }
 
-    private fun Element.toSearchResult(): SearchResponse? {
+    private fun Element.toSearchResult(posterMap: Map<String, String> = emptyMap()): SearchResponse? {
         val rawHref = if (this.tagName() == "a") {
             this.attr("href")
         } else {
@@ -130,16 +162,23 @@ class SflixProvider : MainAPI() {
         }
         if (rawHref.isEmpty() || !rawHref.contains("/detail/")) return null
 
-        val title = this.selectFirst("h3.text, .video-name h3, .video-name, h3, h2")?.text()?.trim()
-            ?.ifEmpty { this.attr("title").removePrefix("go to ").removeSuffix(" detail page").trim() }
-            ?: return null
+        val title = this.selectFirst("h3.text, .video-name h3, .video-name, h3")?.text()?.trim()
+            ?.ifEmpty {
+                this.attr("title")
+                    .removePrefix("go to ")
+                    .removeSuffix(" detail page")
+                    .trim()
+            } ?: return null
         if (title.isEmpty()) return null
 
+        val detailSlug = rawHref.substringAfter("/detail/").substringBefore("?")
         val href = fixUrl(rawHref)
-        val img = this.selectFirst("img")
-        val posterUrl = img?.let {
-            formatPosterUrl(it.attr("data-src").ifEmpty { it.attr("src") })
+
+        val img = this.selectFirst("img.banner, .video-item-cover img, img")
+        val rawImgUrl = img?.let {
+            it.attr("data-src").ifEmpty { it.attr("src") }
         }
+        val posterUrl = normalizePosterUrl(rawImgUrl) ?: posterMap[detailSlug]
 
         return newMovieSearchResponse(title, href, TvType.TvSeries) {
             this.posterUrl = posterUrl
@@ -164,7 +203,7 @@ class SflixProvider : MainAPI() {
 
                 val title = nuxtArr.optString(titleIdx).trim()
                 val detailPath = nuxtArr.optString(pathIdx).trim()
-                if (title.isEmpty() || detailPath.isEmpty() || title.startsWith("{")) continue
+                if (title.isEmpty() || detailPath.isEmpty() || title.contains("{movietitle}")) continue
 
                 val subjectId = obj.optInt("subjectId", -1).takeIf { it >= 0 }
                     ?.let { nuxtArr.optString(it) } ?: ""
@@ -175,7 +214,7 @@ class SflixProvider : MainAPI() {
                     val coverObj = nuxtArr.optJSONObject(coverIdx)
                     val urlIdx = coverObj?.optInt("url", -1) ?: -1
                     if (urlIdx >= 0) {
-                        posterUrl = formatPosterUrl(nuxtArr.optString(urlIdx))
+                        posterUrl = normalizePosterUrl(nuxtArr.optString(urlIdx))
                     }
                 }
 
@@ -195,17 +234,17 @@ class SflixProvider : MainAPI() {
                 }
             }
         }
-
         return results
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
         val encoded = URLEncoder.encode(query, "UTF-8")
         val searchUrl = "$mainUrl/search-result?keyword=$encoded"
-        val document = fetchDocumentWithRetry(searchUrl)
+        val document = fetchDocument(searchUrl)
+        val nuxtPosters = extractNuxtPosterMap(document)
 
         var items = document.select("a.video-item, a[href*='/detail/']")
-            .mapNotNull { it.toSearchResult() }
+            .mapNotNull { it.toSearchResult(nuxtPosters) }
             .distinctBy { it.url }
 
         if (items.isEmpty()) {
@@ -215,18 +254,21 @@ class SflixProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val document = fetchDocumentWithRetry(url)
+        val document = fetchDocument(url)
+        val nuxtPosters = extractNuxtPosterMap(document)
 
-        val title = document.selectFirst("h1.content-title")?.text()?.trim()
+        var title = document.selectFirst("h1.content-title")?.text()?.trim()
             ?: document.selectFirst("h2.title")?.text()?.trim()
             ?: return null
 
-        val poster = document.selectFirst("div.info-image img")?.let {
-            formatPosterUrl(it.attr("data-src").ifEmpty { it.attr("src") })
-        }
-        val description = document.selectFirst("p.content-desc")?.text()?.trim()
+        var poster = document.selectFirst("div.info-image img")?.let {
+            normalizePosterUrl(it.attr("data-src").ifEmpty { it.attr("src") })
+        } ?: normalizePosterUrl(document.selectFirst("meta[property=og:image]")?.attr("content"))
 
-        val ratingStr = document.selectFirst("div.rate-num")?.text()?.let {
+        var description = document.selectFirst("p.content-desc")?.text()?.trim()
+            ?: document.selectFirst("meta[property=og:description]")?.attr("content")
+
+        var ratingStr = document.selectFirst("div.rate-num")?.text()?.let {
             Regex("""(\d+(\.\d+)?)""").find(it)?.groupValues?.get(1)
         }
 
@@ -241,14 +283,14 @@ class SflixProvider : MainAPI() {
 
         val actors = document.select("section.top-cast-warp a.star-item").mapNotNull { star ->
             star.selectFirst(".star-name")?.text()?.trim()
-        }
+        }.distinct()
 
         val recommendations = document.select("section.more-like-warp a.video-item")
-            .mapNotNull { it.toSearchResult() }
+            .mapNotNull { it.toSearchResult(nuxtPosters) }
 
         var subjectId = Regex("""[?&]id=(\d+)""").find(url)?.groupValues?.get(1) ?: ""
         var detailPath = url.substringAfter("/detail/").substringBefore("?")
-        var subjectType = 1 // 1 = Movie, 2 = TvSeries
+        var subjectType = 1
         var trailerUrl: String? = null
         val dubServers = JSONArray()
         val episodes = mutableListOf<Episode>()
@@ -257,7 +299,7 @@ class SflixProvider : MainAPI() {
         if (!nuxtRaw.isNullOrEmpty()) {
             runCatching {
                 val nuxtArr = JSONArray(nuxtRaw)
-                var rootObj = nuxtArr.optJSONObject(3)
+                var rootObj: JSONObject? = null
                 for (i in 0 until nuxtArr.length()) {
                     val obj = nuxtArr.optJSONObject(i) ?: continue
                     if (obj.has("subject") && obj.has("resource")) {
@@ -266,16 +308,32 @@ class SflixProvider : MainAPI() {
                     }
                 }
 
-                val subjectObj = rootObj?.optInt("subject", -1)?.let { nuxtArr.optJSONObject(it) }
+                val subjectObj = rootObj?.optInt("subject", -1)?.takeIf { it >= 0 }
+                    ?.let { nuxtArr.optJSONObject(it) }
+
                 if (subjectObj != null) {
                     subjectObj.optInt("subjectId", -1).takeIf { it >= 0 }?.let {
-                        subjectId = nuxtArr.optString(it, subjectId)
+                        val idVal = nuxtArr.optString(it)
+                        if (idVal.isNotEmpty()) subjectId = idVal
                     }
                     subjectObj.optInt("subjectType", -1).takeIf { it >= 0 }?.let {
-                        subjectType = nuxtArr.optInt(it, 1)
+                        subjectType = nuxtArr.optInt(it, subjectType)
                     }
                     subjectObj.optInt("detailPath", -1).takeIf { it >= 0 }?.let {
-                        detailPath = nuxtArr.optString(it, detailPath)
+                        val dp = nuxtArr.optString(it)
+                        if (dp.isNotEmpty()) detailPath = dp
+                    }
+                    subjectObj.optInt("title", -1).takeIf { it >= 0 }?.let {
+                        val t = nuxtArr.optString(it)
+                        if (t.isNotEmpty() && !t.contains("{movietitle}")) title = t
+                    }
+                    subjectObj.optInt("description", -1).takeIf { it >= 0 }?.let {
+                        val d = nuxtArr.optString(it)
+                        if (d.isNotEmpty()) description = d
+                    }
+                    subjectObj.optInt("imdbRatingValue", -1).takeIf { it >= 0 }?.let {
+                        val r = nuxtArr.optString(it)
+                        if (r.isNotEmpty()) ratingStr = r
                     }
                     subjectObj.optInt("genre", -1).takeIf { it >= 0 }?.let { idx ->
                         val g = nuxtArr.optString(idx)
@@ -284,6 +342,13 @@ class SflixProvider : MainAPI() {
                     subjectObj.optInt("releaseDate", -1).takeIf { it >= 0 }?.let { idx ->
                         val rd = nuxtArr.optString(idx)
                         if (rd.length >= 4) year = rd.take(4).toIntOrNull() ?: year
+                    }
+                    subjectObj.optInt("cover", -1).takeIf { it >= 0 }?.let { coverIdx ->
+                        val coverObj = nuxtArr.optJSONObject(coverIdx)
+                        val urlIdx = coverObj?.optInt("url", -1) ?: -1
+                        if (urlIdx >= 0) {
+                            poster = normalizePosterUrl(nuxtArr.optString(urlIdx)) ?: poster
+                        }
                     }
 
                     val trailerObj = subjectObj.optInt("trailer", -1).takeIf { it >= 0 }
@@ -316,36 +381,47 @@ class SflixProvider : MainAPI() {
                     }
                 }
 
-                val resourceObj = rootObj?.optInt("resource", -1)?.let { nuxtArr.optJSONObject(it) }
+                val resourceObj = rootObj?.optInt("resource", -1)?.takeIf { it >= 0 }
+                    ?.let { nuxtArr.optJSONObject(it) }
                 val seasonsArr = resourceObj?.optInt("seasons", -1)?.takeIf { it >= 0 }
                     ?.let { nuxtArr.optJSONArray(it) }
 
                 if (seasonsArr != null) {
                     for (s in 0 until seasonsArr.length()) {
-                        val seObj = nuxtArr.optJSONObject(seasonsArr.optInt(s, -1)) ?: continue
-                        val seasonNum = nuxtArr.optInt(seObj.optInt("se", -1), s + 1)
-                        val maxEp = nuxtArr.optInt(seObj.optInt("maxEp", -1), 1)
-                        for (ep in 1..maxEp) {
-                            val playData = buildEpisodePayload(
-                                detailPath = detailPath,
-                                subjectId = subjectId,
-                                season = seasonNum,
-                                episode = ep,
-                                isSeries = true,
-                                trailerUrl = trailerUrl,
-                                dubs = dubServers
-                            )
-                            episodes.add(
-                                newEpisode(playData) {
-                                    this.name = "Episode $ep"
-                                    this.season = seasonNum
-                                    this.episode = ep
-                                }
-                            )
+                        val seObj = nuxtArr.optJSONObject(seasonsArr.optInt(seasonsArr.optInt(s, -1), -1)) ?: nuxtArr.optJSONObject(seasonsArr.optInt(s, -1)) ?: continue
+                        val seasonNum = seObj.optInt("se", -1).takeIf { it >= 0 }
+                            ?.let { nuxtArr.optInt(it, s + 1) } ?: (s + 1)
+                        val maxEp = seObj.optInt("maxEp", -1).takeIf { it >= 0 }
+                            ?.let { nuxtArr.optInt(it, 1) } ?: 1
+
+                        if (subjectType == 2 || maxEp > 1 || seasonsArr.length() > 1) {
+                            for (ep in 1..maxEp) {
+                                val playData = buildEpisodePayload(
+                                    detailPath = detailPath,
+                                    subjectId = subjectId,
+                                    season = if (seasonNum <= 0) 1 else seasonNum,
+                                    episode = ep,
+                                    isSeries = true,
+                                    trailerUrl = trailerUrl,
+                                    dubs = dubServers
+                                )
+                                episodes.add(
+                                    newEpisode(playData) {
+                                        this.name = "Episode $ep"
+                                        this.season = if (seasonNum <= 0) 1 else seasonNum
+                                        this.episode = ep
+                                    }
+                                )
+                            }
                         }
                     }
                 }
             }
+        }
+
+        if (subjectId.isEmpty()) {
+            val canonicalHref = document.selectFirst("link[rel=canonical]")?.attr("href") ?: ""
+            subjectId = Regex("""[?&]id=(\d+)""").find(canonicalHref)?.groupValues?.get(1) ?: ""
         }
 
         val isSeries = subjectType == 2 || episodes.size > 1
@@ -424,6 +500,11 @@ class SflixProvider : MainAPI() {
         }.toString()
     }
 
+    private data class CapturedStream(
+        val url: String,
+        val headers: Map<String, String>
+    )
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -442,19 +523,21 @@ class SflixProvider : MainAPI() {
         data class ServerEntry(val label: String, val id: String, val path: String)
 
         val servers = mutableListOf<ServerEntry>()
+        if (defaultId.isNotEmpty()) {
+            servers.add(ServerEntry("Primary", defaultId, defaultPath))
+        }
         if (dubsArr != null && dubsArr.length() > 0) {
             for (i in 0 until dubsArr.length()) {
                 val d = dubsArr.optJSONObject(i) ?: continue
                 val dId = d.optString("id")
                 val dPath = d.optString("path").ifEmpty { defaultPath }
                 val dName = d.optString("name").ifEmpty { "Server ${i + 1}" }
-                if (dId.isNotEmpty()) {
+                if (dId.isNotEmpty() && servers.none { it.id == dId }) {
                     servers.add(ServerEntry(dName, dId, dPath))
+                } else if (dId == defaultId && servers.isNotEmpty() && servers[0].label == "Primary") {
+                    servers[0] = ServerEntry(dName, dId, dPath)
                 }
             }
-        }
-        if (servers.isEmpty() && defaultId.isNotEmpty()) {
-            servers.add(ServerEntry("Original Audio", defaultId, defaultPath))
         }
 
         var anyFound = false
@@ -463,7 +546,7 @@ class SflixProvider : MainAPI() {
 
         for (server in servers.take(2)) {
             val targetPlayerUrl = if (isSeries) {
-                "$playerUrl/spa/videoPlayPage/movies/${server.path}?id=${server.id}&se=$season&ep=$episode&type=/series/detail&lang=en"
+                "$playerUrl/spa/videoPlayPage/movies/${server.path}?id=${server.id}&se=$season&ep=$episode&type=/movie/detail&lang=en"
             } else {
                 "$playerUrl/spa/videoPlayPage/movies/${server.path}?id=${server.id}&type=/movie/detail&lang=en"
             }
@@ -474,7 +557,8 @@ class SflixProvider : MainAPI() {
                 excludeTrailer = trailerUrl
             )
 
-            streams.forEach { streamUrl ->
+            streams.forEach { captured ->
+                val streamUrl = captured.url
                 if (emittedUrls.add(streamUrl)) {
                     anyFound = true
                     val streamType = when {
@@ -486,7 +570,8 @@ class SflixProvider : MainAPI() {
                         streamUrl.contains("1080") -> "1080p"
                         streamUrl.contains("720") -> "720p"
                         streamUrl.contains("480") -> "480p"
-                        streamUrl.contains(".mpd", true) -> "Auto/DASH"
+                        streamUrl.contains("360") -> "360p"
+                        streamUrl.contains(".mpd", true) -> "DASH"
                         else -> "HD"
                     }
 
@@ -497,13 +582,9 @@ class SflixProvider : MainAPI() {
                             url = streamUrl,
                             type = streamType
                         ) {
-                            this.referer = "$playerUrl/"
-                            this.headers = mapOf(
-                                "Origin" to playerUrl,
-                                "Referer" to "$playerUrl/",
-                                "User-Agent" to USER_AGENT
-                            )
-                            this.quality = Qualities.Unknown.value
+                            this.referer = captured.headers["Referer"] ?: "$playerUrl/"
+                            this.headers = captured.headers
+                            this.quality = getQualityFromName(qualityTag)
                         }
                     )
                 }
@@ -512,11 +593,12 @@ class SflixProvider : MainAPI() {
             subs.forEach { subUrl ->
                 if (emittedSubs.add(subUrl)) {
                     val langLabel = when {
-                        subUrl.contains("hi", true) || subUrl.contains("hindi", true) -> "Hindi"
-                        subUrl.contains("es", true) -> "Spanish"
-                        subUrl.contains("fr", true) -> "French"
-                        subUrl.contains("ar", true) -> "Arabic"
-                        subUrl.contains("id", true) -> "Indonesian"
+                        subUrl.contains("-hi", true) || subUrl.contains("hindi", true) -> "Hindi"
+                        subUrl.contains("-es", true) -> "Spanish"
+                        subUrl.contains("-fr", true) -> "French"
+                        subUrl.contains("-ar", true) -> "Arabic"
+                        subUrl.contains("-id", true) -> "Indonesian"
+                        subUrl.contains("-pt", true) -> "Portuguese"
                         else -> "English"
                     }
                     subtitleCallback.invoke(
@@ -527,6 +609,8 @@ class SflixProvider : MainAPI() {
                     )
                 }
             }
+
+            if (anyFound) break
         }
 
         return anyFound
@@ -545,9 +629,10 @@ class SflixProvider : MainAPI() {
         pageUrl: String,
         referer: String,
         excludeTrailer: String
-    ): Pair<List<String>, List<String>> {
+    ): Pair<List<CapturedStream>, List<String>> {
         val context = getAppContext() ?: return Pair(emptyList(), emptyList())
-        val foundStreams = ConcurrentHashMap.newKeySet<String>()
+        val foundStreams = CopyOnWriteArrayList<CapturedStream>()
+        val seenStreamUrls = ConcurrentHashMap.newKeySet<String>()
         val foundSubs = ConcurrentHashMap.newKeySet<String>()
         val mainHandler = Handler(Looper.getMainLooper())
 
@@ -565,11 +650,14 @@ class SflixProvider : MainAPI() {
             "adskeeper.com",
             "tsyndicate.com",
             "exoclick.com",
+            "5gvci.com",
+            "nap5k.com",
+            "richinfo.co",
             "ifunny-promo",
             "/other/"
         )
 
-        withTimeoutOrNull(18_000L) {
+        withTimeoutOrNull(15_000L) {
             suspendCancellableCoroutine<Unit> { continuation ->
                 val resumed = AtomicBoolean(false)
                 var webView: WebView? = null
@@ -604,17 +692,21 @@ class SflixProvider : MainAPI() {
                         val wv = WebView(context)
                         webView = wv
 
-                        CookieManager.getInstance().apply {
+                        val cookieManager = CookieManager.getInstance().apply {
                             setAcceptCookie(true)
                             setAcceptThirdPartyCookies(wv, true)
+                            setCookie(mainUrl, userCookies)
+                            setCookie(playerUrl, userCookies)
                         }
+
+                        val webViewUa = wv.settings.userAgentString.ifBlank { USER_AGENT }
 
                         wv.settings.apply {
                             javaScriptEnabled = true
                             domStorageEnabled = true
+                            databaseEnabled = true
                             mediaPlaybackRequiresUserGesture = false
                             mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                            userAgentString = USER_AGENT
                         }
 
                         wv.webViewClient = object : WebViewClient() {
@@ -640,36 +732,46 @@ class SflixProvider : MainAPI() {
 
                                 val isVideoStream = reqUrl.contains(".mpd", ignoreCase = true) ||
                                     reqUrl.contains(".m3u8", ignoreCase = true) ||
-                                    reqUrl.contains(".mp4", ignoreCase = true)
+                                    (reqUrl.contains(".mp4", ignoreCase = true) && !reqUrl.contains("loading", true))
 
                                 val isTrailer = excludeTrailer.isNotEmpty() &&
                                     reqUrl.substringBefore("?") == excludeTrailer.substringBefore("?")
 
                                 if (isVideoStream && !isTrailer && !reqUrl.startsWith("blob:")) {
-                                    foundStreams.add(reqUrl)
-                                    mainHandler.postDelayed({ finish() }, 1500L)
+                                    if (seenStreamUrls.add(reqUrl)) {
+                                        val capturedHeaders = mutableMapOf<String, String>()
+                                        request.requestHeaders?.forEach { (k, v) ->
+                                            if (!k.equals("Range", ignoreCase = true)) {
+                                                capturedHeaders[k] = v
+                                            }
+                                        }
+                                        capturedHeaders.putIfAbsent("Origin", playerUrl)
+                                        capturedHeaders.putIfAbsent("Referer", "$playerUrl/")
+                                        capturedHeaders.putIfAbsent("User-Agent", webViewUa)
+
+                                        val cookies = cookieManager.getCookie(reqUrl)
+                                            ?: cookieManager.getCookie(playerUrl)
+                                            ?: userCookies
+                                        if (!cookies.isNullOrBlank()) {
+                                            capturedHeaders["Cookie"] = cookies
+                                        }
+
+                                        foundStreams.add(CapturedStream(reqUrl, capturedHeaders))
+                                        mainHandler.postDelayed({ finish() }, 1000L)
+                                    }
+
+                                    return WebResourceResponse(
+                                        "text/plain",
+                                        "utf-8",
+                                        ByteArrayInputStream(ByteArray(0))
+                                    )
                                 }
 
                                 return super.shouldInterceptRequest(view, request)
                             }
-
-                            override fun onPageFinished(view: WebView?, url: String?) {
-                                super.onPageFinished(view, url)
-                                view?.evaluateJavascript(
-                                    """
-                                    (function() {
-                                        var btn = document.querySelector('.art-state, .watch-btn, video');
-                                        if (btn && btn.click) btn.click();
-                                        var v = document.querySelector('video');
-                                        if (v && v.play) v.play().catch(function(){});
-                                    })();
-                                    """.trimIndent(),
-                                    null
-                                )
-                            }
                         }
 
-                        wv.loadUrl(pageUrl, mapOf("Referer" to referer))
+                        wv.loadUrl(pageUrl, mapOf("Referer" to referer, "Cookie" to userCookies))
                     }.onFailure {
                         finish()
                     }
