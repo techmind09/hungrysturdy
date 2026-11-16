@@ -7,12 +7,15 @@ import android.content.Context
 @CloudstreamPlugin
 class Plugin : Plugin() {
     override fun load(context: Context) {
+        // Main Providers
         registerMainAPI(PrmoviesProvider())
         registerMainAPI(KatDramaProvider())
         registerMainAPI(DramaVerseProvider())
         registerMainAPI(GhostflixProvider())
         registerMainAPI(GokuHDProvider())
+        registerMainAPI(ToonPlayProvider())
 
+        // Extractors Registration
         registerExtractorAPI(GokuHDExtractor())
         registerExtractorAPI(KatHubCloudExtractor())
         registerExtractorAPI(HubCloudDrive())
@@ -29,5 +32,10 @@ class Plugin : Plugin() {
         registerExtractorAPI(KatFuckingFastExtractor())
         registerExtractorAPI(KatGoFlixExtractor())
         registerExtractorAPI(Filemoon())
+
+        // ToonPlay Extractors
+        registerExtractorAPI(FlixCloudExtractor())
+        registerExtractorAPI(AbyssPlayerExtractor())
+        registerExtractorAPI(RavokExtractor())
     }
 }
