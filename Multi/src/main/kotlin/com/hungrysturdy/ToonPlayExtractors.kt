@@ -1,8 +1,69 @@
+
 package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
+
+private suspend fun resolveMedia(
+    extractorName: String,
+    url: String,
+    referer: String?,
+    subtitleCallback: (SubtitleFile) -> Unit,
+    callback: (ExtractorLink) -> Unit
+) {
+    println("$extractorName: Starting $url")
+
+    try {
+        val response = app.get(
+            url,
+            referer = referer,
+            interceptor = WebViewResolver(
+                interceptUrl = Regex(
+                    """(?i)(master\.m3u8|\.m3u8(?:\?|$)|\.mp4(?:\?|$))"""
+                ),
+                additionalUrls = listOf(
+                    Regex("""(?i).*\.m3u8.*"""),
+                    Regex("""(?i).*\.mp4.*""")
+                ),
+                timeout = 20000L
+            )
+        )
+
+        val mediaUrl = response.url.trim()
+
+        println("$extractorName: Response URL = $mediaUrl")
+
+        val isHls = mediaUrl.contains(".m3u8", true)
+        val isMp4 = mediaUrl.contains(".mp4", true)
+
+        if (!isHls && !isMp4) {
+            println("$extractorName: No media URL detected")
+            return
+        }
+
+        callback.invoke(
+            newExtractorLink(
+                source = extractorName,
+                name = "$extractorName ${if (isHls) "HLS" else "MP4"}",
+                url = mediaUrl,
+                type = if (isHls) {
+                    ExtractorLinkType.M3U8
+                } else {
+                    ExtractorLinkType.VIDEO
+                }
+            ) {
+                this.referer = referer ?: url
+                this.quality = Qualities.Unknown.value
+            }
+        )
+
+        println("$extractorName: Link callback completed")
+
+    } catch (e: Exception) {
+        println("$extractorName ERROR: ${e.stackTraceToString()}")
+    }
+}
 
 class FlixCloudExtractor : ExtractorApi() {
     override val name = "FlixCloud"
@@ -15,31 +76,10 @@ class FlixCloudExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        try {
-            val intercepted = app.get(
-                url,
-                referer = referer,
-                interceptor = WebViewResolver(
-                    interceptUrl = Regex("""(\.m3u8|\.mp4|master|playlist|fetch9)"""),
-                    additionalUrls = listOf(Regex(""".*""")),
-                    timeout = 12000L
-                )
-            )
-            val finalUrl = intercepted.url
-            if (finalUrl.contains(".m3u8", true) || finalUrl.contains(".mp4", true)) {
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = name,
-                        url = finalUrl,
-                        type = if (finalUrl.contains(".mp4", true)) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = url
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-            }
-        } catch (_: Exception) {}
+        resolveMedia(
+            name, url, referer,
+            subtitleCallback, callback
+        )
     }
 }
 
@@ -54,31 +94,10 @@ class AbyssPlayerExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        try {
-            val intercepted = app.get(
-                url,
-                referer = referer,
-                interceptor = WebViewResolver(
-                    interceptUrl = Regex("""(\.m3u8|\.mp4|master|playlist)"""),
-                    additionalUrls = listOf(Regex(""".*""")),
-                    timeout = 12000L
-                )
-            )
-            val finalUrl = intercepted.url
-            if (finalUrl.contains(".m3u8", true) || finalUrl.contains(".mp4", true)) {
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = name,
-                        url = finalUrl,
-                        type = if (finalUrl.contains(".mp4", true)) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = url
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-            }
-        } catch (_: Exception) {}
+        resolveMedia(
+            name, url, referer,
+            subtitleCallback, callback
+        )
     }
 }
 
@@ -93,30 +112,9 @@ class RavokExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        try {
-            val intercepted = app.get(
-                url,
-                referer = referer,
-                interceptor = WebViewResolver(
-                    interceptUrl = Regex("""(\.m3u8|\.mp4|master|playlist|cdn/hls)"""),
-                    additionalUrls = listOf(Regex(""".*""")),
-                    timeout = 12000L
-                )
-            )
-            val finalUrl = intercepted.url
-            if (finalUrl.contains(".m3u8", true) || finalUrl.contains(".mp4", true)) {
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = name,
-                        url = finalUrl,
-                        type = if (finalUrl.contains(".mp4", true)) ExtractorLinkType.VIDEO else ExtractorLinkType.M3U8
-                    ) {
-                        this.referer = url
-                        this.quality = Qualities.Unknown.value
-                    }
-                )
-            }
-        } catch (_: Exception) {}
+        resolveMedia(
+            name, url, referer,
+            subtitleCallback, callback
+        )
     }
 }
