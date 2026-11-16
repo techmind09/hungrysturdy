@@ -396,7 +396,7 @@ class ToonPlayProvider : MainAPI() {
         val targetUrl = epData?.watchUrl ?: data
         var foundLinks = false
 
-        val serverUrls = listOf("options-1", "options-0", "options-2").map { serverOpt ->
+        val serverUrls = listOf("options-1", "options-0", "options-2", "hd-1", "hd-2").map { serverOpt ->
             if (targetUrl.contains("server=")) {
                 targetUrl.replace(Regex("server=[^&]+"), "server=$serverOpt")
             } else {
@@ -406,7 +406,7 @@ class ToonPlayProvider : MainAPI() {
 
         for (sUrl in serverUrls) {
             val doc = fetchRenderedDom(sUrl)
-            val iframeSrc = doc.selectFirst("iframe#watchpage-active-iframe, iframe[src*='ravok'], iframe[src*='animesalt'], iframe[src*='abyss'], iframe[src*='flixcloud']")
+            val iframeSrc = doc.selectFirst("iframe#watchpage-active-iframe, iframe[src*='ravok'], iframe[src*='animesalt'], iframe[src*='abyss'], iframe[src*='flixcloud'], iframe")
                 ?.attr("src")?.trim().orEmpty()
 
             if (iframeSrc.isBlank()) continue
@@ -461,7 +461,7 @@ class ToonPlayProvider : MainAPI() {
                     else -> "ToonPlay"
                 }
                 val collected = mutableListOf<ExtractorLink>()
-                if (iframeSrc.contains("flixcloud", true)) {
+                if (iframeSrc.contains("flixcloud", true) || sUrl.contains("hd-1", true) || sUrl.contains("hd-2", true)) {
                     FlixCloudExtractor().getUrl(fixUrl(iframeSrc), "$mainUrl/", subtitleCallback) { link ->
                         collected.add(link)
                     }
