@@ -35,8 +35,7 @@ class SflixProvider : MainAPI() {
     override var hasMainPage = true
     override var supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
 
-    // Escaped dollar signs (\$) to prevent Kotlin string interpolation errors
-    private val userCookies = "sflix_i18n_lang=en; _ga=GA1.1.622965780.1794742147; sflix_token=%22eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjE5NjY4NTU1NTcyNzgwNjIyNzYsImF0cCI6MywiZXh0IjoiMTc5NDc0MjE0NyIsImV4cCI6MTgwMjUxODE0NywiaWF0IjoxNzk0NzQxODQ3fQ.8aOIckQOSKyISQdl85SAJvuMlhXfWodHmcPOIvlg0pM%22; vrk4n8fqhwc3jzy7pbsmgt6dx5lha2u9=01a1b98c-7aec-7761-b581-b09b7730a724_2; dom3ic8zudi28v8lr6fgphwffqoz0j6c=01a1b98c-7aec-7761-b581-b09b7730a724; imprCounter_53d6f18bc2561bc4f4ecc19cefe348bf_expiry=Invalid Date; imprCounter_53d6f18bc2561bc4f4ecc19cefe348bf=3; _ga_CJSG3GJM85=GS2.1.s1794753588\$o3\$g1\$t1794754299\$j60\$l0\$h0; sb_main_29ea333f714080c847539fb7690ac422=1; pp_main_505b167260767d732d39389d9b6ebed9=1; sb_count_29ea333f714080c847539fb7690ac422=1"
+    private val userCookies = "sflix_i18n_lang=en; _ga=GA1.1.622965780.1794742147; sflix_token=%22eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjE5NjY4NTU1NTcyNzgwNjIyNzYsImF0cCI6MywiZXh0IjoiMTc5NDc0MjE0NyIsImV4cCI6MTgwMjUxODE0NywiaWF0IjoxNzk0NzQxODQ3fQ.8aOIckQOSKyISQdl85SAJvuMlhXfWodHmcPOIvlg0pM%22; vrk4n8fqhwc3jzy7pbsmgt6dx5lha2u9=01a1b98c-7aec-7761-b581-b09b7730a724_2; dom3ic8zudi28v8lr6fgphwffqoz0j6c=01a1b98c-7aec-7761-b581-b09b7730a724; imprCounter_53d6f18bc2561bc4f4ecc19cefe348bf_expiry=Invalid Date; imprCounter_53d6f18bc2561bc4f4ecc19cefe348bf=3; sb_main_29ea333f714080c847539fb7690ac422=1; pp_main_505b167260767d732d39389d9b6ebed9=1; sb_count_29ea333f714080c847539fb7690ac422=1"
 
     private val defaultPosterHeaders = mapOf(
         "Referer" to "$mainUrl/",
@@ -458,6 +457,7 @@ class SflixProvider : MainAPI() {
                 addTrailer(trailerUrl)
             }
         } else {
+            // FIX: For Movies, explicitly pass season=1, episode=1, isSeries=false
             val moviePlayData = buildEpisodePayload(
                 detailPath = detailPath,
                 subjectId = subjectId,
@@ -515,8 +515,9 @@ class SflixProvider : MainAPI() {
         val payload = runCatching { JSONObject(data) }.getOrNull() ?: return false
         val defaultPath = payload.optString("detailPath")
         val defaultId = payload.optString("subjectId")
-        val season = payload.optInt("season", 1)
-        val episode = payload.optInt("episode", 1)
+        // FIX: Ensure default fallback values for Movies where season/episode are 0/missing
+        val season = payload.optInt("season", 1).takeIf { it > 0 } ?: 1
+        val episode = payload.optInt("episode", 1).takeIf { it > 0 } ?: 1
         val isSeries = payload.optBoolean("isSeries", false)
         val trailerUrl = payload.optString("trailerUrl")
         val dubsArr = payload.optJSONArray("dubs")
@@ -549,6 +550,7 @@ class SflixProvider : MainAPI() {
             val targetPlayerUrl = if (isSeries) {
                 "$playerUrl/spa/videoPlayPage/movies/${server.path}?id=${server.id}&se=$season&ep=$episode&type=/movie/detail&lang=en"
             } else {
+                // FIX: Movie specific playback URL format
                 "$playerUrl/spa/videoPlayPage/movies/${server.path}?id=${server.id}&type=/movie/detail&lang=en"
             }
 
@@ -738,6 +740,7 @@ class SflixProvider : MainAPI() {
                                 val isTrailer = excludeTrailer.isNotEmpty() &&
                                     reqUrl.substringBefore("?") == excludeTrailer.substringBefore("?")
 
+                                // FIX: Intercept media streams instantly to avoid stream consumption
                                 if (isVideoStream && !isTrailer && !reqUrl.startsWith("blob:")) {
                                     if (seenStreamUrls.add(reqUrl)) {
                                         val capturedHeaders = mutableMapOf<String, String>()
@@ -758,7 +761,7 @@ class SflixProvider : MainAPI() {
                                         }
 
                                         foundStreams.add(CapturedStream(reqUrl, capturedHeaders))
-                                        mainHandler.postDelayed({ finish() }, 1000L)
+                                        mainHandler.postDelayed({ finish() }, 800L)
                                     }
 
                                     return WebResourceResponse(
