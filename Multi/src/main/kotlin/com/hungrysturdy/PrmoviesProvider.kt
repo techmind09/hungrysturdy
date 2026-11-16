@@ -12,12 +12,19 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 class PrmoviesProvider : MainAPI() {
-    override var mainUrl = "https://prmovies.kids"
+    override var mainUrl = "https://prmovies.coupons"
     override var name = "Prmovies"
     override val hasMainPage = true
     override var lang = "en"
     override val hasDownloadSupport = false
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries)
+
+    private val mirrorDomains = listOf(
+        "https://prmovies.com.cv",
+        "https://prmovies.kids",
+        "https://prmovies.coupons",
+        "https://prmovies.com"
+    )
 
     private val userAgent = "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36"
 
@@ -41,51 +48,71 @@ class PrmoviesProvider : MainAPI() {
         return response.code in listOf(403, 503)
     }
 
-    override val mainPage = listOf(
-        MainPageData("Latest", "$mainUrl/"),
-        MainPageData("Trending", "$mainUrl/genre/top-rated/"),
-        MainPageData("New Movies", "$mainUrl/release-year/2026/"),
-        MainPageData("Hollywood Dubbed", "$mainUrl/genre/hollywood-dubbed/"),
-        MainPageData("South Dubbed", "$mainUrl/genre/south-special/"),
-        MainPageData("Unofficial Hindi Dubbed", "https://hhdmovies.forum/genre/unofficial-dubbed/"),
-        MainPageData("Bollywood (2026)", "$mainUrl/account/?ptype=post&tax_category%5B0%5D=bollywood&tax_release-year=2026&wpas=1"),
-        MainPageData("Bollywood (2025)", "$mainUrl/account/?ptype=post&tax_category%5B0%5D=bollywood&tax_release-year=2025&wpas=1"),
-        MainPageData("Bollywood (2024)", "$mainUrl/account/?ptype=post&tax_category%5B0%5D=bollywood&tax_release-year=2024&wpas=1"),
-        MainPageData("Hollywood (2026)", "$mainUrl/account/?ptype=post&tax_category%5B0%5D=hollywood&tax_release-year=2026&wpas=1"),
-        MainPageData("Hollywood (2025)", "$mainUrl/account/?ptype=post&tax_category%5B0%5D=hollywood&tax_release-year=2025&wpas=1"),
-        MainPageData("Hollywood (2024)", "$mainUrl/account/?ptype=post&tax_category%5B0%5D=hollywood&tax_release-year=2024&wpas=1"),
-        MainPageData("English Series", "$mainUrl/series/"),
-        MainPageData("Netflix", "$mainUrl/director/netflix/"),
-        MainPageData("Amazon Prime", "$mainUrl/director/amazon-prime/"),
-        MainPageData("Altbalaji", "$mainUrl/director/altbalaji/"),
-        MainPageData("Zee5", "$mainUrl/director/zee5/"),
-        MainPageData("Voot", "$mainUrl/director/voot-originals/"),
-        MainPageData("Mx Player", "$mainUrl/director/mx-player/"),
-        MainPageData("Hotstar", "$mainUrl/director/hotstar/"),
-        MainPageData("Viu", "$mainUrl/director/viu-originals/"),
-        MainPageData("Sony Liv", "$mainUrl/director/sonyliv-original/")
-    )
+    override val mainPage
+        get() = listOf(
+            MainPageData("Latest", "$mainUrl/"),
+            MainPageData("Trending", "$mainUrl/genre/top-rated/"),
+            MainPageData("New Movies", "$mainUrl/release-year/2026/"),
+            MainPageData("Hollywood Dubbed", "$mainUrl/genre/hollywood-dubbed/"),
+            MainPageData("South Dubbed", "$mainUrl/genre/south-special/"),
+            MainPageData("Unofficial Hindi Dubbed", "https://hhdmovies.forum/genre/unofficial-dubbed/"),
+            MainPageData("Bollywood (2026)", "$mainUrl/account/?ptype=post&tax_category%5B0%5D=bollywood&tax_release-year=2026&wpas=1"),
+            MainPageData("Bollywood (2025)", "$mainUrl/account/?ptype=post&tax_category%5B0%5D=bollywood&tax_release-year=2025&wpas=1"),
+            MainPageData("Bollywood (2024)", "$mainUrl/account/?ptype=post&tax_category%5B0%5D=bollywood&tax_release-year=2024&wpas=1"),
+            MainPageData("Hollywood (2026)", "$mainUrl/account/?ptype=post&tax_category%5B0%5D=hollywood&tax_release-year=2026&wpas=1"),
+            MainPageData("Hollywood (2025)", "$mainUrl/account/?ptype=post&tax_category%5B0%5D=hollywood&tax_release-year=2025&wpas=1"),
+            MainPageData("Hollywood (2024)", "$mainUrl/account/?ptype=post&tax_category%5B0%5D=hollywood&tax_release-year=2024&wpas=1"),
+            MainPageData("English Series", "$mainUrl/series/"),
+            MainPageData("Netflix", "$mainUrl/director/netflix/"),
+            MainPageData("Amazon Prime", "$mainUrl/director/amazon-prime/"),
+            MainPageData("Altbalaji", "$mainUrl/director/altbalaji/"),
+            MainPageData("Zee5", "$mainUrl/director/zee5/"),
+            MainPageData("Voot", "$mainUrl/director/voot-originals/"),
+            MainPageData("Mx Player", "$mainUrl/director/mx-player/"),
+            MainPageData("Hotstar", "$mainUrl/director/hotstar/"),
+            MainPageData("Viu", "$mainUrl/director/viu-originals/"),
+            MainPageData("Sony Liv", "$mainUrl/director/sonyliv-original/")
+        )
 
-    private suspend fun getPage(url: String, referer: String? = null): NiceResponse? {
+    private suspend fun fetchSingleUrl(targetUrl: String, referer: String? = null): NiceResponse? {
         return try {
-            val response = app.get(url, headers = browserHeaders, referer = referer)
-            if (!isCloudflarePage(response)) {
+            val response = app.get(targetUrl, headers = browserHeaders, referer = referer)
+            val resolved = if (!isCloudflarePage(response)) {
                 response
             } else {
-                mutexFor(url).withLock {
-                    val cfKiller = killerFor(url)
-                    val retryResponse = app.get(url, headers = browserHeaders, interceptor = cfKiller, referer = referer)
+                mutexFor(targetUrl).withLock {
+                    val cfKiller = killerFor(targetUrl)
+                    val retryResponse = app.get(targetUrl, headers = browserHeaders, interceptor = cfKiller, referer = referer)
                     if (isCloudflarePage(retryResponse)) {
                         cfKiller.savedCookies.clear()
-                        app.get(url, headers = browserHeaders, interceptor = cfKiller, referer = referer)
+                        app.get(targetUrl, headers = browserHeaders, interceptor = cfKiller, referer = referer)
                     } else {
                         retryResponse
                     }
                 }
             }
+            if (resolved.code in 200..299) resolved else null
         } catch (e: Exception) {
             null
         }
+    }
+
+    private suspend fun getPage(url: String, referer: String? = null): NiceResponse? {
+        val matchedDomain = mirrorDomains.firstOrNull { url.startsWith(it, ignoreCase = true) }
+            ?: return fetchSingleUrl(url, referer)
+
+        val candidates = (listOf(mainUrl.trimEnd('/')) + mirrorDomains).distinct()
+        for (domain in candidates) {
+            val candidateUrl = domain + url.substring(matchedDomain.length)
+            val response = fetchSingleUrl(candidateUrl, referer)
+            if (response != null) {
+                if (mainUrl != domain) {
+                    mainUrl = domain
+                }
+                return response
+            }
+        }
+        return null
     }
 
     private fun extractItems(html: String): List<SearchResponse> {
