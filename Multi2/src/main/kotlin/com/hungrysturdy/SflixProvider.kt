@@ -10,18 +10,13 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import com.fasterxml.jackson.databind.JsonNode
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
-import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId
-import com.lagradost.cloudstream3.LoadResponse.Companion.addTMDbId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.nodes.Document
@@ -43,28 +38,8 @@ import kotlin.coroutines.resume
 class SflixProvider : MainAPI() {
 
     companion object {
-        const val SPORT_API = "https://h5-sport-api.aoneroom.com/wefeed-h5api-bff"
-        const val SPORT_URL = "https://www.sportslive.wine/"
         const val WEB_USER_AGENT =
             "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36"
-
-        val WEB_DOMAINS = listOf(
-            "https://sflix.film",
-            "https://123moviesfree.club",
-            "https://movie-box.co",
-            "https://movieboxonline.net",
-            "https://h5-api.aoneroom.com",
-            "https://netnaija.film",
-            "https://movieboxhd.net"
-        )
-
-        val HOST_POOL = listOf(
-            "https://api6.aoneroom.com",
-            "https://api5.aoneroom.com",
-            "https://api4.aoneroom.com",
-            "https://api4sg.aoneroom.com",
-            "https://api3.aoneroom.com"
-        )
 
         private const val TOKEN_BOOTSTRAP_URL =
             "https://apig.inmoviebox.com/wefeed-mobile-bff/tab/ranking-list?tabId=0&categoryType=4516404531735022304&page=1&perPage=1"
@@ -93,15 +68,36 @@ class SflixProvider : MainAPI() {
         }
     }
 
-    override var mainUrl = HOST_POOL[0]
+    override var mainUrl = "https://sflix.film"
     private val playerUrl = "https://mzfi.me"
     override var name = "Sflix"
     override val hasMainPage = true
     override var lang = "en"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
 
-    // Using normal string with escaped dollar signs (\$) to prevent interpolation errors
-    private val userCookies = "sflix_i18n_lang=en; _ga=GA1.1.622965780.1794742147; sflix_token=%22eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjE5NjY4NTU1NTcyNzgwNjIyNzYsImF0cCI6MywiZXh0IjoiMTc5NDc0MjE0NyIsImV4cCI6MTgwMjUxODE0NywiaWF0IjoxNzk0NzQxODQ3fQ.8aOIckQOSKyISQdl85SAJvuMlhXfWodHmcPOIvlg0pM%22; vrk4n8fqhwc3jzy7pbsmgt6dx5lha2u9=01a1b98c-7aec-7761-b581-b09b7730a724_2; dom3ic8zudi28v8lr6fgphwffqoz0j6c=01a1b98c-7aec-7761-b581-b09b7730a724; imprCounter_53d6f18bc2561bc4f4ecc19cefe348bf_expiry=Invalid Date; imprCounter_53d6f18bc2561bc4f4ecc19cefe348bf=3; _ga_CJSG3GJM85=GS2.1.s1794753588\$o3\$g1\$t1794754299\$j60\$l0\$h0; sb_main_29ea333f714080c847539fb7690ac422=1; pp_main_505b167260767d732d39389d9b6ebed9=1; sb_count_29ea333f714080c847539fb7690ac422=1"
+    private val random = SecureRandom()
+    private val deviceId: String = generateDeviceId()
+
+    private val modernUserAgent =
+        "com.community.mbox.in/50020130 (Linux; U; Android 14; en_IN; Pixel 8; Build/UD1A.230803.041; Cronet/145.0.7582.0)"
+
+    private val modernClientInfo =
+        "{\"package_name\":\"com.community.mbox.in\",\"version_name\":\"4.0.03.0920.03\",\"version_code\":50020130," +
+            "\"os\":\"android\",\"os_version\":\"14\",\"device_id\":\"$deviceId\",\"install_store\":\"official\"," +
+            "\"gaid\":\"1b2212c1-dadf-43c3-a0c8-bd6ce48ae22d\",\"brand\":\"Google\",\"model\":\"Pixel 8\"," +
+            "\"system_language\":\"en\",\"net\":\"NETWORK_WIFI\",\"region\":\"IN\",\"timezone\":\"Asia/Calcutta\",\"sp_code\":\"\"}"
+
+    private val userCookies =
+        "sflix_i18n_lang=en; _ga=GA1.1.622965780.1794742147; " +
+            "sflix_token=%22eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjE5NjY4NTU1NTcyNzgwNjIyNzYsImF0cCI6MywiZXh0IjoiMTc5NDc0MjE0NyIsImV4cCI6MTgwMjUxODE0NywiaWF0IjoxNzk0NzQxODQ3fQ.8aOIckQOSKyISQdl85SAJvuMlhXfWodHmcPOIvlg0pM%22; " +
+            "vrk4n8fqhwc3jzy7pbsmgt6dx5lha2u9=01a1b98c-7aec-7761-b581-b09b7730a724_2; " +
+            "dom3ic8zudi28v8lr6fgphwffqoz0j6c=01a1b98c-7aec-7761-b581-b09b7730a724; " +
+            "imprCounter_53d6f18bc2561bc4f4ecc19cefe348bf_expiry=Invalid Date; " +
+            "imprCounter_53d6f18bc2561bc4f4ecc19cefe348bf=3; " +
+            "_ga_CJSG3GJM85=GS2.1.s1794753588\$o3\$g1\$t1794754299\$j60\$l0\$h0; " +
+            "sb_main_29ea333f714080c847539fb7690ac422=1; " +
+            "pp_main_505b167260767d732d39389d9b6ebed9=1; " +
+            "sb_count_29ea333f714080c847539fb7690ac422=1"
 
     private val defaultPosterHeaders = mapOf(
         "Referer" to "$mainUrl/",
@@ -117,17 +113,8 @@ class SflixProvider : MainAPI() {
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
     )
 
-    private val random = SecureRandom()
-    private val deviceId: String = generateDeviceId()
-    private val PREF_TOKEN_KEY = "sflix_app_bearer_token"
     private val mapper: com.fasterxml.jackson.databind.ObjectMapper =
         com.fasterxml.jackson.module.kotlin.jacksonObjectMapper()
-
-    private val modernClientInfo =
-        "{\"package_name\":\"com.community.mbox.in\",\"version_name\":\"4.0.03.0920.03\",\"version_code\":50020130," +
-            "\"os\":\"android\",\"os_version\":\"14\",\"device_id\":\"$deviceId\",\"install_store\":\"official\"," +
-            "\"gaid\":\"1b2212c1-dadf-43c3-a0c8-bd6ce48ae22d\",\"brand\":\"Google\",\"model\":\"Pixel 8\"," +
-            "\"system_language\":\"en\",\"net\":\"NETWORK_WIFI\",\"region\":\"IN\",\"timezone\":\"Asia/Calcutta\",\"sp_code\":\"\"}"
 
     private fun generateDeviceId(): String {
         val bytes = ByteArray(16)
@@ -202,8 +189,8 @@ class SflixProvider : MainAPI() {
         return "$timestamp|2|$signature"
     }
 
-    private suspend fun fetchAnonymousToken(): String {
-        if (isTokenValid(bearerToken)) return bearerToken!!
+    private suspend fun fetchAnonymousToken(forceRefresh: Boolean = false): String {
+        if (!forceRefresh && isTokenValid(bearerToken)) return bearerToken!!
         return try {
             val ts = System.currentTimeMillis()
             val xClientToken = generateXClientToken(ts)
@@ -225,10 +212,10 @@ class SflixProvider : MainAPI() {
                 bearerToken = token
                 token
             } else {
-                ""
+                bearerToken ?: ""
             }
         } catch (e: Exception) {
-            ""
+            bearerToken ?: ""
         }
     }
 
@@ -269,24 +256,24 @@ class SflixProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        "https://sflix.film/" to "Featured",
-        "https://sflix.film/ranking-list?id=5514044369772445984&page_from=more_SUBJECTS_MOVIE" to "Trending Now",
-        "https://sflix.film/ranking-list?id=5692654647815587592&page_from=more_SUBJECTS_MOVIE" to "Cinema",
-        "https://sflix.film/upcoming" to "Coming Soon",
-        "https://sflix.film/ranking-list?id=1067246098818943288&page_from=more_SUBJECTS_MOVIE" to "Top Series",
-        "https://sflix.film/ranking-list?id=8019599703232971616&page_from=more_SUBJECTS_MOVIE" to "Hollywood",
-        "https://sflix.film/ranking-list?id=414907768299210008&page_from=more_SUBJECTS_MOVIE" to "Bollywood",
-        "https://sflix.film/ranking-list?id=3859721901924910512&page_from=more_SUBJECTS_MOVIE" to "South Indian",
-        "https://sflix.film/ranking-list?id=4903182713986896328&page_from=more_SUBJECTS_MOVIE" to "Indian Drama",
-        "https://sflix.film/ranking-list?id=537172945375056936&page_from=more_SUBJECTS_MOVIE" to "Hot Short TV",
-        "https://sflix.film/ranking-list?id=4380734070238626200&page_from=more_SUBJECTS_MOVIE" to "K-Drama",
-        "https://sflix.film/ranking-list?id=8624142774394406504&page_from=more_SUBJECTS_MOVIE" to "C-Drama",
-        "https://sflix.film/ranking-list?id=8434602210994128512&page_from=more_SUBJECTS_MOVIE" to "Top Anime",
-        "https://sflix.film/ranking-list?id=5177200225164885656&page_from=more_SUBJECTS_MOVIE" to "Turkish Drama",
-        "https://sflix.film/ranking-list?id=1440506765396822800&page_from=more_SUBJECTS_MOVIE" to "Western TV",
-        "https://sflix.film/ranking-list?id=2602566563471442096&page_from=more_SUBJECTS_MOVIE" to "Trending Punjabi",
-        "https://sflix.film/ranking-list?id=6843072545655603600&page_from=more_SUBJECTS_MOVIE" to "Popular Movies",
-        "https://sflix.film/ranking-list?id=4516404531735022304&page_from=more_SUBJECTS_MOVIE" to "Action & Thriller"
+        "$mainUrl/" to "Featured",
+        "$mainUrl/ranking-list?id=5514044369772445984&page_from=more_SUBJECTS_MOVIE" to "Trending Now",
+        "$mainUrl/ranking-list?id=5692654647815587592&page_from=more_SUBJECTS_MOVIE" to "Cinema",
+        "$mainUrl/upcoming" to "Coming Soon",
+        "$mainUrl/ranking-list?id=1067246098818943288&page_from=more_SUBJECTS_MOVIE" to "Top Series",
+        "$mainUrl/ranking-list?id=8019599703232971616&page_from=more_SUBJECTS_MOVIE" to "Hollywood",
+        "$mainUrl/ranking-list?id=414907768299210008&page_from=more_SUBJECTS_MOVIE" to "Bollywood",
+        "$mainUrl/ranking-list?id=3859721901924910512&page_from=more_SUBJECTS_MOVIE" to "South Indian",
+        "$mainUrl/ranking-list?id=4903182713986896328&page_from=more_SUBJECTS_MOVIE" to "Indian Drama",
+        "$mainUrl/ranking-list?id=537172945375056936&page_from=more_SUBJECTS_MOVIE" to "Hot Short TV",
+        "$mainUrl/ranking-list?id=4380734070238626200&page_from=more_SUBJECTS_MOVIE" to "K-Drama",
+        "$mainUrl/ranking-list?id=8624142774394406504&page_from=more_SUBJECTS_MOVIE" to "C-Drama",
+        "$mainUrl/ranking-list?id=8434602210994128512&page_from=more_SUBJECTS_MOVIE" to "Top Anime",
+        "$mainUrl/ranking-list?id=5177200225164885656&page_from=more_SUBJECTS_MOVIE" to "Turkish Drama",
+        "$mainUrl/ranking-list?id=1440506765396822800&page_from=more_SUBJECTS_MOVIE" to "Western TV",
+        "$mainUrl/ranking-list?id=2602566563471442096&page_from=more_SUBJECTS_MOVIE" to "Trending Punjabi",
+        "$mainUrl/ranking-list?id=6843072545655603600&page_from=more_SUBJECTS_MOVIE" to "Popular Movies",
+        "$mainUrl/ranking-list?id=4516404531735022304&page_from=more_SUBJECTS_MOVIE" to "Action & Thriller"
     )
 
     private suspend fun fetchDocument(url: String): Document {
@@ -330,7 +317,7 @@ class SflixProvider : MainAPI() {
         val document = fetchDocument(targetUrl)
         val nuxtPosters = extractNuxtPosterMap(document)
 
-        if (request.data.trimEnd('/') == "https://sflix.film") {
+        if (request.data.trimEnd('/') == mainUrl) {
             val homeLists = document.select("section.comp-box").mapNotNull { section ->
                 val sectionTitle = section.selectFirst("h2.action-title")?.text()?.trim() ?: return@mapNotNull null
                 val items = section.select("a.video-item").mapNotNull { it.toSearchResult(nuxtPosters) }.distinctBy { it.url }
@@ -392,7 +379,7 @@ class SflixProvider : MainAPI() {
                     if (urlIdx >= 0) posterUrl = normalizePosterUrl(nuxtArr.optString(urlIdx))
                 }
 
-                val itemUrl = if (subjectId.isNotEmpty()) "https://sflix.film/detail/$detailPath?id=$subjectId" else "https://sflix.film/detail/$detailPath"
+                val itemUrl = if (subjectId.isNotEmpty()) "$mainUrl/detail/$detailPath?id=$subjectId" else "$mainUrl/detail/$detailPath"
                 if (seenUrls.add(itemUrl)) {
                     results.add(newMovieSearchResponse(title, itemUrl, TvType.TvSeries) {
                         this.posterUrl = posterUrl
@@ -405,7 +392,7 @@ class SflixProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val searchUrl = "https://sflix.film/search-result?keyword=${URLEncoder.encode(query, "UTF-8")}"
+        val searchUrl = "$mainUrl/search-result?keyword=${URLEncoder.encode(query, "UTF-8")}"
         val document = fetchDocument(searchUrl)
         val nuxtPosters = extractNuxtPosterMap(document)
         var items = document.select("a.video-item, a[href*='/detail/']").mapNotNull { it.toSearchResult(nuxtPosters) }.distinctBy { it.url }
@@ -415,6 +402,7 @@ class SflixProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         val document = fetchDocument(url)
+        val nuxtPosters = extractNuxtPosterMap(document)
 
         var title = document.selectFirst("h1.content-title")?.text()?.trim() ?: document.selectFirst("h2.title")?.text()?.trim() ?: return null
         var poster = document.selectFirst("div.info-image img")?.let { normalizePosterUrl(it.attr("data-src").ifEmpty { it.attr("src") }) } ?: normalizePosterUrl(document.selectFirst("meta[property=og:image]")?.attr("content"))
@@ -426,7 +414,7 @@ class SflixProvider : MainAPI() {
         var genres = labelTexts.dropWhile { !it.matches(Regex("""\d{4}""")) }.drop(1).filter { it.length > 2 && it != "United States" && it != "United Kingdom" }
 
         val actors = document.select("section.top-cast-warp a.star-item").mapNotNull { star -> star.selectFirst(".star-name")?.text()?.trim() }.distinct()
-        val recommendations = document.select("section.more-like-warp a.video-item").mapNotNull { it.toSearchResult() }
+        val recommendations = document.select("section.more-like-warp a.video-item").mapNotNull { it.toSearchResult(nuxtPosters) }
 
         var subjectId = Regex("""[?&]id=(\d+)""").find(url)?.groupValues?.get(1) ?: ""
         var detailPath = url.substringAfter("/detail/").substringBefore("?")
@@ -813,7 +801,6 @@ class SflixProvider : MainAPI() {
                                         }
 
                                         foundStreams.add(CapturedStream(reqUrl, capturedHeaders))
-                                        
                                         mainHandler.postDelayed({ finish() }, 1000L)
                                     }
 
