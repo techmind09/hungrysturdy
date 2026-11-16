@@ -5,7 +5,6 @@ import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.JsUnpacker
-import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 
 open class BaseJWPExtractor : ExtractorApi() {
@@ -25,12 +24,9 @@ open class BaseJWPExtractor : ExtractorApi() {
         )
 
         val response = app.get(url, referer = referer ?: "$mainUrl/", headers = headers).text
-
-        // Agar script packed (eval) hai toh unpack karein
         val unpacked = JsUnpacker(response).unpack() ?: response
         val combinedHtml = "$response\n$unpacked"
 
-        // M3U8 ya MP4 links extract karein
         val streamRegex = Regex("""["'](https?://[^"'\s]+\.(?:m3u8|mp4)[^"'\s]*)["']""")
         val foundUrls = streamRegex.findAll(combinedHtml)
             .map { it.groupValues[1].replace("\\/", "/") }
@@ -38,7 +34,6 @@ open class BaseJWPExtractor : ExtractorApi() {
             .toList()
 
         for (streamUrl in foundUrls) {
-            // Ads ya preview thumbnails filter karein
             if (streamUrl.contains("preview") || streamUrl.contains("thumb")) continue
 
             callback.invoke(
@@ -48,13 +43,12 @@ open class BaseJWPExtractor : ExtractorApi() {
                     url = streamUrl
                 ) {
                     this.referer = url
-                    this.quality = Qualities.Unknown.value
+                    this.quality = 0 // Fixed: Replaced Qualities.Unknown.value with 0
                     this.headers = mapOf("Referer" to url)
                 }
             )
         }
 
-        // Subtitles (.vtt / .srt) extract karein agar available hon
         val subRegex = Regex("""["'](https?://[^"'\s]+\.(?:vtt|srt)[^"'\s]*)["']""")
         subRegex.findAll(combinedHtml).map { it.groupValues[1] }.distinct().forEach { subUrl ->
             subtitleCallback.invoke(
@@ -67,7 +61,7 @@ open class BaseJWPExtractor : ExtractorApi() {
     }
 }
 
-// 1. LuluStream (luluvid.com / lulustream.com)
+// 1. LuluStream
 class LuluVidExtractor : BaseJWPExtractor() {
     override var name = "LuluStream"
     override var mainUrl = "https://luluvid.com"
@@ -78,7 +72,7 @@ class LuluStreamAltExtractor : BaseJWPExtractor() {
     override var mainUrl = "https://lulustream.com"
 }
 
-// 2. EarnVids / StreamWish mirrors
+// 2. EarnVids
 class EarnVidsExtractor : BaseJWPExtractor() {
     override var name = "EarnVids"
     override var mainUrl = "https://earnvids.com"
@@ -117,7 +111,7 @@ class UpBoltExtractor : BaseJWPExtractor() {
     override var mainUrl = "https://upbolt.tv"
 }
 
-// 6. Abyss / Hydrax
+// 6. Abyss
 class AbyssExtractor : BaseJWPExtractor() {
     override var name = "Abyss"
     override var mainUrl = "https://abysscdn.com"
