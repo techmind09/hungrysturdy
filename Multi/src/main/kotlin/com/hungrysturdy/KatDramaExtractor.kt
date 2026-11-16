@@ -547,7 +547,7 @@ object KatServerLogic {
 // =========================================================================
 // Main KatDrama API Provider
 // =========================================================================
-class KatDrama : MainAPI() {
+class KatDramaProvider : MainAPI() {
     override var mainUrl = "https://k-drama.in"
     override var name = "KatDrama"
     override val hasMainPage = true
