@@ -17,7 +17,6 @@ class Plugin : Plugin() {
 
         // Extractors Registration
         registerExtractorAPI(GokuHDExtractor())
-        registerExtractorAPI(Filemoon())
 
         // ToonPlay Extractors
         registerExtractorAPI(FlixCloudExtractor())
