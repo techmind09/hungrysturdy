@@ -1,25 +1,21 @@
-
 package com.hungrysturdy
 
 import android.util.Base64
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-import org.jsoup.Jsoup
-import org.jsoup.nodes.Document
-import org.jsoup.nodes.Element
+import org.json.JSONArray
+import org.json.JSONObject
 import java.net.URLDecoder
+import java.net.URLEncoder
 
 class ToonPlayProvider : MainAPI() {
-
     override var mainUrl = "https://toonplay.in"
     override var name = "ToonPlay"
     override val hasMainPage = true
     override var lang = "hi"
     override val hasDownloadSupport = true
-
     override val supportedTypes = setOf(
         TvType.Anime,
         TvType.AnimeMovie,
@@ -27,13 +23,19 @@ class ToonPlayProvider : MainAPI() {
         TvType.Cartoon
     )
 
+    private val infoApiBase = "https://animesalt.streamindia.co.in/api"
+    private val extractApiBases = listOf(
+        "https://anime.streamindia.co.in/api",
+        "https://animesalt.streamindia.co.in/api"
+    )
+
     override val mainPage = mainPageOf(
         "trending" to "Trending Now",
-        "anime" to "Anime",
-        "latest" to "Latest Episodes & Releases",
-        "series" to "Most Popular TV Series",
-        "movies" to "Blockbuster Anime Movies",
-        "cartoons" to "Cartoons",
+        "latest_releases" to "Latest Episodes & Releases",
+        "global_latest_releases" to "Global Latest Releases",
+        "popular_series" to "Most Popular TV Series",
+        "popular_movies" to "Blockbuster Anime Movies",
+        "hero" to "Featured Spotlight",
         "lang:hin" to "Language: Hindi",
         "lang:tel" to "Language: Telugu",
         "lang:tam" to "Language: Tamil",
@@ -41,8 +43,13 @@ class ToonPlayProvider : MainAPI() {
         "lang:kan" to "Language: Kannada",
         "lang:ben" to "Language: Bengali",
         "lang:eng" to "Language: English",
-        "lang:jpn" to "Language: Japanese",
-        "lang:kor" to "Language: Korean"
+        "lang:jpn" to "Language: Japanese"
+    )
+
+    private fun apiHeaders(): Map<String, String> = mapOf(
+        "Accept" to "application/json",
+        "Referer" to "$mainUrl/",
+        "Origin" to mainUrl
     )
 
     private fun createSlug(title: String): String {
@@ -52,197 +59,71 @@ class ToonPlayProvider : MainAPI() {
             .replace(Regex("\\s+"), "-")
     }
 
-    // ---------------------------------------------------------
-    // RENDERED DOM
-    // ---------------------------------------------------------
+    private fun parseApiAnimeItem(item: JSONObject): SearchResponse? {
+        val title = item.optString("title").trim()
+        val id = item.optString("id").trim()
+        if (title.isBlank() || id.isBlank()) return null
 
-    private suspend fun fetchRenderedDom(url: String): Document {
-        return try {
-            val response = app.get(
-                url,
-                interceptor = WebViewResolver(
-                    interceptUrl = Regex(
-                        """(api|graphql|supabase|firebase|json|watch|assets|ravok|flixcloud|abyss)""",
-                        RegexOption.IGNORE_CASE
-                    ),
-                    additionalUrls = listOf(
-                        Regex(""".*""")
-                    ),
-                    script = """
-                        new Promise((resolve) => {
-                            let attempts = 0;
+        val typeStr = item.optString("type").lowercase()
+        val isMovie = typeStr.contains("movie") || id.startsWith("movies-") || id.startsWith("movie-")
 
-                            const check = setInterval(() => {
-                                attempts++;
-
-                                const player = document.querySelector(
-                                    '#watchpage-active-iframe[src]'
-                                );
-
-                                const cards = document.querySelector(
-                                    '#trending, h3[title]'
-                                );
-
-                                if (player || cards || attempts >= 30) {
-                                    clearInterval(check);
-                                    resolve();
-                                }
-                            }, 400);
-                        });
-                    """.trimIndent(),
-                    timeout = 15000L
-                )
-            )
-
-            Jsoup.parse(response.text, url)
-
-        } catch (e: Exception) {
-            println("TOONPLAY DOM ERROR: ${e.message}")
-
-            try {
-                app.get(url).document
-            } catch (ex: Exception) {
-                println("TOONPLAY FALLBACK ERROR: ${ex.message}")
-                Jsoup.parse("", url)
-            }
-        }
-    }
-
-    // ---------------------------------------------------------
-    // MAIN PAGE
-    // ---------------------------------------------------------
-
-    override suspend fun getMainPage(
-        page: Int,
-        request: MainPageRequest
-    ): HomePageResponse {
-
-        val sectionId = request.data
-        val results = mutableListOf<SearchResponse>()
-
-        if (page == 1 && !sectionId.startsWith("lang:")) {
-
-            val doc = fetchRenderedDom(mainUrl)
-
-            val sectionSelector = when (sectionId) {
-                "trending" -> "section#trending .group"
-                "latest" -> "section#latest .group"
-                "series" -> "section#series .group"
-                "movies" -> "section#movies .group"
-                "anime" -> "section#anime .group, section .group"
-                "cartoons" -> "section#cartoons .group, section .group"
-                else -> "section .group"
-            }
-
-            for (card in doc.select(sectionSelector)) {
-                card.toToonPlayCard()?.let {
-                    results.add(it)
+        val poster = item.optString("image").ifBlank {
+            item.optString("poster_image").ifBlank {
+                item.optString("image_url").ifBlank {
+                    item.optString("backdrop")
                 }
             }
-        }
+        }.trim()
 
-        val anilistItems = fetchCatalogForToonPlay(sectionId, page)
-        results.addAll(anilistItems)
+        val epCount = item.optInt("latest_episode", 0).takeIf { it > 0 }
+            ?: Regex("""EP:(\d+)""").find(item.optString("episodes"))?.groupValues?.get(1)?.toIntOrNull()
 
-        val uniqueResults = results.distinctBy { it.url }
+        val itemUrl = "$mainUrl/watch/$id"
 
-        return newHomePageResponse(
-            request.name,
-            uniqueResults,
-            hasNext = anilistItems.isNotEmpty()
-        )
-    }
-
-    // ---------------------------------------------------------
-    // CARD PARSER
-    // ---------------------------------------------------------
-
-    private fun Element.toToonPlayCard(): SearchResponse? {
-
-        val titleEl = selectFirst("h3[title], h3") ?: return null
-
-        val title = titleEl.attr("title")
-            .ifBlank { titleEl.text() }
-            .trim()
-
-        if (title.isBlank()) return null
-
-        val img = select("img").firstOrNull {
-            val src = it.attr("src")
-            src.isNotBlank() && !src.contains("placeholder.webp")
-        }
-
-        val poster = img?.let {
-            it.attr("src")
-                .ifBlank { it.attr("data-src") }
-                .ifBlank { it.attr("data-lazy-src") }
-        }?.trim() ?: ""
-
-        val badgeText = selectFirst(
-            "span:contains(MOVIE), span:contains(SERIES), span:contains(ONA), span:contains(TV_SHORT)"
-        )?.text().orEmpty()
-
-        val isMovie =
-            badgeText.contains("MOVIE", true) ||
-            title.contains("Movie", true)
-
-        val slug = createSlug(title)
-        val prefix = if (isMovie) "movie" else "series"
-
-        val anilistId = Regex("""/bx?(\d+)-""")
-            .find(poster)
-            ?.groupValues
-            ?.get(1)
-            ?: ""
-
-        val watchUrl = if (anilistId.isNotBlank()) {
-            "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-0-hin&lang=hin&anilistid=$anilistId"
-        } else {
-            "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-0-hin&lang=hin"
-        }
-
-        val epSubText = selectFirst(
-            "div.font-mono.text-indigo-300"
-        )?.text().orEmpty()
-
-        val epCount = Regex("""EP:(\d+)""")
-            .find(epSubText)
-            ?.groupValues
-            ?.get(1)
-            ?.toIntOrNull()
-
-        return newAnimeSearchResponse(
-            title,
-            watchUrl,
-            if (isMovie) TvType.AnimeMovie else TvType.Anime
-        ) {
-            this.posterUrl = fixUrl(poster)
+        return newAnimeSearchResponse(title, itemUrl, if (isMovie) TvType.AnimeMovie else TvType.Anime) {
+            this.posterUrl = fixUrlNull(poster)
             this.addDubStatus(DubStatus.Dubbed, epCount)
             this.addDubStatus(DubStatus.Subbed, epCount)
         }
     }
 
-    // ---------------------------------------------------------
-    // ANILIST CATALOG
-    // ---------------------------------------------------------
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val sectionKey = request.data
+        val results = mutableListOf<SearchResponse>()
 
-    private suspend fun fetchCatalogForToonPlay(
-        section: String,
-        page: Int
-    ): List<SearchResponse> {
+        if (page == 1 && !sectionKey.startsWith("lang:")) {
+            try {
+                val res = app.get("$infoApiBase/home", headers = apiHeaders()).text
+                val root = JSONObject(res)
+                val dataObj = root.optJSONObject("data")
+                val arr = dataObj?.optJSONArray(sectionKey)
 
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.optJSONObject(i) ?: continue
+                        parseApiAnimeItem(obj)?.let { results.add(it) }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        // Paginated catalog via AniList so scrolling never runs out of posters
+        if (results.isEmpty() || page > 1 || sectionKey.startsWith("lang:")) {
+            val catalogItems = fetchAniListFallback(sectionKey, page)
+            results.addAll(catalogItems)
+        }
+
+        val unique = results.distinctBy { it.url }
+        return newHomePageResponse(request.name, unique, hasNext = unique.isNotEmpty())
+    }
+
+    private suspend fun fetchAniListFallback(section: String, page: Int): List<SearchResponse> {
         val sort = when (section) {
-            "trending" -> "TRENDING_DESC"
-            "latest" -> "UPDATED_AT_DESC"
-            "movies" -> "POPULARITY_DESC"
+            "trending", "hero" -> "TRENDING_DESC"
+            "latest_releases", "global_latest_releases" -> "UPDATED_AT_DESC"
             else -> "POPULARITY_DESC"
         }
-
-        val format = when (section) {
-            "movies" -> "MOVIE"
-            "cartoons" -> "TV_SHORT"
-            else -> "TV"
-        }
+        val format = if (section == "popular_movies") "MOVIE" else "TV"
 
         val query = """
             query {
@@ -259,398 +140,284 @@ class ToonPlayProvider : MainAPI() {
         """.trimIndent()
 
         return try {
-
             val res = app.post(
                 "https://graphql.anilist.co",
-                headers = mapOf(
-                    "Content-Type" to "application/json"
-                ),
+                headers = mapOf("Content-Type" to "application/json"),
                 json = mapOf("query" to query)
             ).text
 
-            val root = org.json.JSONObject(res)
-
-            val mediaArray = root.optJSONObject("data")
-                ?.optJSONObject("Page")
-                ?.optJSONArray("media")
-                ?: return emptyList()
+            val mediaArray = JSONObject(res)
+                .optJSONObject("data")?.optJSONObject("Page")?.optJSONArray("media") ?: return emptyList()
 
             val list = mutableListOf<SearchResponse>()
-
             for (i in 0 until mediaArray.length()) {
-
                 val item = mediaArray.optJSONObject(i) ?: continue
-                val id = item.optInt("id")
-
                 val titleObj = item.optJSONObject("title")
-
-                val title = titleObj
-                    ?.optString("english")
-                    ?.takeIf {
-                        it.isNotBlank() && it != "null"
-                    }
+                val title = titleObj?.optString("english")?.takeIf { it.isNotBlank() && it != "null" }
                     ?: titleObj?.optString("romaji").orEmpty()
-
                 if (title.isBlank()) continue
 
                 val poster = item.optJSONObject("coverImage")?.let {
-                    it.optString("extraLarge")
-                        .ifBlank { it.optString("large") }
+                    it.optString("extraLarge").ifBlank { it.optString("large") }
                 }.orEmpty()
 
                 val isMovie = item.optString("format") == "MOVIE"
-
                 val slug = createSlug(title)
-                val prefix = if (isMovie) "movie" else "series"
-
-                val langCode = if (section.startsWith("lang:")) {
-                    section.substringAfter("lang:")
-                } else {
-                    "hin"
-                }
-
-                val url =
-                    "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-0-hin&lang=$langCode&anilistid=$id"
+                val prefix = if (isMovie) "movies" else "series"
+                val epCount = item.optInt("episodes", 0).takeIf { it > 0 }
 
                 list.add(
-                    newAnimeSearchResponse(
-                        title,
-                        url,
-                        if (isMovie) TvType.AnimeMovie else TvType.Anime
-                    ) {
+                    newAnimeSearchResponse(title, "$mainUrl/watch/$prefix-$slug", if (isMovie) TvType.AnimeMovie else TvType.Anime) {
                         this.posterUrl = poster
-                        this.addDubStatus(true, true)
+                        this.addDubStatus(DubStatus.Dubbed, epCount)
+                        this.addDubStatus(DubStatus.Subbed, epCount)
                     }
                 )
             }
-
             list
-
-        } catch (e: Exception) {
-            println("TOONPLAY CATALOG ERROR: ${e.message}")
+        } catch (_: Exception) {
             emptyList()
         }
     }
-
-    // ---------------------------------------------------------
-    // SEARCH
-    // ---------------------------------------------------------
 
     override suspend fun search(query: String): List<SearchResponse> {
-
         val cleanQuery = query.trim()
-            .replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-
         if (cleanQuery.isBlank()) return emptyList()
+        val encodedQuery = URLEncoder.encode(cleanQuery, "UTF-8")
+        val results = mutableListOf<SearchResponse>()
 
-        val gql = """
-            query {
-              Page(page: 1, perPage: 30) {
-                media(search: "$cleanQuery", type: ANIME, sort: [POPULARITY_DESC]) {
-                  id
-                  title { english romaji }
-                  coverImage { extraLarge large }
-                  format
+        // 1. Direct Backend Search API
+        try {
+            val res = app.get("$infoApiBase/search?q=$encodedQuery", headers = apiHeaders()).text
+            val root = JSONObject(res)
+            val arr = root.optJSONArray("results")
+                ?: root.optJSONArray("data")
+                ?: root.optJSONObject("data")?.optJSONArray("results")
+                ?: root.optJSONObject("data")?.optJSONArray("anime")
+
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    parseApiAnimeItem(obj)?.let { results.add(it) }
                 }
-              }
             }
-        """.trimIndent()
+        } catch (_: Exception) {}
 
-        return try {
-
-            val res = app.post(
-                "https://graphql.anilist.co",
-                headers = mapOf(
-                    "Content-Type" to "application/json"
-                ),
-                json = mapOf("query" to gql)
-            ).text
-
-            val mediaArray = org.json.JSONObject(res)
-                .optJSONObject("data")
-                ?.optJSONObject("Page")
-                ?.optJSONArray("media")
-                ?: return emptyList()
-
-            val results = mutableListOf<SearchResponse>()
-
-            for (i in 0 until mediaArray.length()) {
-
-                val item = mediaArray.optJSONObject(i) ?: continue
-                val id = item.optInt("id")
-
-                val titleObj = item.optJSONObject("title")
-
-                val title = titleObj
-                    ?.optString("english")
-                    ?.takeIf {
-                        it.isNotBlank() && it != "null"
-                    }
-                    ?: titleObj?.optString("romaji").orEmpty()
-
-                if (title.isBlank()) continue
-
-                val poster = item.optJSONObject("coverImage")?.let {
-                    it.optString("extraLarge")
-                        .ifBlank { it.optString("large") }
-                }.orEmpty()
-
-                val isMovie = item.optString("format") == "MOVIE"
-
-                val slug = createSlug(title)
-                val prefix = if (isMovie) "movie" else "series"
-
-                val watchUrl =
-                    "$mainUrl/watch/$prefix-$slug?season=1&ep=1&server=options-0-hin&lang=hin&anilistid=$id"
-
-                results.add(
-                    newAnimeSearchResponse(
-                        title,
-                        watchUrl,
-                        if (isMovie) TvType.AnimeMovie else TvType.Anime
-                    ) {
-                        this.posterUrl = poster
-                        this.addDubStatus(true, true)
-                    }
-                )
-            }
-
-            results
-
-        } catch (e: Exception) {
-            println("TOONPLAY SEARCH ERROR: ${e.message}")
-            emptyList()
-        }
-    }
-
-    // ---------------------------------------------------------
-    // LOAD
-    // ---------------------------------------------------------
-
-    override suspend fun load(url: String): LoadResponse {
-
-        val doc = fetchRenderedDom(url)
-
-        val fallbackSlugTitle = url.substringAfter("/watch/")
-            .substringBefore("?")
-            .removePrefix("series-")
-            .removePrefix("movie-")
-            .replace("-", " ")
-            .replaceFirstChar {
-                if (it.isLowerCase()) it.titlecase() else it.toString()
-            }
-
-        var title =
-            doc.selectFirst("h1.text-xl, h1")
-                ?.text()
-                ?.trim()
-                ?.takeIf { it.isNotBlank() }
-                ?: doc.selectFirst("meta[property='og:title']")
-                    ?.attr("content")
-                    ?.substringBefore(" - ToonPlay")
-                    ?.trim()
-                    ?.takeIf { it.isNotBlank() }
-                ?: fallbackSlugTitle
-
-        var poster =
-            doc.selectFirst("div.aspect-\\[3\\/4\\] img")?.let {
-                it.attr("src")
-                    .ifBlank { it.attr("data-src") }
-                    .ifBlank { it.attr("data-lazy-src") }
-            }?.takeIf { it.isNotBlank() }
-                ?: doc.selectFirst("meta[property='og:image']")
-                    ?.attr("content")
-                    ?.takeIf { it.isNotBlank() }
-                ?: ""
-
-        var plot =
-            doc.selectFirst("p.line-clamp-3, p.text-slate-300")
-                ?.text()
-                ?.trim()
-                ?.takeIf { it.isNotBlank() }
-                ?: doc.selectFirst("meta[property='og:description']")
-                    ?.attr("content")
-                    ?.takeIf { it.isNotBlank() }
-                ?: "Watch $title online in HD with multi-audio on ToonPlay."
-
-        val tags = doc.select("div.pt-1.flex.flex-wrap span")
-            .map { it.text().trim() }
-            .filter { it.isNotBlank() }
-
-        val anilistId = Regex("""anilistid=(\d+)""")
-            .find(url)
-            ?.groupValues
-            ?.get(1)
-            ?.toIntOrNull()
-
-        var totalEpCount = 24
-
-        if (anilistId != null) {
+        // 2. Fallback: filter /api/home + AniList search if backend search returns empty
+        if (results.isEmpty()) {
             try {
+                val homeRes = app.get("$infoApiBase/home", headers = apiHeaders()).text
+                val dataObj = JSONObject(homeRes).optJSONObject("data")
+                val sections = listOf("trending", "popular_series", "popular_movies", "latest_releases", "global_latest_releases")
+                for (sec in sections) {
+                    val arr = dataObj?.optJSONArray(sec) ?: continue
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.optJSONObject(i) ?: continue
+                        val t = obj.optString("title")
+                        if (t.contains(cleanQuery, ignoreCase = true)) {
+                            parseApiAnimeItem(obj)?.let { results.add(it) }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
 
+        if (results.isEmpty()) {
+            try {
+                val escaped = cleanQuery.replace("\\", "\\\\").replace("\"", "\\\"")
                 val gql = """
                     query {
-                      Media(id: $anilistId) {
-                        title { english romaji }
-                        description
-                        coverImage { extraLarge }
-                        episodes
+                      Page(page: 1, perPage: 25) {
+                        media(search: "$escaped", type: ANIME, sort: [POPULARITY_DESC]) {
+                          title { english romaji }
+                          coverImage { extraLarge large }
+                          format
+                          episodes
+                        }
                       }
                     }
                 """.trimIndent()
-
                 val res = app.post(
                     "https://graphql.anilist.co",
+                    headers = mapOf("Content-Type" to "application/json"),
                     json = mapOf("query" to gql)
                 ).text
+                val mediaArray = JSONObject(res)
+                    .optJSONObject("data")?.optJSONObject("Page")?.optJSONArray("media")
+                if (mediaArray != null) {
+                    for (i in 0 until mediaArray.length()) {
+                        val item = mediaArray.optJSONObject(i) ?: continue
+                        val titleObj = item.optJSONObject("title")
+                        val title = titleObj?.optString("english")?.takeIf { it.isNotBlank() && it != "null" }
+                            ?: titleObj?.optString("romaji").orEmpty()
+                        if (title.isBlank()) continue
+                        val poster = item.optJSONObject("coverImage")?.let {
+                            it.optString("extraLarge").ifBlank { it.optString("large") }
+                        }.orEmpty()
+                        val isMovie = item.optString("format") == "MOVIE"
+                        val prefix = if (isMovie) "movies" else "series"
+                        val slug = createSlug(title)
+                        val epCount = item.optInt("episodes", 0).takeIf { it > 0 }
 
-                val media = org.json.JSONObject(res)
-                    .optJSONObject("data")
-                    ?.optJSONObject("Media")
-
-                if (media != null) {
-
-                    if (title.equals("ToonPlay", true) || title.isBlank()) {
-
-                        val engTitle = media.optJSONObject("title")
-                            ?.optString("english").orEmpty()
-
-                        val romajiTitle = media.optJSONObject("title")
-                            ?.optString("romaji").orEmpty()
-
-                        title = engTitle
-                            .takeIf { it.isNotBlank() && it != "null" }
-                            ?: romajiTitle.ifBlank { title }
+                        results.add(
+                            newAnimeSearchResponse(title, "$mainUrl/watch/$prefix-$slug", if (isMovie) TvType.AnimeMovie else TvType.Anime) {
+                                this.posterUrl = poster
+                                this.addDubStatus(DubStatus.Dubbed, epCount)
+                                this.addDubStatus(DubStatus.Subbed, epCount)
+                            }
+                        )
                     }
+                }
+            } catch (_: Exception) {}
+        }
 
-                    if (poster.isBlank() || poster.contains("og-image.jpg")) {
-                        poster = media.optJSONObject("coverImage")
-                            ?.optString("extraLarge").orEmpty()
-                    }
+        return results.distinctBy { it.url }
+    }
 
-                    val desc = media.optString("description")
+    override suspend fun load(url: String): LoadResponse {
+        val slugId = url.substringAfter("id=")
+            .substringAfter("/watch/")
+            .substringAfter("/info/")
+            .substringBefore("?")
+            .substringBefore("&")
+            .trim('/')
 
-                    if (desc.isNotBlank() && desc != "null") {
-                        plot = Jsoup.parse(desc).text()
-                    }
+        var title = slugId.removePrefix("series-").removePrefix("movies-").removePrefix("movie-")
+            .replace("-", " ")
+            .replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
+        var poster = ""
+        var backdrop = ""
+        var plot = ""
+        var year: Int? = null
+        val tags = mutableListOf<String>()
+        var isMovie = slugId.startsWith("movies-") || slugId.startsWith("movie-")
+        val episodes = mutableListOf<Episode>()
+        val recommendations = mutableListOf<SearchResponse>()
 
-                    val eps = media.optInt("episodes", 0)
+        try {
+            val res = app.get("$infoApiBase/info?id=$slugId", headers = apiHeaders()).text
+            val root = JSONObject(res)
+            val anime = root.optJSONObject("anime") ?: root.optJSONObject("data")
 
-                    if (eps > 0) {
-                        totalEpCount = eps
+            if (anime != null) {
+                title = anime.optString("title").ifBlank { title }
+                poster = anime.optString("image").ifBlank { poster }
+                backdrop = anime.optString("backdrop").ifBlank { poster }
+                plot = anime.optString("overview").ifBlank { plot }
+                year = anime.optString("year").toIntOrNull()
+
+                val typeStr = anime.optString("type").lowercase()
+                if (typeStr.contains("movie")) isMovie = true
+
+                val genresArr = anime.optJSONArray("genres")
+                if (genresArr != null) {
+                    for (i in 0 until genresArr.length()) {
+                        val g = genresArr.optString(i).trim()
+                        if (g.isNotBlank()) tags.add(g)
                     }
                 }
 
-            } catch (e: Exception) {
-                println("TOONPLAY ANILIST LOAD ERROR: ${e.message}")
-            }
-        }
+                val recsArr = anime.optJSONArray("recommendations")
+                if (recsArr != null) {
+                    for (i in 0 until recsArr.length()) {
+                        val rObj = recsArr.optJSONObject(i) ?: continue
+                        parseApiAnimeItem(rObj)?.let { recommendations.add(it) }
+                    }
+                }
 
-        val isMovie = url.contains("/watch/movie-")
-        val baseWatchUrl = url.substringBefore("?")
+                val seasonsList = anime.optJSONArray("seasonsList")
+                if (seasonsList != null && seasonsList.length() > 0) {
+                    for (sIdx in 0 until seasonsList.length()) {
+                        val sObj = seasonsList.optJSONObject(sIdx) ?: continue
+                        val seasonNum = sObj.optString("season").toIntOrNull() ?: (sIdx + 1)
+                        val epsArr = sObj.optJSONArray("episodes") ?: continue
 
-        val anilistParam = if (anilistId != null) {
-            "&anilistid=$anilistId"
-        } else {
-            ""
-        }
+                        for (eIdx in 0 until epsArr.length()) {
+                            val epObj = epsArr.optJSONObject(eIdx) ?: continue
+                            val epNum = epObj.optInt("number", eIdx + 1)
+                            val epTitle = epObj.optString("title").ifBlank { "Episode $epNum" }
+                            val epId = epObj.optString("id").trim('/')
+                            val epThumb = epObj.optString("image").trim()
 
-        val domEpButtons = doc.select(
-            "aside button[title]:has(span:contains(EP))"
-        )
+                            val episodeUrl = when {
+                                epId.startsWith("http") -> epId
+                                epId.isNotBlank() -> "https://animesalt.cx/$epId/"
+                                else -> "https://animesalt.cx/episode/${slugId.removePrefix("series-")}-${seasonNum}x$epNum/"
+                            }
 
-        val episodes = mutableListOf<Episode>()
+                            val epData = EpisodeData(
+                                episodeUrl = episodeUrl,
+                                slugId = slugId,
+                                season = seasonNum,
+                                episode = epNum
+                            ).toJson()
 
-        if (domEpButtons.isNotEmpty()) {
-
-            for (btn in domEpButtons) {
-
-                val epTitle = btn.attr("title").trim()
-
-                val epNum = btn.selectFirst("span.tabular-nums")
-                    ?.text()
-                    ?.trim()
-                    ?.toIntOrNull()
-                    ?: (episodes.size + 1)
-
-                val epData = EpisodeData(
-                    watchUrl = "$baseWatchUrl?season=1&ep=$epNum&server=options-0-hin&lang=hin$anilistParam",
-                    season = 1,
-                    episode = epNum,
-                    anilistId = anilistId
-                ).toJson()
-
-                episodes.add(
-                    newEpisode(epData) {
-                        this.name = epTitle.ifBlank {
-                            "Episode $epNum"
+                            episodes.add(
+                                newEpisode(epData) {
+                                    this.name = epTitle
+                                    this.season = seasonNum
+                                    this.episode = epNum
+                                    this.posterUrl = fixUrlNull(epThumb)
+                                }
+                            )
                         }
-                        this.season = 1
-                        this.episode = epNum
                     }
-                )
+                }
             }
+        } catch (_: Exception) {}
 
-        } else if (!isMovie) {
-
-            for (epNum in 1..totalEpCount) {
-
-                val epData = EpisodeData(
-                    watchUrl = "$baseWatchUrl?season=1&ep=$epNum&server=options-0-hin&lang=hin$anilistParam",
-                    season = 1,
-                    episode = epNum,
-                    anilistId = anilistId
-                ).toJson()
-
-                episodes.add(
-                    newEpisode(epData) {
-                        this.name = "Episode $epNum"
-                        this.season = 1
-                        this.episode = epNum
-                    }
-                )
-            }
-        }
+        val cleanSlug = slugId.removePrefix("series-").removePrefix("movies-").removePrefix("movie-")
 
         return if (isMovie) {
-
-            val movieData = EpisodeData(
-                watchUrl = url,
-                season = 1,
-                episode = 1,
-                anilistId = anilistId
-            ).toJson()
-
-            newMovieLoadResponse(
-                title,
-                url,
-                TvType.AnimeMovie,
-                movieData
-            ) {
-                this.posterUrl = fixUrl(poster)
-                this.plot = plot
-                this.tags = tags
+            val movieEpisodeUrl = if (episodes.isNotEmpty()) {
+                tryParseJson<EpisodeData>(episodes.first().data)?.episodeUrl
+                    ?: "https://animesalt.cx/movies/$cleanSlug/"
+            } else {
+                "https://animesalt.cx/movies/$cleanSlug/"
             }
 
-        } else {
+            val movieData = EpisodeData(
+                episodeUrl = movieEpisodeUrl,
+                slugId = slugId,
+                season = 1,
+                episode = 1
+            ).toJson()
 
-            newTvSeriesLoadResponse(
-                title,
-                url,
-                TvType.Anime,
-                episodes
-            ) {
-                this.posterUrl = fixUrl(poster)
+            newMovieLoadResponse(title, "$mainUrl/watch/$slugId", TvType.AnimeMovie, movieData) {
+                this.posterUrl = fixUrlNull(poster)
+                this.backgroundPosterUrl = fixUrlNull(backdrop)
                 this.plot = plot
+                this.year = year
                 this.tags = tags
+                this.recommendations = recommendations
+            }
+        } else {
+            if (episodes.isEmpty()) {
+                val epData = EpisodeData(
+                    episodeUrl = "https://animesalt.cx/episode/$cleanSlug-1x1/",
+                    slugId = slugId,
+                    season = 1,
+                    episode = 1
+                ).toJson()
+                episodes.add(
+                    newEpisode(epData) {
+                        this.name = "Episode 1"
+                        this.season = 1
+                        this.episode = 1
+                    }
+                )
+            }
+
+            newTvSeriesLoadResponse(title, "$mainUrl/watch/$slugId", TvType.Anime, episodes) {
+                this.posterUrl = fixUrlNull(poster)
+                this.backgroundPosterUrl = fixUrlNull(backdrop)
+                this.plot = plot
+                this.year = year
+                this.tags = tags
+                this.recommendations = recommendations
             }
         }
     }
-
-    // ---------------------------------------------------------
-    // LOAD LINKS
-    // ---------------------------------------------------------
 
     override suspend fun loadLinks(
         data: String,
@@ -658,312 +425,161 @@ class ToonPlayProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        val epData = tryParseJson<EpisodeData>(data)
+        val candidateEpisodeUrls = mutableListOf<String>()
 
-        println("TOONPLAY: loadLinks started")
-        println("TOONPLAY: received data = $data")
-
-        val episodeData = tryParseJson<EpisodeData>(data)
-
-        val targetUrl = episodeData?.watchUrl
-            ?.takeIf { it.isNotBlank() }
-            ?: data.trim()
-
-        if (targetUrl.isBlank()) {
-            println("TOONPLAY: target URL is blank")
-            return false
+        if (epData != null) {
+            candidateEpisodeUrls.add(epData.episodeUrl)
+            // Fallback movie/episode URL variations on animesalt.cx
+            val cleanSlug = epData.slugId.removePrefix("series-").removePrefix("movies-").removePrefix("movie-")
+            if (epData.episodeUrl.contains("/movies/")) {
+                candidateEpisodeUrls.add("https://animesalt.cx/episode/$cleanSlug-1x1/")
+            }
+        } else if (data.isNotBlank()) {
+            candidateEpisodeUrls.add(data)
         }
 
-        println("TOONPLAY: target URL = $targetUrl")
+        val serverPlayers = mutableListOf<Pair<String, String>>() // (serverName, playerUrl)
 
-        // Try the Hindi server variants first.
-        val serverOptions = listOf(
-            "options-0-hin",
-            "options-1-hin",
-            "options-2-hin",
-            "hd-1-hin",
-            "hd-2-hin",
-            "options-0",
-            "options-1",
-            "options-2",
-            "hd-1",
-            "hd-2"
-        )
+        for (epUrl in candidateEpisodeUrls.distinct()) {
+            val encodedUrl = URLEncoder.encode(epUrl, "UTF-8")
+            for (apiBase in extractApiBases) {
+                try {
+                    val res = app.get("$apiBase/extract?url=$encodedUrl", headers = apiHeaders()).text
+                    val root = JSONObject(res)
+                    val dataObj = root.optJSONObject("data") ?: continue
 
-        val attemptedPages = linkedSetOf<String>()
-        val emittedUrls = hashSetOf<String>()
-
-        var foundAny = false
-
-        fun withServer(url: String, server: String): String {
-
-            val withoutFragment = url.substringBefore("#")
-
-            val fragment = url.substringAfter("#", "").let {
-                if (it.isNotEmpty()) "#$it" else ""
-            }
-
-            val serverRegex = Regex("[?&]server=[^&]*")
-            val match = serverRegex.find(withoutFragment)
-
-            val updated = if (match != null) {
-
-                val separator = match.value.substring(0, 1)
-
-                withoutFragment.replaceRange(
-                    match.range,
-                    "${separator}server=$server"
-                )
-
-            } else {
-
-                withoutFragment +
-                    (if (withoutFragment.contains("?")) "&" else "?") +
-                    "server=$server"
-            }
-
-            return updated + fragment
-        }
-
-        // -----------------------------------------------------
-        // DECODE BASE64 PLAYER LIST
-        // -----------------------------------------------------
-
-        fun decodePlayerList(
-            iframeUrl: String
-        ): List<Pair<String, String>> {
-
-            val dataValue = Regex("""[?&]data=([^&#]+)""")
-                .find(iframeUrl)
-                ?.groupValues
-                ?.getOrNull(1)
-                ?: return emptyList()
-
-            val decodedParameter = try {
-                URLDecoder.decode(dataValue, "UTF-8")
-                    .replace(" ", "+")
-            } catch (_: Exception) {
-                dataValue.replace(" ", "+")
-            }
-
-            val decodedJson = try {
-
-                val bytes = try {
-                    Base64.decode(
-                        decodedParameter,
-                        Base64.URL_SAFE or Base64.NO_WRAP
-                    )
-                } catch (_: Exception) {
-                    Base64.decode(
-                        decodedParameter,
-                        Base64.DEFAULT
-                    )
-                }
-
-                String(bytes, Charsets.UTF_8)
-
-            } catch (e: Exception) {
-                println("TOONPLAY BASE64 ERROR: ${e.message}")
-                return emptyList()
-            }
-
-            return try {
-
-                val array = org.json.JSONArray(decodedJson)
-
-                buildList {
-
-                    for (index in 0 until array.length()) {
-
-                        val item = array.optJSONObject(index)
-                            ?: continue
-
-                        val playerUrl = item.optString("link")
-                            .replace("\\/", "/")
-                            .trim()
-
-                        if (
-                            playerUrl.isBlank() ||
-                            playerUrl == "null"
-                        ) continue
-
-                        val language = item.optString("language")
-                            .takeIf {
-                                it.isNotBlank() && it != "null"
+                    val watchServers = dataObj.optJSONArray("watchServers")
+                    if (watchServers != null) {
+                        for (i in 0 until watchServers.length()) {
+                            val srv = watchServers.optJSONObject(i) ?: continue
+                            val sName = srv.optString("name", "Server ${i + 1}")
+                            val sUrl = srv.optString("url").trim()
+                            if (sUrl.isNotBlank()) {
+                                serverPlayers.add(sName to sUrl)
                             }
-                            ?: "Multi"
+                        }
+                    }
 
-                        add(playerUrl to language)
+                    val playerUrls = dataObj.optJSONArray("videoPlayerUrls")
+                    if (playerUrls != null) {
+                        for (i in 0 until playerUrls.length()) {
+                            val pUrl = playerUrls.optString(i).trim()
+                            if (pUrl.isNotBlank()) {
+                                serverPlayers.add("Server ${i + 1}" to pUrl)
+                            }
+                        }
+                    }
+
+                    val singleUrl = dataObj.optString("videoPlayerUrl").trim()
+                    if (singleUrl.isNotBlank()) {
+                        serverPlayers.add("Primary" to singleUrl)
+                    }
+                } catch (_: Exception) {}
+            }
+            if (serverPlayers.isNotEmpty()) break
+        }
+
+        val distinctPlayers = serverPlayers.distinctBy { it.second }
+        if (distinctPlayers.isEmpty()) return false
+
+        var foundLinks = false
+
+        for ((serverName, playerUrl) in distinctPlayers) {
+            if (playerUrl.contains("data=")) {
+                // Multi-audio Base64 payload (Hindi, Tamil, Telugu, English, Japanese)
+                try {
+                    var decodedUrl = URLDecoder.decode(playerUrl, "UTF-8")
+                    if (decodedUrl.contains("%3D") || decodedUrl.contains("%2F")) {
+                        decodedUrl = URLDecoder.decode(decodedUrl, "UTF-8")
+                    }
+                    val rawBase64 = decodedUrl.substringAfter("data=").substringBefore("&").replace(" ", "+")
+                    val jsonStr = String(Base64.decode(rawBase64, Base64.DEFAULT))
+                    val jsonArray = JSONArray(jsonStr)
+
+                    for (i in 0 until jsonArray.length()) {
+                        val obj = jsonArray.optJSONObject(i) ?: continue
+                        val langName = obj.optString("language", "Multi")
+                        val innerLink = obj.optString("link").replace("\\/", "/").trim()
+                        if (innerLink.isNotBlank()) {
+                            val collected = mutableListOf<ExtractorLink>()
+                            if (innerLink.contains("flixcloud", true)) {
+                                FlixCloudExtractor().getUrl(innerLink, "https://animesalt.streamindia.co.in/", subtitleCallback) { link ->
+                                    collected.add(link)
+                                }
+                            } else {
+                                AbyssPlayerExtractor().getUrl(innerLink, "https://animesalt.streamindia.co.in/", subtitleCallback) { link ->
+                                    collected.add(link)
+                                }
+                            }
+                            for (link in collected) {
+                                foundLinks = true
+                                callback.invoke(
+                                    newExtractorLink(
+                                        source = name,
+                                        name = "$name ($langName - $serverName)",
+                                        url = link.url,
+                                        type = link.type
+                                    ) {
+                                        this.referer = link.referer
+                                        this.quality = link.quality
+                                        this.headers = link.headers
+                                    }
+                                )
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+            } else {
+                val collected = mutableListOf<ExtractorLink>()
+                when {
+                    playerUrl.contains("ravok", true) -> {
+                        RavokExtractor().getUrl(playerUrl, "$mainUrl/", subtitleCallback) { link ->
+                            collected.add(link)
+                        }
+                    }
+                    playerUrl.contains("flixcloud", true) -> {
+                        FlixCloudExtractor().getUrl(playerUrl, "$mainUrl/", subtitleCallback) { link ->
+                            collected.add(link)
+                        }
+                    }
+                    playerUrl.contains("abyss", true) -> {
+                        AbyssPlayerExtractor().getUrl(playerUrl, "$mainUrl/", subtitleCallback) { link ->
+                            collected.add(link)
+                        }
+                    }
+                    else -> {
+                        loadExtractor(playerUrl, "$mainUrl/", subtitleCallback) { link ->
+                            collected.add(link)
+                        }
                     }
                 }
 
-            } catch (e: Exception) {
-                println("TOONPLAY PLAYER JSON ERROR: ${e.message}")
-                emptyList()
-            }
-        }
-
-        // -----------------------------------------------------
-        // RESOLVE PLAYER URL
-        // -----------------------------------------------------
-
-        suspend fun resolve(
-            url: String,
-            label: String,
-            referer: String
-        ) {
-
-            val normalizedUrl = fixUrl(url.trim())
-
-            if (
-                normalizedUrl.isBlank() ||
-                normalizedUrl in emittedUrls
-            ) return
-
-            println("TOONPLAY: resolving $normalizedUrl")
-
-            val extracted = mutableListOf<ExtractorLink>()
-
-            try {
-
-                loadExtractor(
-                    normalizedUrl,
-                    referer,
-                    subtitleCallback
-                ) { link ->
-
-                    if (link.url !in emittedUrls) {
-                        emittedUrls.add(link.url)
-                        extracted.add(link)
-                    }
+                for (link in collected) {
+                    foundLinks = true
+                    callback.invoke(
+                        newExtractorLink(
+                            source = name,
+                            name = "$name - ${link.name} ($serverName)",
+                            url = link.url,
+                            type = link.type
+                        ) {
+                            this.referer = link.referer
+                            this.quality = link.quality
+                            this.headers = link.headers
+                        }
+                    )
                 }
-
-            } catch (e: Exception) {
-                println(
-                    "TOONPLAY EXTRACTOR ERROR [$normalizedUrl]: ${e.message}"
-                )
-            }
-
-            extracted.forEach { link ->
-
-                callback.invoke(
-                    newExtractorLink(
-                        source = name,
-                        name = if (label.isBlank()) {
-                            link.name
-                        } else {
-                            "${link.name} - $label"
-                        },
-                        url = link.url,
-                        type = link.type
-                    ) {
-                        this.referer = link.referer
-                        this.quality = link.quality
-                        this.headers = link.headers
-                    }
-                )
-
-                foundAny = true
-
-                println("TOONPLAY: link found = ${link.url}")
             }
         }
 
-        // -----------------------------------------------------
-        // TRY ORIGINAL SERVER FIRST, THEN FALLBACKS
-        // -----------------------------------------------------
-
-        val pagesToTry = mutableListOf(targetUrl)
-
-        for (server in serverOptions) {
-            pagesToTry.add(withServer(targetUrl, server))
-        }
-
-        for (pageUrl in pagesToTry.distinct()) {
-
-            if (!attemptedPages.add(pageUrl)) continue
-
-            println("TOONPLAY: checking server page = $pageUrl")
-
-            val doc = try {
-                fetchRenderedDom(pageUrl)
-            } catch (e: Exception) {
-                println("TOONPLAY PAGE ERROR: ${e.message}")
-                continue
-            }
-
-            // Prefer the actual active player iframe.
-            val activeIframe = doc.selectFirst(
-                "#watchpage-active-iframe[src]"
-            )
-
-            // Do not select arbitrary blank/ad iframes.
-            val fallbackIframe = doc.select("iframe[src]")
-                .firstOrNull { element ->
-
-                    val src = element.absUrl("src")
-                        .ifBlank { element.attr("src") }
-                        .trim()
-
-                    src.isNotBlank() &&
-                        (
-                            src.contains("ravok", true) ||
-                            src.contains("flixcloud", true) ||
-                            src.contains("abyss", true) ||
-                            src.contains("animesalt", true)
-                        )
-                }
-
-            val iframe = activeIframe ?: fallbackIframe
-
-            val iframeSrc = iframe?.let {
-                it.absUrl("src")
-                    .ifBlank { it.attr("src").trim() }
-            }.orEmpty()
-
-            if (iframeSrc.isBlank()) {
-                println("TOONPLAY: no active iframe on $pageUrl")
-                continue
-            }
-
-            println("TOONPLAY: iframe found = $iframeSrc")
-
-            // First handle Base64 encoded player lists.
-            val playerEntries = decodePlayerList(iframeSrc)
-
-            for ((playerUrl, language) in playerEntries) {
-                resolve(
-                    playerUrl,
-                    language,
-                    iframeSrc
-                )
-            }
-
-            // Also resolve the active iframe itself.
-            resolve(
-                iframeSrc,
-                "",
-                pageUrl
-            )
-
-            if (foundAny) {
-                println("TOONPLAY: links successfully extracted")
-                return true
-            }
-        }
-
-        println("TOONPLAY: no playable links found")
-
-        return foundAny
+        return foundLinks
     }
 
-    // ---------------------------------------------------------
-    // EPISODE DATA
-    // ---------------------------------------------------------
-
     data class EpisodeData(
-        val watchUrl: String,
+        val episodeUrl: String,
+        val slugId: String = "",
         val season: Int = 1,
-        val episode: Int = 1,
-        val anilistId: Int? = null
+        val episode: Int = 1
     )
 }
