@@ -1,39 +1,24 @@
 package com.hungrysturdy
 
-import android.annotation.SuppressLint
-import android.content.Context
-import android.os.Handler
-import android.os.Looper
-import android.webkit.CookieManager
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import java.io.ByteArrayInputStream
 import java.net.URI
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.Base64
 import java.util.Locale
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.CopyOnWriteArrayList
-import java.util.concurrent.atomic.AtomicBoolean
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
-import kotlin.coroutines.resume
 
 class SflixProvider : MainAPI() {
 
@@ -41,12 +26,17 @@ class SflixProvider : MainAPI() {
         const val WEB_USER_AGENT =
             "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36"
 
+        val WEB_DOMAINS = listOf(
+            "https://sflix.film",
+            "https://h5-api.aoneroom.com",
+            "https://movie-box.co",
+            "https://123moviesfree.club"
+        )
+
         private const val TOKEN_BOOTSTRAP_URL =
             "https://apig.inmoviebox.com/wefeed-mobile-bff/tab/ranking-list?tabId=0&categoryType=4516404531735022304&page=1&perPage=1"
 
         private const val SECRET_DEFAULT_B64 = "NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw=="
-        private const val SECRET_ALT_B64 = "WHFuMm5uTzQxL0w5Mm8xaXVYaFNMSFRiWHZZNFo1Wlo2Mm04bVNMQQ=="
-
         var bearerToken: String? = null
 
         fun decodeJwtExpiry(token: String): Long {
@@ -63,8 +53,7 @@ class SflixProvider : MainAPI() {
 
         fun isTokenValid(token: String?): Boolean {
             if (token.isNullOrBlank()) return false
-            val exp = decodeJwtExpiry(token)
-            return exp > (System.currentTimeMillis() / 1000) + 3600
+            return decodeJwtExpiry(token) > (System.currentTimeMillis() / 1000) + 3600
         }
     }
 
@@ -77,6 +66,7 @@ class SflixProvider : MainAPI() {
 
     private val random = SecureRandom()
     private val deviceId: String = generateDeviceId()
+    private val mapper = jacksonObjectMapper()
 
     private val modernUserAgent =
         "com.community.mbox.in/50020130 (Linux; U; Android 14; en_IN; Pixel 8; Build/UD1A.230803.041; Cronet/145.0.7582.0)"
@@ -91,13 +81,7 @@ class SflixProvider : MainAPI() {
         "sflix_i18n_lang=en; _ga=GA1.1.622965780.1794742147; " +
             "sflix_token=%22eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjE5NjY4NTU1NTcyNzgwNjIyNzYsImF0cCI6MywiZXh0IjoiMTc5NDc0MjE0NyIsImV4cCI6MTgwMjUxODE0NywiaWF0IjoxNzk0NzQxODQ3fQ.8aOIckQOSKyISQdl85SAJvuMlhXfWodHmcPOIvlg0pM%22; " +
             "vrk4n8fqhwc3jzy7pbsmgt6dx5lha2u9=01a1b98c-7aec-7761-b581-b09b7730a724_2; " +
-            "dom3ic8zudi28v8lr6fgphwffqoz0j6c=01a1b98c-7aec-7761-b581-b09b7730a724; " +
-            "imprCounter_53d6f18bc2561bc4f4ecc19cefe348bf_expiry=Invalid Date; " +
-            "imprCounter_53d6f18bc2561bc4f4ecc19cefe348bf=3; " +
-            "_ga_CJSG3GJM85=GS2.1.s1794753588\$o3\$g1\$t1794754299\$j60\$l0\$h0; " +
-            "sb_main_29ea333f714080c847539fb7690ac422=1; " +
-            "pp_main_505b167260767d732d39389d9b6ebed9=1; " +
-            "sb_count_29ea333f714080c847539fb7690ac422=1"
+            "dom3ic8zudi28v8lr6fgphwffqoz0j6c=01a1b98c-7aec-7761-b581-b09b7730a724"
 
     private val defaultPosterHeaders = mapOf(
         "Referer" to "$mainUrl/",
@@ -113,8 +97,26 @@ class SflixProvider : MainAPI() {
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
     )
 
-    private val mapper: com.fasterxml.jackson.databind.ObjectMapper =
-        com.fasterxml.jackson.module.kotlin.jacksonObjectMapper()
+    override val mainPage = mainPageOf(
+        "$mainUrl/" to "Featured",
+        "$mainUrl/ranking-list?id=5514044369772445984&page_from=more_SUBJECTS_MOVIE" to "Trending Now",
+        "$mainUrl/ranking-list?id=5692654647815587592&page_from=more_SUBJECTS_MOVIE" to "Cinema",
+        "$mainUrl/upcoming" to "Coming Soon",
+        "$mainUrl/ranking-list?id=1067246098818943288&page_from=more_SUBJECTS_MOVIE" to "Top Series",
+        "$mainUrl/ranking-list?id=8019599703232971616&page_from=more_SUBJECTS_MOVIE" to "Hollywood",
+        "$mainUrl/ranking-list?id=414907768299210008&page_from=more_SUBJECTS_MOVIE" to "Bollywood",
+        "$mainUrl/ranking-list?id=3859721901924910512&page_from=more_SUBJECTS_MOVIE" to "South Indian",
+        "$mainUrl/ranking-list?id=4903182713986896328&page_from=more_SUBJECTS_MOVIE" to "Indian Drama",
+        "$mainUrl/ranking-list?id=537172945375056936&page_from=more_SUBJECTS_MOVIE" to "Hot Short TV",
+        "$mainUrl/ranking-list?id=4380734070238626200&page_from=more_SUBJECTS_MOVIE" to "K-Drama",
+        "$mainUrl/ranking-list?id=8624142774394406504&page_from=more_SUBJECTS_MOVIE" to "C-Drama",
+        "$mainUrl/ranking-list?id=8434602210994128512&page_from=more_SUBJECTS_MOVIE" to "Top Anime",
+        "$mainUrl/ranking-list?id=5177200225164885656&page_from=more_SUBJECTS_MOVIE" to "Turkish Drama",
+        "$mainUrl/ranking-list?id=1440506765396822800&page_from=more_SUBJECTS_MOVIE" to "Western TV",
+        "$mainUrl/ranking-list?id=2602566563471442096&page_from=more_SUBJECTS_MOVIE" to "Trending Punjabi",
+        "$mainUrl/ranking-list?id=6843072545655603600&page_from=more_SUBJECTS_MOVIE" to "Popular Movies",
+        "$mainUrl/ranking-list?id=4516404531735022304&page_from=more_SUBJECTS_MOVIE" to "Action & Thriller"
+    )
 
     private fun generateDeviceId(): String {
         val bytes = ByteArray(16)
@@ -151,21 +153,12 @@ class SflixProvider : MainAPI() {
                 }.sortedBy { it.first }.joinToString("&") { "${it.first}=${it.second}" }
             } else ""
             val canonicalUrl = if (query.isNotEmpty()) "$path?$query" else path
-            val bodyHash: String
-            val bodyLength: String
-            if (body != null) {
-                val bodyBytes = body.toByteArray()
-                bodyHash = md5(if (bodyBytes.size > 102400) bodyBytes.copyOfRange(0, 102400) else bodyBytes)
-                bodyLength = bodyBytes.size.toString()
-            } else {
-                bodyHash = ""
-                bodyLength = ""
-            }
+            val bodyHash = if (body != null) md5(body.toByteArray()) else ""
+            val bodyLength = body?.toByteArray()?.size?.toString() ?: ""
             method.uppercase(Locale.ROOT) + "\n" + (accept ?: "") + "\n" + (contentType ?: "") + "\n" +
                 bodyLength + "\n" + timestamp + "\n" + bodyHash + "\n" + canonicalUrl
         } catch (e: Exception) {
-            method.uppercase(Locale.ROOT) + "\n" + (accept ?: "") + "\n" + (contentType ?: "") + "\n\n" +
-                timestamp + "\n\n"
+            method.uppercase(Locale.ROOT) + "\n" + (accept ?: "") + "\n" + (contentType ?: "") + "\n\n" + timestamp + "\n\n"
         }
     }
 
@@ -175,14 +168,10 @@ class SflixProvider : MainAPI() {
         contentType: String?,
         url: String,
         body: String?,
-        useAltKey: Boolean = false,
         timestamp: Long = System.currentTimeMillis()
     ): String {
         val canonical = buildCanonicalString(method, accept, contentType, url, body, timestamp)
-        val secret = if (useAltKey) SECRET_ALT_B64 else SECRET_DEFAULT_B64
-        val secretBytes = Base64.getDecoder().decode(
-            String(Base64.getDecoder().decode(secret))
-        )
+        val secretBytes = Base64.getDecoder().decode(String(Base64.getDecoder().decode(SECRET_DEFAULT_B64)))
         val mac = Mac.getInstance("HmacMD5")
         mac.init(SecretKeySpec(secretBytes, "HmacMD5"))
         val signature = Base64.getEncoder().encodeToString(mac.doFinal(canonical.toByteArray()))
@@ -193,21 +182,17 @@ class SflixProvider : MainAPI() {
         if (!forceRefresh && isTokenValid(bearerToken)) return bearerToken!!
         return try {
             val ts = System.currentTimeMillis()
-            val xClientToken = generateXClientToken(ts)
-            val xTrSig = generateXTrSignature("GET", "application/json", "application/json", TOKEN_BOOTSTRAP_URL, null, false, ts)
             val headers = mapOf(
                 "user-agent" to modernUserAgent,
                 "accept" to "application/json",
                 "content-type" to "application/json",
-                "connection" to "keep-alive",
-                "x-client-token" to xClientToken,
-                "x-tr-signature" to xTrSig,
+                "x-client-token" to generateXClientToken(ts),
+                "x-tr-signature" to generateXTrSignature("GET", "application/json", "application/json", TOKEN_BOOTSTRAP_URL, null, ts),
                 "x-client-info" to modernClientInfo,
                 "x-client-status" to "0"
             )
             val resp = app.get(TOKEN_BOOTSTRAP_URL, headers = headers)
-            val xUser = resp.headers["x-user"]
-            val token = xUser?.let { runCatching { JSONObject(it).optString("token") }.getOrNull() }
+            val token = resp.headers["x-user"]?.let { runCatching { JSONObject(it).optString("token") }.getOrNull() }
             if (!token.isNullOrBlank()) {
                 bearerToken = token
                 token
@@ -219,32 +204,19 @@ class SflixProvider : MainAPI() {
         }
     }
 
-    private suspend fun buildAuthHeaders(
-        method: String,
-        url: String,
-        contentType: String = "application/json",
-        accept: String = "application/json",
-        body: String? = null,
-        useToken: Boolean = true
-    ): Map<String, String> {
+    private suspend fun buildMobileAuthHeaders(url: String): Map<String, String> {
         val ts = System.currentTimeMillis()
-        val xClientToken = generateXClientToken(ts)
-        val xTrSig = generateXTrSignature(method, accept, contentType, url, body, false, ts)
         val headers = mutableMapOf(
-            "user-agent" to WEB_USER_AGENT,
-            "accept" to accept,
-            "content-type" to contentType,
-            "connection" to "keep-alive",
-            "x-client-token" to xClientToken,
-            "x-tr-signature" to xTrSig,
+            "user-agent" to modernUserAgent,
+            "accept" to "application/json",
+            "content-type" to "application/json",
+            "x-client-token" to generateXClientToken(ts),
+            "x-tr-signature" to generateXTrSignature("GET", "application/json", "application/json", url, null, ts),
             "x-client-info" to modernClientInfo,
-            "x-client-status" to "0",
-            "Cookie" to userCookies
+            "x-client-status" to "0"
         )
-        if (useToken) {
-            val token = fetchAnonymousToken()
-            if (token.isNotBlank()) headers["Authorization"] = "Bearer $token"
-        }
+        val token = fetchAnonymousToken()
+        if (token.isNotBlank()) headers["Authorization"] = "Bearer $token"
         return headers
     }
 
@@ -254,27 +226,6 @@ class SflixProvider : MainAPI() {
         if (trimmed.startsWith("data:")) return null
         return fixUrlNull(trimmed.substringBefore("?x-oss-process=").substringBefore("?"))
     }
-
-    override val mainPage = mainPageOf(
-        "$mainUrl/" to "Featured",
-        "$mainUrl/ranking-list?id=5514044369772445984&page_from=more_SUBJECTS_MOVIE" to "Trending Now",
-        "$mainUrl/ranking-list?id=5692654647815587592&page_from=more_SUBJECTS_MOVIE" to "Cinema",
-        "$mainUrl/upcoming" to "Coming Soon",
-        "$mainUrl/ranking-list?id=1067246098818943288&page_from=more_SUBJECTS_MOVIE" to "Top Series",
-        "$mainUrl/ranking-list?id=8019599703232971616&page_from=more_SUBJECTS_MOVIE" to "Hollywood",
-        "$mainUrl/ranking-list?id=414907768299210008&page_from=more_SUBJECTS_MOVIE" to "Bollywood",
-        "$mainUrl/ranking-list?id=3859721901924910512&page_from=more_SUBJECTS_MOVIE" to "South Indian",
-        "$mainUrl/ranking-list?id=4903182713986896328&page_from=more_SUBJECTS_MOVIE" to "Indian Drama",
-        "$mainUrl/ranking-list?id=537172945375056936&page_from=more_SUBJECTS_MOVIE" to "Hot Short TV",
-        "$mainUrl/ranking-list?id=4380734070238626200&page_from=more_SUBJECTS_MOVIE" to "K-Drama",
-        "$mainUrl/ranking-list?id=8624142774394406504&page_from=more_SUBJECTS_MOVIE" to "C-Drama",
-        "$mainUrl/ranking-list?id=8434602210994128512&page_from=more_SUBJECTS_MOVIE" to "Top Anime",
-        "$mainUrl/ranking-list?id=5177200225164885656&page_from=more_SUBJECTS_MOVIE" to "Turkish Drama",
-        "$mainUrl/ranking-list?id=1440506765396822800&page_from=more_SUBJECTS_MOVIE" to "Western TV",
-        "$mainUrl/ranking-list?id=2602566563471442096&page_from=more_SUBJECTS_MOVIE" to "Trending Punjabi",
-        "$mainUrl/ranking-list?id=6843072545655603600&page_from=more_SUBJECTS_MOVIE" to "Popular Movies",
-        "$mainUrl/ranking-list?id=4516404531735022304&page_from=more_SUBJECTS_MOVIE" to "Action & Thriller"
-    )
 
     private suspend fun fetchDocument(url: String): Document {
         val res = app.get(url, headers = requestHeaders)
@@ -301,9 +252,7 @@ class SflixProvider : MainAPI() {
                         val urlIdx = coverObj?.optInt("url", -1) ?: -1
                         if (path.isNotEmpty() && urlIdx >= 0) {
                             val coverUrl = normalizePosterUrl(arr.optString(urlIdx))
-                            if (!coverUrl.isNullOrEmpty()) {
-                                map[path] = coverUrl
-                            }
+                            if (!coverUrl.isNullOrEmpty()) map[path] = coverUrl
                         }
                     }
                 }
@@ -405,7 +354,8 @@ class SflixProvider : MainAPI() {
         val nuxtPosters = extractNuxtPosterMap(document)
 
         var title = document.selectFirst("h1.content-title")?.text()?.trim() ?: document.selectFirst("h2.title")?.text()?.trim() ?: return null
-        var poster = document.selectFirst("div.info-image img")?.let { normalizePosterUrl(it.attr("data-src").ifEmpty { it.attr("src") }) } ?: normalizePosterUrl(document.selectFirst("meta[property=og:image]")?.attr("content"))
+        var poster = document.selectFirst("div.info-image img")?.let { normalizePosterUrl(it.attr("data-src").ifEmpty { it.attr("src") }) }
+            ?: normalizePosterUrl(document.selectFirst("meta[property=og:image]")?.attr("content"))
         var description = document.selectFirst("p.content-desc")?.text()?.trim() ?: document.selectFirst("meta[property=og:description]")?.attr("content")
         var ratingStr = document.selectFirst("div.rate-num")?.text()?.let { Regex("""(\d+(\.\d+)?)""").find(it)?.groupValues?.get(1) }
 
@@ -513,7 +463,6 @@ class SflixProvider : MainAPI() {
                                     put("season", if (seasonNum <= 0) 1 else seasonNum)
                                     put("episode", ep)
                                     put("isSeries", true)
-                                    put("trailerUrl", trailerUrl ?: "")
                                     put("dubs", dubServers)
                                 }.toString()
 
@@ -544,7 +493,6 @@ class SflixProvider : MainAPI() {
                     put("season", 1)
                     put("episode", 1)
                     put("isSeries", true)
-                    put("trailerUrl", trailerUrl ?: "")
                     put("dubs", dubServers)
                 }.toString()
 
@@ -569,10 +517,9 @@ class SflixProvider : MainAPI() {
             val moviePlayData = JSONObject().apply {
                 put("detailPath", detailPath)
                 put("subjectId", subjectId)
-                put("season", 1)
-                put("episode", 1)
+                put("season", 0)
+                put("episode", 0)
                 put("isSeries", false)
-                put("trailerUrl", trailerUrl ?: "")
                 put("dubs", dubServers)
             }.toString()
 
@@ -590,10 +537,30 @@ class SflixProvider : MainAPI() {
         }
     }
 
-    private data class CapturedStream(
-        val url: String,
-        val headers: Map<String, String>
-    )
+    private suspend fun loadCaptions(
+        streamId: String,
+        languageLabel: String,
+        subjectId: String,
+        subtitleCallback: (SubtitleFile) -> Unit
+    ) {
+        val seen = HashSet<String>()
+        try {
+            val subLink = "https://api6.aoneroom.com/wefeed-mobile-bff/subject-api/get-stream-captions?subjectId=$subjectId&streamId=$streamId"
+            val subHeaders = buildMobileAuthHeaders(subLink)
+            val subResponse = app.get(subLink, headers = subHeaders)
+            val subRoot = mapper.readTree(subResponse.text).get("data")?.get("extCaptions")
+            if (subRoot != null && subRoot.isArray) {
+                for (caption in subRoot) {
+                    val url = caption.get("url")?.asText()?.takeUnless { it.isBlank() } ?: continue
+                    if (!seen.add(url)) continue
+                    val rawLang = caption.get("lanName")?.asText()?.takeUnless { it.isBlank() }
+                        ?: caption.get("language")?.asText()?.takeUnless { it.isBlank() }
+                        ?: "English"
+                    subtitleCallback.invoke(newSubtitleFile("$rawLang ($languageLabel)", url))
+                }
+            }
+        } catch (_: Exception) {}
+    }
 
     override suspend fun loadLinks(
         data: String,
@@ -604,26 +571,26 @@ class SflixProvider : MainAPI() {
         val payload = runCatching { JSONObject(data) }.getOrNull() ?: return false
         val defaultPath = payload.optString("detailPath")
         val defaultId = payload.optString("subjectId")
-        val season = payload.optInt("season", 1).takeIf { it > 0 } ?: 1
-        val episode = payload.optInt("episode", 1).takeIf { it > 0 } ?: 1
         val isSeries = payload.optBoolean("isSeries", false)
+        val season = if (isSeries) payload.optInt("season", 1).coerceAtLeast(1) else 0
+        val episode = if (isSeries) payload.optInt("episode", 1).coerceAtLeast(1) else 0
         val dubsArr = payload.optJSONArray("dubs")
 
         data class ServerEntry(val label: String, val id: String, val path: String)
 
         val servers = mutableListOf<ServerEntry>()
         if (defaultId.isNotEmpty()) {
-            servers.add(ServerEntry("Primary", defaultId, defaultPath))
+            servers.add(ServerEntry("Original", defaultId, defaultPath))
         }
         if (dubsArr != null && dubsArr.length() > 0) {
             for (i in 0 until dubsArr.length()) {
                 val d = dubsArr.optJSONObject(i) ?: continue
                 val dId = d.optString("id")
                 val dPath = d.optString("path").ifEmpty { defaultPath }
-                val dName = d.optString("name").ifEmpty { "Server ${i + 1}" }
+                val dName = d.optString("name").ifEmpty { "Dub ${i + 1}" }
                 if (dId.isNotEmpty() && servers.none { it.id == dId }) {
                     servers.add(ServerEntry(dName, dId, dPath))
-                } else if (dId == defaultId && servers.isNotEmpty() && servers[0].label == "Primary") {
+                } else if (dId == defaultId && servers.isNotEmpty()) {
                     servers[0] = ServerEntry(dName, dId, dPath)
                 }
             }
@@ -631,199 +598,99 @@ class SflixProvider : MainAPI() {
 
         var anyFound = false
         val emittedUrls = mutableSetOf<String>()
-        val emittedSubs = mutableSetOf<String>()
 
-        for (server in servers.take(2)) {
-            val targetPlayerUrl = if (isSeries) {
-                "$playerUrl/spa/videoPlayPage/movies/${server.path}?id=${server.id}&se=$season&ep=$episode&type=/movie/detail&lang=en"
-            } else {
-                "$playerUrl/spa/videoPlayPage/movies/${server.path}?id=${server.id}&type=/movie/detail&lang=en"
-            }
-
-            val (streams, subs) = resolveStreamsViaWebView(targetPlayerUrl, "$mainUrl/")
-
-            streams.forEach { captured ->
-                val streamUrl = captured.url
-                if (emittedUrls.add(streamUrl)) {
-                    anyFound = true
-                    val streamType = when {
-                        streamUrl.contains(".mpd", ignoreCase = true) -> ExtractorLinkType.DASH
-                        streamUrl.contains(".m3u8", ignoreCase = true) -> ExtractorLinkType.M3U8
-                        else -> ExtractorLinkType.VIDEO
-                    }
-                    val qualityTag = when {
-                        streamUrl.contains("1080") -> "1080p"
-                        streamUrl.contains("720") -> "720p"
-                        streamUrl.contains("480") -> "480p"
-                        streamUrl.contains("360") -> "360p"
-                        streamUrl.contains(".mpd", true) -> "DASH"
-                        else -> "HD"
-                    }
-
-                    callback.invoke(
-                        newExtractorLink(
-                            source = name,
-                            name = "$name - ${server.label} ($qualityTag)",
-                            url = streamUrl,
-                            type = streamType
-                        ) {
-                            this.referer = captured.headers["Referer"] ?: "$playerUrl/"
-                            this.headers = captured.headers
-                            this.quality = getQualityFromName(qualityTag)
-                        }
+        for (server in servers) {
+            for (domain in WEB_DOMAINS) {
+                try {
+                    val playUrl = "$domain/wefeed-h5api-bff/subject/play?subjectId=${server.id}" +
+                        "&se=$season&ep=$episode&detailPath=${server.path}" +
+                        "&streamSignType=1&supportCodecs%5Bhevc%5D=1&supportCodecs%5Bh264%5D=1"
+                    val referer = "$playerUrl/spa/videoPlayPage/movies/${server.path}?id=${server.id}&type=/movie/detail&lang=en"
+                    val webHeaders = mapOf(
+                        "User-Agent" to WEB_USER_AGENT,
+                        "Referer" to referer,
+                        "Origin" to playerUrl,
+                        "Accept" to "application/json",
+                        "Cookie" to userCookies,
+                        "x-client-info" to "{\"timezone\":\"Asia/Calcutta\"}",
+                        "x-request-lang" to "en",
+                        "x-vip-restrict" to "0",
+                        "x-no-high-risk-restrict" to "0"
                     )
-                }
-            }
 
-            subs.forEach { subUrl ->
-                if (emittedSubs.add(subUrl)) {
-                    val langLabel = when {
-                        subUrl.contains("-hi", true) || subUrl.contains("hindi", true) -> "Hindi"
-                        subUrl.contains("-es", true) -> "Spanish"
-                        subUrl.contains("-fr", true) -> "French"
-                        subUrl.contains("-ar", true) -> "Arabic"
-                        subUrl.contains("-id", true) -> "Indonesian"
-                        subUrl.contains("-pt", true) -> "Portuguese"
-                        else -> "English"
+                    val resp = app.get(playUrl, headers = webHeaders)
+                    if (resp.code != 200) continue
+                    val dataNode = mapper.readTree(resp.text).get("data") ?: continue
+
+                    suspend fun emitStream(item: JsonNode, kind: String) {
+                        val streamUrl = item.get("url")?.asText()?.takeUnless { it.isBlank() } ?: return
+                        if (!emittedUrls.add(streamUrl)) return
+
+                        val signCookie = item.get("signCookie")?.asText()?.takeUnless { it.isBlank() }
+                        val signHeaderKey = item.get("signHeaderKey")?.asText()?.takeUnless { it.isBlank() } ?: "X-MB-Token"
+                        val resolutions = item.get("resolutions")?.asText() ?: ""
+                        val streamId = item.get("id")?.asText() ?: server.id
+
+                        val isDash = kind == "DASH" || streamUrl.contains(".mpd", true)
+                        val isHls = kind == "HLS" || streamUrl.contains(".m3u8", true)
+                        val linkType = when {
+                            isDash -> ExtractorLinkType.DASH
+                            isHls -> ExtractorLinkType.M3U8
+                            else -> ExtractorLinkType.VIDEO
+                        }
+
+                        val maxRes = resolutions.split(",")
+                            .mapNotNull { it.trim().toIntOrNull() }
+                            .maxOrNull() ?: 480
+
+                        val qualityLabel = if (isDash && resolutions.contains(",")) {
+                            "1080p/720p/480p Auto"
+                        } else {
+                            "${maxRes}p"
+                        }
+
+                        val streamHeaders = mutableMapOf(
+                            "Origin" to playerUrl,
+                            "Referer" to "$playerUrl/",
+                            "User-Agent" to WEB_USER_AGENT,
+                            "Accept" to "*/*"
+                        )
+                        if (signCookie != null) {
+                            streamHeaders[signHeaderKey] = signCookie
+                            streamHeaders["Cookie"] = signCookie
+                        }
+
+                        anyFound = true
+                        callback.invoke(
+                            newExtractorLink(
+                                source = name,
+                                name = "$name - ${server.label} [$kind $qualityLabel]",
+                                url = streamUrl,
+                                type = linkType
+                            ) {
+                                this.referer = "$playerUrl/"
+                                this.headers = streamHeaders
+                                this.quality = maxRes
+                            }
+                        )
+
+                        loadCaptions(streamId, server.label, server.id, subtitleCallback)
                     }
-                    subtitleCallback.invoke(newSubtitleFile(langLabel, subUrl))
+
+                    // 1. DASH streams (1080p, 720p, 480p with X-MB-Token)
+                    dataNode.get("dash")?.takeIf { it.isArray }?.forEach { emitStream(it, "DASH") }
+                    // 2. HLS streams
+                    dataNode.get("hls")?.takeIf { it.isArray }?.forEach { emitStream(it, "HLS") }
+                    // 3. Direct MP4 streams (480p free stream)
+                    dataNode.get("streams")?.takeIf { it.isArray }?.forEach { emitStream(it, "MP4") }
+
+                    if (anyFound) break
+                } catch (_: Exception) {
+                    continue
                 }
             }
-            if (anyFound) break
         }
 
         return anyFound
-    }
-
-    private fun getAppContext(): Context? {
-        return runCatching {
-            val activityThread = Class.forName("android.app.ActivityThread")
-            val currentApp = activityThread.getMethod("currentApplication").invoke(null)
-            currentApp as? Context
-        }.getOrNull()
-    }
-
-    @SuppressLint("SetJavaScriptEnabled")
-    private suspend fun resolveStreamsViaWebView(
-        pageUrl: String,
-        referer: String
-    ): Pair<List<CapturedStream>, List<String>> {
-        val context = getAppContext() ?: return Pair(emptyList(), emptyList())
-        val foundStreams = CopyOnWriteArrayList<CapturedStream>()
-        val seenStreamUrls = ConcurrentHashMap.newKeySet<String>()
-        val foundSubs = ConcurrentHashMap.newKeySet<String>()
-        val mainHandler = Handler(Looper.getMainLooper())
-
-        val adDomains = listOf(
-            "surlyplants.com", "createlouisville.org", "hisavana.com", "pufted.com",
-            "shallspark.com", "googletagmanager.com", "google-analytics.com", "doubleclick.net",
-            "googlesyndication.com", "popads.net", "adskeeper.com", "tsyndicate.com",
-            "exoclick.com", "5gvci.com", "nap5k.com", "richinfo.co", "ifunny-promo", "/other/"
-        )
-
-        withTimeoutOrNull(20_000L) {
-            suspendCancellableCoroutine<Unit> { continuation ->
-                val resumed = AtomicBoolean(false)
-                var webView: WebView? = null
-
-                fun finish() {
-                    if (resumed.compareAndSet(false, true)) {
-                        mainHandler.post {
-                            runCatching {
-                                webView?.stopLoading()
-                                webView?.destroy()
-                                webView = null
-                            }
-                        }
-                        if (continuation.isActive) continuation.resume(Unit)
-                    }
-                }
-
-                continuation.invokeOnCancellation { finish() }
-
-                mainHandler.post {
-                    runCatching {
-                        val wv = WebView(context)
-                        webView = wv
-
-                        val cookieManager = CookieManager.getInstance().apply {
-                            setAcceptCookie(true)
-                            setAcceptThirdPartyCookies(wv, true)
-                            setCookie("https://mzfi.me", userCookies)
-                            setCookie("https://h5-api.aoneroom.com", userCookies)
-                        }
-
-                        wv.settings.apply {
-                            javaScriptEnabled = true
-                            domStorageEnabled = true
-                            databaseEnabled = true
-                            mediaPlaybackRequiresUserGesture = false
-                            mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                            userAgentString = WEB_USER_AGENT
-                        }
-
-                        wv.webViewClient = object : WebViewClient() {
-                            override fun shouldInterceptRequest(
-                                view: WebView?,
-                                request: WebResourceRequest?
-                            ): WebResourceResponse? {
-                                val reqUrl = request?.url?.toString() ?: return null
-
-                                if (adDomains.any { reqUrl.contains(it, ignoreCase = true) }) {
-                                    return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
-                                }
-
-                                if (reqUrl.contains(".vtt", ignoreCase = true) || reqUrl.contains(".srt", ignoreCase = true)) {
-                                    foundSubs.add(reqUrl)
-                                }
-
-                                val isVideoStream = reqUrl.contains(".mpd", ignoreCase = true) ||
-                                    reqUrl.contains(".m3u8", ignoreCase = true) ||
-                                    (reqUrl.contains(".mp4", ignoreCase = true) && !reqUrl.contains("loading", true))
-
-                                val isTrailer = reqUrl.contains("h5-static.aoneroom.com") || reqUrl.contains("macdn.aoneroom.com")
-
-                                if (isVideoStream && !isTrailer && !reqUrl.startsWith("blob:")) {
-                                    if (seenStreamUrls.add(reqUrl)) {
-                                        val capturedHeaders = mutableMapOf<String, String>()
-                                        request.requestHeaders?.forEach { (k, v) ->
-                                            if (!k.equals("Range", ignoreCase = true)) {
-                                                capturedHeaders[k] = v
-                                            }
-                                        }
-                                        capturedHeaders.putIfAbsent("Origin", playerUrl)
-                                        capturedHeaders.putIfAbsent("Referer", "$playerUrl/")
-                                        capturedHeaders.putIfAbsent("User-Agent", WEB_USER_AGENT)
-
-                                        val cookies = cookieManager.getCookie(reqUrl) ?: cookieManager.getCookie(playerUrl) ?: userCookies
-                                        if (!cookies.isNullOrBlank()) {
-                                            capturedHeaders["Cookie"] = cookies
-                                        }
-
-                                        foundStreams.add(CapturedStream(reqUrl, capturedHeaders))
-                                        mainHandler.postDelayed({ finish() }, 1000L)
-                                    }
-
-                                    return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
-                                }
-
-                                return super.shouldInterceptRequest(view, request)
-                            }
-                        }
-
-                        val reqHeaders = mapOf(
-                            "Referer" to referer,
-                            "User-Agent" to WEB_USER_AGENT,
-                            "Cookie" to userCookies
-                        )
-                        wv.loadUrl(pageUrl, reqHeaders)
-                    }.onFailure {
-                        finish()
-                    }
-                }
-            }
-        }
-
-        return Pair(foundStreams.toList(), foundSubs.toList())
     }
 }
