@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.nodes.Document
+import java.util.concurrent.ConcurrentHashMap
 
 class GhostflixProvider : MainAPI() {
     override var mainUrl = "https://ghostflix.uk"
@@ -269,40 +270,106 @@ class GhostflixProvider : MainAPI() {
         val s = loadData.season ?: 1
         val e = loadData.episode ?: 1
 
-        val embedUrls = if (isTv) {
+        val serverMap = linkedMapOf<String, String>()
+
+        // 1. Ghostflix Watch API Response Parse (sources array with label & src)
+        val watchApiCandidates = if (isTv) {
             listOf(
-                "CineSrc" to "https://cinesrc.ru/embed/tv/$id/$s/$e",
-                "Vidcore" to "https://vidcore.net/embed/tv/$id/$s/$e",
+                "$mainUrl/api/watch?type=tv&id=$id&season=$s&episode=$e",
+                "$mainUrl/api/sources?type=tv&id=$id&season=$s&episode=$e",
+                "$mainUrl/watch/tv/$id/$s/$e"
+            )
+        } else {
+            listOf(
+                "$mainUrl/api/watch?type=movie&id=$id",
+                "$mainUrl/api/sources?type=movie&id=$id",
+                "$mainUrl/watch/movie/$id"
+            )
+        }
+
+        val apiHeaders = cfHeaders.toMutableMap().apply {
+            put("Accept", "application/json, text/plain, */*")
+            put("Referer", "$mainUrl/")
+        }
+
+        for (apiUrl in watchApiCandidates) {
+            try {
+                val resText = app.get(apiUrl, headers = apiHeaders, timeout = 12).text
+                val watchResp = tryParseJson<GhostflixWatchResponse>(resText)
+                val sources = watchResp?.sources ?: emptyList()
+                if (sources.isNotEmpty()) {
+                    sources.forEach { source ->
+                        val label = source.label?.trim()?.takeIf { it.isNotEmpty() }
+                            ?: source.origin?.replaceFirstChar { it.uppercase() }
+                            ?: "Server"
+                        val src = source.src?.trim()?.takeIf { it.isNotEmpty() } ?: return@forEach
+                        serverMap[label] = src
+                    }
+                    watchResp?.subtitles?.forEach { sub ->
+                        val subUrl = sub.url ?: sub.src
+                        if (!subUrl.isNullOrBlank()) {
+                            subtitleCallback.invoke(SubtitleFile(sub.label ?: sub.lang ?: "English", subUrl))
+                        }
+                    }
+                    break
+                }
+            } catch (_: Exception) {}
+        }
+
+        // 2. Exact Verified Ghostflix Response Sources (Fallback / Direct)
+        val defaultSources = if (isTv) {
+            listOf(
+                "CineSrc" to "https://cinesrc.st/embed/tv/$id/$s/$e",
                 "Vidrift" to "https://embed.vidrift.net/embed/tv/$id/$s/$e",
-                "Vidy" to "https://www.viduki.net/embed/tv/$id/$s/$e",
-                "VidLink" to "https://vidlink.pro/tv/$id/$s/$e",
+                "Vidy" to "https://www.vidy.st/tv/$id/$s/$e",
+                "VidLink" to "https://vidlink.pro/tv/$id/$s/$e?autoplay=false",
+                "Vidcore" to "https://vidcore.org/embed/tv/$id/$s/$e",
                 "EmbedSu" to "https://embed.su/embed/tv/$id/$s/$e",
                 "VidSrcXYZ" to "https://vidsrc.xyz/embed/tv/$id/$s-$e",
                 "VidSrcCC" to "https://vidsrc.cc/v2/embed/tv/$id/$s/$e"
             )
         } else {
             listOf(
-                "CineSrc" to "https://cinesrc.ru/embed/movie/$id",
-                "Vidcore" to "https://vidcore.net/embed/movie/$id",
+                "CineSrc" to "https://cinesrc.st/embed/movie/$id",
                 "Vidrift" to "https://embed.vidrift.net/embed/movie/$id",
-                "Vidy" to "https://www.viduki.net/embed/movie/$id",
-                "VidLink" to "https://vidlink.pro/movie/$id",
+                "Vidy" to "https://www.vidy.st/movie/$id",
+                "VidLink" to "https://vidlink.pro/movie/$id?autoplay=false",
+                "Vidcore" to "https://vidcore.org/embed/movie/$id",
                 "EmbedSu" to "https://embed.su/embed/movie/$id",
                 "VidSrcXYZ" to "https://vidsrc.xyz/embed/movie/$id",
                 "VidSrcCC" to "https://vidsrc.cc/v2/embed/movie/$id"
             )
         }
 
-        embedUrls.amap { (serverName, embedUrl) ->
+        defaultSources.forEach { (label, src) ->
+            serverMap.putIfAbsent(label, src)
+        }
+
+        val seenUrls = ConcurrentHashMap.newKeySet<String>()
+        val customExtractor = GhostFlixExtractor()
+
+        serverMap.toList().amap { (serverName, embedUrl) ->
+            val extractedLinks = mutableListOf<ExtractorLink>()
+
+            // A. Built-in Cloudstream Extractors (VidLink, EmbedSu, VidSrc, etc.)
             try {
-                val extractedLinks = mutableListOf<ExtractorLink>()
                 loadExtractor(embedUrl, "$mainUrl/", subtitleCallback) { link ->
                     extractedLinks.add(link)
                 }
-                extractedLinks.forEach { link ->
+            } catch (_: Exception) {}
+
+            // B. Custom GhostFlixExtractor (CineSrc, Vidrift, Vidy, Vidcore, Proxy HLS)
+            try {
+                customExtractor.getUrl(embedUrl, "$mainUrl/", subtitleCallback) { link ->
+                    extractedLinks.add(link)
+                }
+            } catch (_: Exception) {}
+
+            for (link in extractedLinks) {
+                if (seenUrls.add(link.url)) {
                     callback.invoke(
                         newExtractorLink(
-                            source = link.source,
+                            source = name,
                             name = "$name - $serverName",
                             url = link.url,
                             type = link.type
@@ -313,11 +380,37 @@ class GhostflixProvider : MainAPI() {
                         }
                     )
                 }
-            } catch (_: Exception) {}
+            }
         }
 
         return true
     }
+
+    data class GhostflixWatchResponse(
+        @JsonProperty("type") val type: String? = null,
+        @JsonProperty("id") val id: Int? = null,
+        @JsonProperty("season") val season: Int? = null,
+        @JsonProperty("episode") val episode: Int? = null,
+        @JsonProperty("title") val title: String? = null,
+        @JsonProperty("sources") val sources: List<GhostflixSource>? = null,
+        @JsonProperty("subtitles") val subtitles: List<GhostflixSubtitle>? = null
+    )
+
+    data class GhostflixSource(
+        @JsonProperty("kind") val kind: String? = null,
+        @JsonProperty("src") val src: String? = null,
+        @JsonProperty("provider") val provider: String? = null,
+        @JsonProperty("providerName") val providerName: String? = null,
+        @JsonProperty("label") val label: String? = null,
+        @JsonProperty("origin") val origin: String? = null
+    )
+
+    data class GhostflixSubtitle(
+        @JsonProperty("url") val url: String? = null,
+        @JsonProperty("src") val src: String? = null,
+        @JsonProperty("label") val label: String? = null,
+        @JsonProperty("lang") val lang: String? = null
+    )
 
     data class LoadData(
         @JsonProperty("id") val id: String,
