@@ -136,7 +136,6 @@ class HindiDramaProvider : MainAPI() {
             .map { it.text().trim() }
             .filter { it.isNotEmpty() && !it.contains("views") && it != "2026" && it != "1h" }
 
-        // Fixed selector: .eplist ul li a (matches site HTML)
         val episodes = document.select(".eplist ul li a, .strip .ep, a[href*='/hindi-dubbed/watch-']").mapNotNull { el ->
             val anchor = if (el.tagName() == "a") el else el.selectFirst("a") ?: return@mapNotNull null
             val rawHref = anchor.attr("href").trim()
@@ -182,7 +181,6 @@ class HindiDramaProvider : MainAPI() {
         val document = app.get(data).document
         val embedUrls = linkedSetOf<String>()
 
-        // Step 1: Find the internal /embed/tvshow_srv?... iframe URL on the watch page
         val internalEmbedSrc = document.selectFirst("#player iframe, iframe[src*='/embed/']")?.attr("src")?.trim()
             ?: Regex("""var\s+current\s*=\s*["']([^"']+)["']""").find(document.html())?.groupValues?.get(1)?.replace("\\/", "/")
 
@@ -195,7 +193,6 @@ class HindiDramaProvider : MainAPI() {
 
         val playerPageUrl = if (!internalEmbedSrc.isNullOrEmpty()) fixUrl(internalEmbedSrc) else data
 
-        // Step 2: Extract all server links from buttons (.srv[data-src]), iframes, and scripts inside the embed page
         playerDoc.select("iframe, video source").forEach { el ->
             val src = el.attr("data-src").ifEmpty { el.attr("src") }.trim()
             if (src.isNotEmpty() && !src.startsWith("about:") && !src.contains("googletagmanager")) {
@@ -211,7 +208,6 @@ class HindiDramaProvider : MainAPI() {
             }
         }
 
-        // Fallback regex for URLs stored in JS variables/arrays inside the embed page
         val urlRegex = Regex("""https?:\\?/\\?/[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:\\?/[^"'\s<>\\]+)""")
         playerDoc.select("script").forEach { script ->
             val scriptText = script.data()
@@ -232,7 +228,6 @@ class HindiDramaProvider : MainAPI() {
 
         var foundLinks = false
 
-        // Step 3: Pass every server URL (LuluStream, Abyss, Byse, Vidara, EarnVids, UpBolt) to Cloudstream extractors
         for (embedUrl in embedUrls) {
             val loaded = loadExtractor(embedUrl, playerPageUrl, subtitleCallback, callback) ||
                 loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
@@ -273,7 +268,7 @@ class HindiDramaProvider : MainAPI() {
                         url = streamUrl
                     ) {
                         this.referer = embedUrl
-                        this.quality = Qualities.Unknown.value
+                        this.quality = 0 // Fixed here: Replaced Qualities.Unknown.value with 0
                     }
                 )
                 true
