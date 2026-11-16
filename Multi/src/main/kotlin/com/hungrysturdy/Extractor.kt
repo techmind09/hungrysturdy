@@ -154,12 +154,20 @@ class KatGoFlixExtractor : ExtractorApi() {
 }
 
 // =========================================================================
-// Core Server Logic Object (Enhanced GDFlix & JSON Handler)
+// Core Server Logic Object
 // =========================================================================
 object KatServerLogic {
 
     private fun cleanUrl(raw: String): String {
-        return raw.replace("&amp;", "&").replace("\\/", "/").trim()
+        var cleaned = raw.replace("&amp;", "&").replace("\\/", "/").trim()
+        // Unwarp fastdl-one wrapper URLs if present
+        if (cleaned.contains("fastdl-one.pages.dev") && cleaned.contains("url=")) {
+            cleaned = cleaned.substringAfter("url=").substringBefore("&")
+            try {
+                cleaned = java.net.URLDecoder.decode(cleaned, "UTF-8")
+            } catch (_: Exception) {}
+        }
+        return cleaned
     }
 
     private suspend fun parseJsonResponse(
@@ -284,7 +292,7 @@ object KatServerLogic {
                 }
             }
 
-            gamerDoc.select("a[href*='fuckingfast.net'], a:contains(Buzz Server)").forEach { a ->
+            gamerDoc.select("a#fuckingfast, a[href*='fuckingfast.net'], a:contains(Buzz Server)").forEach { a ->
                 val buzzUrl = cleanUrl(a.attr("href"))
                 if (buzzUrl.startsWith("http")) {
                     extractFuckingFast(buzzUrl, detectedQuality, callback)
@@ -323,7 +331,6 @@ object KatServerLogic {
 
             val visitedSubpages = mutableSetOf<String>()
 
-            // 1. Scan standard links and buttons
             doc.select("a[href], button[data-href], form[action]").forEach { el ->
                 val rawHref = cleanUrl(el.attr("href").ifEmpty { el.attr("data-href").ifEmpty { el.attr("action") } })
                 if (rawHref.isEmpty() || rawHref.startsWith("#") || rawHref.startsWith("javascript") || rawHref.contains("/login")) return@forEach
@@ -362,7 +369,6 @@ object KatServerLogic {
                 }
             }
 
-            // 2. Regex fallback for JS window.location or direct links hidden in scripts
             Regex("""https?://[^\s"'<>\\]+(?:workers\.dev|cloudpaglu\.site|googleusercontent\.com|pixeldrain|fuckingfast)[^\s"'<>\\]*""", RegexOption.IGNORE_CASE)
                 .findAll(doc.html()).forEach { m ->
                     val found = cleanUrl(m.value)
@@ -397,10 +403,7 @@ object KatServerLogic {
             val respText = resp.text.trim()
             if (parseJsonResponse(respText, quality, callback)) return
 
-            val finalPageUrl = resp.url.ifEmpty { instantUrl }
-            val doc = resp.document
-            val html = resp.text
-
+            val finalPageUrl = cleanUrl(resp.url.ifEmpty { instantUrl })
             if (finalPageUrl.contains("googleusercontent.com") || finalPageUrl.contains("r2.cloudflarestorage.com") || finalPageUrl.contains("workers.dev")) {
                 callback.invoke(
                     newExtractorLink("GDFlix", "GDFlix [Instant DL 10Gbps]", finalPageUrl, ExtractorLinkType.VIDEO) {
@@ -411,13 +414,17 @@ object KatServerLogic {
                 return
             }
 
+            val doc = resp.document
+            val html = resp.text
+
             val directGoogleUrl = doc.selectFirst("a[href*='googleusercontent.com'], a:contains(Download Here)")?.attr("href")
                 ?: Regex("""https?://video-downloads\.googleusercontent\.com/[^\s"'<>\\]+""").find(html)?.value
                 ?: Regex("""https?://[^\s"'<>\\]*googleusercontent\.com/[^\s"'<>\\]+""").find(html)?.value
 
             if (!directGoogleUrl.isNullOrBlank()) {
+                val cleanedDl = cleanUrl(directGoogleUrl)
                 callback.invoke(
-                    newExtractorLink("GDFlix", "GDFlix [Instant DL 10Gbps]", cleanUrl(directGoogleUrl), ExtractorLinkType.VIDEO) {
+                    newExtractorLink("GDFlix", "GDFlix [Instant DL 10Gbps]", cleanedDl, ExtractorLinkType.VIDEO) {
                         this.referer = ""
                         this.quality = quality
                     }
