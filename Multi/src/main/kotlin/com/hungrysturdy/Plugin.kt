@@ -26,6 +26,7 @@ class Plugin : Plugin() {
         registerExtractorAPI(GDFlixCfd())
         registerExtractorAPI(GDFlixdad())
         registerExtractorAPI(GDFlixNew9())
+        registerExtractorAPI(GDFlixNew10())
         registerExtractorAPI(KatPixelDrainExtractor())
         registerExtractorAPI(KatHBPlayExtractor())
         registerExtractorAPI(KatFuckingFastExtractor())
