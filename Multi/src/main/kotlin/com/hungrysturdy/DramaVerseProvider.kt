@@ -138,6 +138,11 @@ class DramaVerseProvider : MainAPI() {
                 }
                 val html = resp.text
 
+                // Agar ad-gate/modal page aa jaye toh aage mat badho
+                if (html.contains("Can't access link ? Stuck into ads ?")) {
+                    break
+                }
+
                 val metaMatch = Regex("""content\s*=\s*["'][0-9]+;\s*url=([^"']+)["']""", RegexOption.IGNORE_CASE).find(html)
                 if (metaMatch != null) {
                     val nextUrl = resolveRelativeUrl(current, metaMatch.groupValues[1])
@@ -190,46 +195,42 @@ class DramaVerseProvider : MainAPI() {
         val seenUrls = mutableSetOf<String>()
 
         try {
-            val resolvedStart = resolveIntermediateUrl(pageUrl)
-            val resp = app.get(resolvedStart, headers = defaultHeaders, referer = refererUrl)
-            val doc = resp.document
+            val resp = app.get(pageUrl, headers = defaultHeaders, referer = refererUrl)
             val html = resp.text
+            val doc = resp.document
 
             var autoIdx = 1
 
-            doc.select("a[href], [onclick], [data-href], [data-url], div.EpFile").forEach { el ->
-                val rawHref = when {
-                    el.hasAttr("href") -> el.absUrl("href")
-                    el.hasAttr("data-href") -> el.absUrl("data-href")
-                    el.hasAttr("data-url") -> el.absUrl("data-url")
-                    el.hasAttr("onclick") -> {
-                        Regex("""["'](https?://[^"']+)["']""").find(el.attr("onclick"))?.groupValues?.get(1).orEmpty()
-                    }
-                    el.parent()?.hasAttr("href") == true -> el.parent()!!.absUrl("href")
-                    el.parent()?.hasAttr("onclick") == true -> {
-                        Regex("""["'](https?://[^"']+)["']""").find(el.parent()!!.attr("onclick"))?.groupValues?.get(1).orEmpty()
-                    }
-                    else -> ""
+            // 1. Direct regex scan on raw HTML to find xcloud.tattoo, xcloud1.lol, or drive links
+            // (Yeh ardance.org ad-wrappers ko poori tarah bypass kar deta hai)
+            val hostRegex = Regex(
+                """https?://(?:[a-zA-Z0-9-]+\.)?(?:xcloud\.tattoo|xcloud1\.lol|stream\.xcloud1\.lol|pixeldrain\.com|drive\.google\.com|docs\.google\.com|gdflix|gdtot|filepress|hubcloud|hubdrive|gdrive|workers\.dev)/[a-zA-Z0-9_/?=&-]+""",
+                RegexOption.IGNORE_CASE
+            )
+            hostRegex.findAll(html).forEach { m ->
+                var href = m.value.replace("\\/", "/")
+                // ardance refer parameter ke andar agar asli URL chhupta hai toh use decode karo
+                if (href.contains("refer=")) {
+                    href = href.substringAfter("refer=").substringBefore("&")
+                    try {
+                        href = java.net.URLDecoder.decode(href, "UTF-8")
+                    } catch (_: Exception) {}
                 }
-
-                if (rawHref.isNotEmpty() && !isIgnoredOrAdUrl(rawHref) && seenUrls.add(rawHref)) {
-                    val label = findEpisodeLabel(el, autoIdx)
-                    val epNum = Regex("(?i)(?:episode|ep|e)\\s*0*(\\d+)").find(label)?.groupValues?.get(1)?.toIntOrNull()
-                        ?: autoIdx
-                    rawItems.add(epNum to rawHref)
+                if (!isIgnoredOrAdUrl(href) && seenUrls.add(href)) {
+                    rawItems.add(autoIdx to href)
                     autoIdx++
                 }
             }
 
+            // 2. Standard DOM anchor tags check karo agar regex se kuch chhoot gaya ho
             if (rawItems.isEmpty()) {
-                val hostRegex = Regex(
-                    """https?://[^"'\s<>\\]+(?:xcloud|pixeldrain|drive\.google\.com|docs\.google\.com|gdflix|gdtot|filepress|hubcloud|hubdrive|gdrive|workers\.dev)[^"'\s<>\\]*""",
-                    RegexOption.IGNORE_CASE
-                )
-                hostRegex.findAll(html).forEach { m ->
-                    val href = m.value.replace("\\/", "/")
-                    if (!isIgnoredOrAdUrl(href) && seenUrls.add(href)) {
-                        rawItems.add(autoIdx to href)
+                doc.select("a[href]").forEach { a ->
+                    val href = a.absUrl("href")
+                    if (href.isNotEmpty() && !isIgnoredOrAdUrl(href) && seenUrls.add(href)) {
+                        val label = findEpisodeLabel(a, autoIdx)
+                        val epNum = Regex("(?i)(?:episode|ep|e)\\s*0*(\\d+)").find(label)?.groupValues?.get(1)?.toIntOrNull()
+                            ?: autoIdx
+                        rawItems.add(epNum to href)
                         autoIdx++
                     }
                 }
@@ -248,7 +249,7 @@ class DramaVerseProvider : MainAPI() {
         val description = document.selectFirst(".entry-content p")?.text()
 
         val episodeMap = linkedMapOf<Int, MutableList<String>>()
-        val btnSlides = document.select("a.btn-slide, .entry-content a[href*='sohojgyan'], .entry-content a[href*='blogspot'], .entry-content a[href*='xcloud'], .entry-content a[href*='pixeldrain'], .entry-content a[href*='drive.google.com'], .entry-content a[href*='gdflix']")
+        val btnSlides = document.select("a.btn-slide, .entry-content a[href*='sohojgyan'], .entry-content a[href*='blogspot'], .entry-content a[href*='ardance'], .entry-content a[href*='xcloud'], .entry-content a[href*='pixeldrain'], .entry-content a[href*='drive.google.com'], .entry-content a[href*='gdflix']")
 
         for (slide in btnSlides) {
             val slideUrl = slide.absUrl("href").ifEmpty { continue }
@@ -258,6 +259,7 @@ class DramaVerseProvider : MainAPI() {
 
             if (slideUrl.contains("sohojgyan") ||
                 slideUrl.contains("blogspot") ||
+                slideUrl.contains("ardance") ||
                 slideTitle.contains("Episode Wise", ignoreCase = true)
             ) {
                 val scraped = scrapeEpisodeLinksFromIntermediate(slideUrl, url)
@@ -313,7 +315,7 @@ class DramaVerseProvider : MainAPI() {
         for (itemUrl in rawLinks) {
             val currentUrl = resolveIntermediateUrl(itemUrl)
 
-            if (currentUrl.contains("sohojgyan") || currentUrl.contains("blogspot")) {
+            if (currentUrl.contains("sohojgyan") || currentUrl.contains("blogspot") || currentUrl.contains("ardance")) {
                 val scraped = scrapeEpisodeLinksFromIntermediate(currentUrl, "$mainUrl/")
                 for ((_, link) in scraped) {
                     processSingleHostLink(link, currentUrl, subtitleCallback, callback)
@@ -514,7 +516,6 @@ class DramaVerseProvider : MainAPI() {
                         )
                     }
 
-                // Check for Cloudflare Workers / HLS streams (.workers.dev or .m3u8)
                 Regex("""["'](https?://[^"'\s<>]+\.(?:m3u8|mp4|mkv)(?:\?[^"'\s<>]*)?)["']""", RegexOption.IGNORE_CASE)
                     .findAll(streamHtml)
                     .forEach { m ->
