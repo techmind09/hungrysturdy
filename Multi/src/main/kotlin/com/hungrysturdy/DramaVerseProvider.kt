@@ -514,6 +514,36 @@ class DramaVerseProvider : MainAPI() {
                         )
                     }
 
+                // Check for Cloudflare Workers / HLS streams (.workers.dev or .m3u8)
+                Regex("""["'](https?://[^"'\s<>]+\.(?:m3u8|mp4|mkv)(?:\?[^"'\s<>]*)?)["']""", RegexOption.IGNORE_CASE)
+                    .findAll(streamHtml)
+                    .forEach { m ->
+                        val vUrl = m.groupValues[1]
+                        if (emittedUrls.add(vUrl)) {
+                            val type = if (vUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            callback.invoke(
+                                newExtractorLink("XCloud", "XCloud Stream", vUrl, type) {
+                                    this.referer = finalPlayerUrl
+                                }
+                            )
+                            found = true
+                        }
+                    }
+
+                Regex("""["'](https?://[^"'\s<>]+\.workers\.dev/[^"'\s<>]*)["']""", RegexOption.IGNORE_CASE)
+                    .findAll(streamHtml)
+                    .forEach { m ->
+                        val wUrl = m.groupValues[1]
+                        if (emittedUrls.add(wUrl)) {
+                            callback.invoke(
+                                newExtractorLink("XCloud", "XCloud Worker HLS", wUrl, ExtractorLinkType.M3U8) {
+                                    this.referer = finalPlayerUrl
+                                }
+                            )
+                            found = true
+                        }
+                    }
+
                 val varPatterns = listOf(
                     "PRIMARY_URL" to ("XCloud Server 1" to ExtractorLinkType.VIDEO),
                     "WASABI_URL" to ("XCloud Server 2" to ExtractorLinkType.VIDEO),
@@ -528,12 +558,13 @@ class DramaVerseProvider : MainAPI() {
                         val directCdnUrl = resolveFinalStreamUrl(redirectUrl, finalPlayerUrl)
 
                         if (emittedUrls.add(directCdnUrl)) {
+                            val type = if (directCdnUrl.contains(".m3u8", true) || directCdnUrl.contains(".workers.dev", true)) ExtractorLinkType.M3U8 else info.second
                             callback.invoke(
                                 newExtractorLink(
                                     source = "XCloud",
                                     name = info.first,
                                     url = directCdnUrl,
-                                    type = info.second
+                                    type = type
                                 ) {
                                     this.referer = ""
                                 }
