@@ -17,20 +17,6 @@ class Plugin : Plugin() {
 
         // Extractors Registration
         registerExtractorAPI(GokuHDExtractor())
-        registerExtractorAPI(KatHubCloudExtractor())
-        registerExtractorAPI(HubCloudDrive())
-        registerExtractorAPI(HubCloudClub())
-        registerExtractorAPI(HubCloudOne())
-        registerExtractorAPI(GamerXYTExtractor())
-        registerExtractorAPI(KatGDFlixExtractor())
-        registerExtractorAPI(GDFlixCfd())
-        registerExtractorAPI(GDFlixdad())
-        registerExtractorAPI(GDFlixNew9())
-        registerExtractorAPI(GDFlixNew10())
-        registerExtractorAPI(KatPixelDrainExtractor())
-        registerExtractorAPI(KatHBPlayExtractor())
-        registerExtractorAPI(KatFuckingFastExtractor())
-        registerExtractorAPI(KatGoFlixExtractor())
         registerExtractorAPI(Filemoon())
 
         // ToonPlay Extractors
