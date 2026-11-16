@@ -1,9 +1,20 @@
 package com.hungrysturdy
 
+import android.util.Base64
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
+
+private val katCfKiller by lazy { CloudflareKiller() }
+
+private val katBrowserHeaders = mapOf(
+    "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language" to "en-US,en;q=0.9",
+    "Cookie" to "_ga=GA1.1.583239637.1794483658; _ga_0TNV9GL2DB=GS2.1.s1794492289\$o2\$g1\$t1794492315\$j34\$l0\$h0; xla=s4t"
+)
 
 class KatDramaProvider : MainAPI() {
     override var mainUrl = "https://k-drama.in"
@@ -27,15 +38,9 @@ class KatDramaProvider : MainAPI() {
         "$mainUrl/ranking?page=" to "Top 10"
     )
 
-    private val headers = mapOf(
-        "User-Agent" to "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
-        "Cookie" to "_ga=GA1.1.583239637.1794483658; _ga_0TNV9GL2DB=GS2.1.s1794492289\$o2\$g1\$t1794492315\$j34\$l0\$h0",
-        "Referer" to "$mainUrl/"
-    )
-
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val url = if (request.data == "$mainUrl/") mainUrl else "${request.data}$page"
-        val document = app.get(url, headers = headers).document
+        val document = app.get(url, headers = katBrowserHeaders, interceptor = katCfKiller).document
         val homePageList = mutableListOf<HomePageList>()
         val rows = document.select(".cineapse-row-wrapper")
 
@@ -98,7 +103,7 @@ class KatDramaProvider : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
         val apiUrl = "$mainUrl/api.php?action=search&q=$encodedQuery"
-        val response = app.get(apiUrl, headers = headers).parsedSafe<SearchApiResponse>() ?: return emptyList()
+        val response = app.get(apiUrl, headers = katBrowserHeaders, interceptor = katCfKiller).parsedSafe<SearchApiResponse>() ?: return emptyList()
 
         return response.results.mapNotNull { item ->
             val title = item.name ?: item.title ?: return@mapNotNull null
@@ -138,7 +143,7 @@ class KatDramaProvider : MainAPI() {
     )
 
     override suspend fun load(url: String): LoadResponse? {
-        val document = app.get(url, headers = headers).document
+        val document = app.get(url, headers = katBrowserHeaders, interceptor = katCfKiller).document
 
         val title = document.selectFirst("h1, .cineapse-title, .detail-title")?.text()?.trim() ?: return null
         val poster = fixUrlNull(
@@ -233,7 +238,7 @@ class KatDramaProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data, headers = headers).document
+        val document = app.get(data, headers = katBrowserHeaders, interceptor = katCfKiller).document
 
         // 1. switchServer buttons
         document.select("button[onclick*='switchServer']").forEach { btn ->
@@ -270,7 +275,7 @@ class KatDramaProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ) {
         if (url.contains("cinemaos") || url.contains("workers.dev") || url.contains(".json")) {
-            val parsed = app.get(url, headers = headers).parsedSafe<CinemaOsResponse>()
+            val parsed = app.get(url, headers = katBrowserHeaders, interceptor = katCfKiller).parsedSafe<CinemaOsResponse>()
             
             // Add Subtitles if available in JSON
             parsed?.subtitles?.forEach { sub ->
