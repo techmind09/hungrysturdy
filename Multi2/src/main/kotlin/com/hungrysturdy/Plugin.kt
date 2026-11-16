@@ -9,5 +9,6 @@ class Plugin : Plugin() {
     override fun load(context: Context) {
         // Main Providers
         registerMainAPI(SflixProvider())
+        registerMainAPI(HindiDramaProvider())
     }
 }
