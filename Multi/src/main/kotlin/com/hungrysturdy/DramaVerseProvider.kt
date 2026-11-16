@@ -4,6 +4,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import java.net.URI
+import java.net.URLDecoder
 
 class DramaVerseProvider : MainAPI() {
     override var mainUrl = "https://mydverse.com"
@@ -122,7 +123,10 @@ class DramaVerseProvider : MainAPI() {
             lower.contains("facebook.com") ||
             lower.contains("twitter.com") ||
             lower.contains("instagram.com") ||
-            (lower.contains("google.com") && !lower.contains("drive.google.com") && !lower.contains("docs.google.com") && !lower.contains("googleusercontent.com"))
+            (lower.contains("google.com") &&
+                !lower.contains("drive.google.com") &&
+                !lower.contains("docs.google.com") &&
+                !lower.contains("googleusercontent.com"))
     }
 
     private suspend fun resolveIntermediateUrl(url: String): String {
@@ -131,17 +135,18 @@ class DramaVerseProvider : MainAPI() {
         while (attempts < 4) {
             attempts++
             try {
-                val resp = app.get(current, headers = defaultHeaders, allowRedirects = true)
-                val finalUrl = resp.url.ifEmpty { current }
-                if (finalUrl != current && !finalUrl.contains("ardance.org")) {
-                    current = finalUrl
+                val resp = app.get(current, headers = defaultHeaders, allowRedirects = false)
+                val loc = resp.headers["location"] ?: resp.headers["Location"]
+                if (!loc.isNullOrEmpty()) {
+                    val next = resolveRelativeUrl(current, loc)
+                    if (!next.contains("ardance.org") && next != current) {
+                        current = next
+                        continue
+                    }
                 }
-                val html = resp.text
 
-                // Agar ad-gate/modal page aa jaye toh aage mat badho
-                if (html.contains("Can't access link ? Stuck into ads ?")) {
-                    break
-                }
+                val html = resp.text
+                if (html.contains("Can't access link ? Stuck into ads ?")) break
 
                 val metaMatch = Regex("""content\s*=\s*["'][0-9]+;\s*url=([^"']+)["']""", RegexOption.IGNORE_CASE).find(html)
                 if (metaMatch != null) {
@@ -195,44 +200,55 @@ class DramaVerseProvider : MainAPI() {
         val seenUrls = mutableSetOf<String>()
 
         try {
-            val resp = app.get(pageUrl, headers = defaultHeaders, referer = refererUrl)
+            val resolvedStart = resolveIntermediateUrl(pageUrl)
+            val resp = app.get(resolvedStart, headers = defaultHeaders, referer = refererUrl)
             val html = resp.text
             val doc = resp.document
 
             var autoIdx = 1
 
-            // 1. Direct regex scan on raw HTML to find xcloud.tattoo, xcloud1.lol, or drive links
-            // (Yeh ardance.org ad-wrappers ko poori tarah bypass kar deta hai)
-            val hostRegex = Regex(
-                """https?://(?:[a-zA-Z0-9-]+\.)?(?:xcloud\.tattoo|xcloud1\.lol|stream\.xcloud1\.lol|pixeldrain\.com|drive\.google\.com|docs\.google\.com|gdflix|gdtot|filepress|hubcloud|hubdrive|gdrive|workers\.dev)/[a-zA-Z0-9_/?=&-]+""",
-                RegexOption.IGNORE_CASE
-            )
-            hostRegex.findAll(html).forEach { m ->
-                var href = m.value.replace("\\/", "/")
-                // ardance refer parameter ke andar agar asli URL chhupta hai toh use decode karo
-                if (href.contains("refer=")) {
-                    href = href.substringAfter("refer=").substringBefore("&")
-                    try {
-                        href = java.net.URLDecoder.decode(href, "UTF-8")
-                    } catch (_: Exception) {}
+            // 1. DOM anchor/button elements check karo (episode numbers ke saath)
+            doc.select("a[href], [onclick], [data-href], [data-url], div.EpFile").forEach { el ->
+                val rawHref = when {
+                    el.hasAttr("href") -> el.absUrl("href")
+                    el.hasAttr("data-href") -> el.absUrl("data-href")
+                    el.hasAttr("data-url") -> el.absUrl("data-url")
+                    el.hasAttr("onclick") -> {
+                        Regex("""["'](https?://[^"']+)["']""").find(el.attr("onclick"))?.groupValues?.get(1).orEmpty()
+                    }
+                    el.parent()?.hasAttr("href") == true -> el.parent()!!.absUrl("href")
+                    el.parent()?.hasAttr("onclick") == true -> {
+                        Regex("""["'](https?://[^"']+)["']""").find(el.parent()!!.attr("onclick"))?.groupValues?.get(1).orEmpty()
+                    }
+                    else -> ""
                 }
-                if (!isIgnoredOrAdUrl(href) && seenUrls.add(href)) {
-                    rawItems.add(autoIdx to href)
+
+                if (rawHref.isNotEmpty() && !isIgnoredOrAdUrl(rawHref) && seenUrls.add(rawHref)) {
+                    val label = findEpisodeLabel(el, autoIdx)
+                    val epNum = Regex("(?i)(?:episode|ep|e)\\s*0*(\\d+)").find(label)?.groupValues?.get(1)?.toIntOrNull()
+                        ?: autoIdx
+                    rawItems.add(epNum to rawHref)
                     autoIdx++
                 }
             }
 
-            // 2. Standard DOM anchor tags check karo agar regex se kuch chhoot gaya ho
-            if (rawItems.isEmpty()) {
-                doc.select("a[href]").forEach { a ->
-                    val href = a.absUrl("href")
-                    if (href.isNotEmpty() && !isIgnoredOrAdUrl(href) && seenUrls.add(href)) {
-                        val label = findEpisodeLabel(a, autoIdx)
-                        val epNum = Regex("(?i)(?:episode|ep|e)\\s*0*(\\d+)").find(label)?.groupValues?.get(1)?.toIntOrNull()
-                            ?: autoIdx
-                        rawItems.add(epNum to href)
-                        autoIdx++
+            // 2. Raw HTML regex scan (kisi bhi XCloud, GDrive, Pixeldrain, GDFlix, HubCloud domain ke liye)
+            val hostRegex = Regex(
+                """https?://(?:[a-zA-Z0-9-]+\.)*(?:xcloud\.[a-z]{2,}|xcloud\d*\.[a-z]{2,}|pixeldrain\.[a-z]{2,}|drive\.google\.com|docs\.google\.com|gdflix\.[a-z]{2,}|gdtot\.[a-z]{2,}|filepress\.[a-z]{2,}|hubcloud\.[a-z]{2,}|hubdrive\.[a-z]{2,}|workers\.dev)/[a-zA-Z0-9_/?=&.-]+""",
+                RegexOption.IGNORE_CASE
+            )
+            hostRegex.findAll(html).forEach { m ->
+                var href = m.value.replace("\\/", "/")
+                if (href.contains("refer=")) {
+                    href = href.substringAfter("refer=").substringBefore("&")
+                    try {
+                        href = URLDecoder.decode(href, "UTF-8")
+                    } catch (_: Exception) {
                     }
+                }
+                if (!isIgnoredOrAdUrl(href) && seenUrls.add(href)) {
+                    rawItems.add(autoIdx to href)
+                    autoIdx++
                 }
             }
         } catch (_: Exception) {
@@ -249,7 +265,7 @@ class DramaVerseProvider : MainAPI() {
         val description = document.selectFirst(".entry-content p")?.text()
 
         val episodeMap = linkedMapOf<Int, MutableList<String>>()
-        val btnSlides = document.select("a.btn-slide, .entry-content a[href*='sohojgyan'], .entry-content a[href*='blogspot'], .entry-content a[href*='ardance'], .entry-content a[href*='xcloud'], .entry-content a[href*='pixeldrain'], .entry-content a[href*='drive.google.com'], .entry-content a[href*='gdflix']")
+        val btnSlides = document.select("a.btn-slide, .entry-content a[href*='sohojgyan'], .entry-content a[href*='blogspot'], .entry-content a[href*='xcloud'], .entry-content a[href*='pixeldrain'], .entry-content a[href*='drive.google.com'], .entry-content a[href*='gdflix'], .entry-content a[href*='hubcloud']")
 
         for (slide in btnSlides) {
             val slideUrl = slide.absUrl("href").ifEmpty { continue }
@@ -259,7 +275,6 @@ class DramaVerseProvider : MainAPI() {
 
             if (slideUrl.contains("sohojgyan") ||
                 slideUrl.contains("blogspot") ||
-                slideUrl.contains("ardance") ||
                 slideTitle.contains("Episode Wise", ignoreCase = true)
             ) {
                 val scraped = scrapeEpisodeLinksFromIntermediate(slideUrl, url)
@@ -315,7 +330,7 @@ class DramaVerseProvider : MainAPI() {
         for (itemUrl in rawLinks) {
             val currentUrl = resolveIntermediateUrl(itemUrl)
 
-            if (currentUrl.contains("sohojgyan") || currentUrl.contains("blogspot") || currentUrl.contains("ardance")) {
+            if (currentUrl.contains("sohojgyan") || currentUrl.contains("blogspot")) {
                 val scraped = scrapeEpisodeLinksFromIntermediate(currentUrl, "$mainUrl/")
                 for ((_, link) in scraped) {
                     processSingleHostLink(link, currentUrl, subtitleCallback, callback)
@@ -338,7 +353,7 @@ class DramaVerseProvider : MainAPI() {
         val url = resolveIntermediateUrl(rawUrl)
 
         when {
-            url.contains("xcloud", ignoreCase = true) || url.contains("xcloud1.lol", ignoreCase = true) -> {
+            url.contains("xcloud", ignoreCase = true) -> {
                 extractXCloud(url, subtitleCallback, callback)
             }
             url.contains("pixeldrain", ignoreCase = true) -> {
@@ -404,39 +419,41 @@ class DramaVerseProvider : MainAPI() {
         if (!fileId.isNullOrEmpty()) {
             val directConfirmUrl = "https://drive.usercontent.google.com/download?id=$fileId&export=download&confirm=t"
             try {
-                val resp = app.get(directConfirmUrl, headers = defaultHeaders, allowRedirects = true)
-                val finalUrl = resp.url.ifEmpty { directConfirmUrl }
-                val html = resp.text
+                // allowRedirects = false taaki poori video file download hone ka wait na kare
+                val resp = app.get(directConfirmUrl, headers = defaultHeaders, allowRedirects = false)
+                val loc = resp.headers["location"] ?: resp.headers["Location"]
 
-                val formAction = resp.document.selectFirst("form#download-form")?.attr("action")
-                if (!formAction.isNullOrEmpty()) {
-                    val params = resp.document.select("form#download-form input[name]").joinToString("&") {
-                        "${it.attr("name")}=${it.attr("value")}"
+                if (!loc.isNullOrEmpty()) {
+                    callback.invoke(
+                        newExtractorLink(
+                            source = "GDrive",
+                            name = "GDrive Direct",
+                            url = loc,
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = "https://drive.google.com/"
+                        }
+                    )
+                    found = true
+                } else {
+                    val formAction = resp.document.selectFirst("form#download-form")?.attr("action")
+                    if (!formAction.isNullOrEmpty()) {
+                        val params = resp.document.select("form#download-form input[name]").joinToString("&") {
+                            "${it.attr("name")}=${it.attr("value")}"
+                        }
+                        val confirmedStreamUrl = if (params.isNotEmpty()) "$formAction?$params" else formAction
+                        callback.invoke(
+                            newExtractorLink(
+                                source = "GDrive",
+                                name = "GDrive Direct",
+                                url = confirmedStreamUrl,
+                                type = ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = "https://drive.google.com/"
+                            }
+                        )
+                        found = true
                     }
-                    val confirmedStreamUrl = if (params.isNotEmpty()) "$formAction?$params" else formAction
-                    callback.invoke(
-                        newExtractorLink(
-                            source = "GDrive",
-                            name = "GDrive Direct",
-                            url = confirmedStreamUrl,
-                            type = ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = "https://drive.google.com/"
-                        }
-                    )
-                    found = true
-                } else if (!html.contains("<html", ignoreCase = true) || finalUrl.contains("googleusercontent.com")) {
-                    callback.invoke(
-                        newExtractorLink(
-                            source = "GDrive",
-                            name = "GDrive Direct",
-                            url = finalUrl,
-                            type = ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = "https://drive.google.com/"
-                        }
-                    )
-                    found = true
                 }
             } catch (_: Exception) {
             }
@@ -460,13 +477,35 @@ class DramaVerseProvider : MainAPI() {
         return found
     }
 
-    private suspend fun resolveFinalStreamUrl(startUrl: String, refererUrl: String): String {
-        return try {
-            val resp = app.get(startUrl, headers = defaultHeaders, referer = refererUrl, allowRedirects = true)
-            resp.url.ifEmpty { startUrl }
-        } catch (_: Exception) {
-            startUrl
+    // Sirf 302 Location headers follow karta hai — video body download nahi karta
+    private suspend fun resolveFinalStreamUrl(
+        startUrl: String,
+        refererUrl: String,
+        sessionCookies: Map<String, String> = emptyMap()
+    ): String {
+        var current = startUrl
+        var hops = 0
+        while (hops < 5) {
+            hops++
+            try {
+                val resp = app.get(
+                    current,
+                    headers = defaultHeaders,
+                    referer = refererUrl,
+                    cookies = sessionCookies,
+                    allowRedirects = false
+                )
+                val loc = resp.headers["location"] ?: resp.headers["Location"]
+                if (!loc.isNullOrEmpty()) {
+                    current = resolveRelativeUrl(current, loc)
+                } else {
+                    break
+                }
+            } catch (_: Exception) {
+                break
+            }
         }
+        return current
     }
 
     private suspend fun extractXCloud(
@@ -506,8 +545,10 @@ class DramaVerseProvider : MainAPI() {
             try {
                 val streamResp = app.get(streamPageUrl, headers = defaultHeaders, cookies = baseCookies)
                 val finalPlayerUrl = streamResp.url.ifEmpty { streamPageUrl }
+                val streamCookies = baseCookies + streamResp.cookies
                 val streamHtml = streamResp.text
 
+                // Subtitles (https://sub.xcloud.icu/<tgid>)
                 Regex("""\{[^{}]*"lang"\s*:\s*"([^"]+)"[^{}]*"tgid"\s*:\s*(\d+)[^{}]*\}""")
                     .findAll(streamHtml)
                     .forEach { m ->
@@ -516,6 +557,7 @@ class DramaVerseProvider : MainAPI() {
                         )
                     }
 
+                // 1. Direct .m3u8 / .mp4 / .mkv links agar HTML mein hon
                 Regex("""["'](https?://[^"'\s<>]+\.(?:m3u8|mp4|mkv)(?:\?[^"'\s<>]*)?)["']""", RegexOption.IGNORE_CASE)
                     .findAll(streamHtml)
                     .forEach { m ->
@@ -531,6 +573,7 @@ class DramaVerseProvider : MainAPI() {
                         }
                     }
 
+                // 2. Cloudflare Workers HLS links (.workers.dev)
                 Regex("""["'](https?://[^"'\s<>]+\.workers\.dev/[^"'\s<>]*)["']""", RegexOption.IGNORE_CASE)
                     .findAll(streamHtml)
                     .forEach { m ->
@@ -545,6 +588,7 @@ class DramaVerseProvider : MainAPI() {
                         }
                     }
 
+                // 3. PRIMARY_URL, WASABI_URL, HLS_URL variables se 302 Location resolve karo
                 val varPatterns = listOf(
                     "PRIMARY_URL" to ("XCloud Server 1" to ExtractorLinkType.VIDEO),
                     "WASABI_URL" to ("XCloud Server 2" to ExtractorLinkType.VIDEO),
@@ -556,10 +600,14 @@ class DramaVerseProvider : MainAPI() {
                     val rawVal = match?.groupValues?.get(1)
                     if (!rawVal.isNullOrEmpty() && rawVal != "null") {
                         val redirectUrl = resolveRelativeUrl(finalPlayerUrl, rawVal)
-                        val directCdnUrl = resolveFinalStreamUrl(redirectUrl, finalPlayerUrl)
+                        val directCdnUrl = resolveFinalStreamUrl(redirectUrl, finalPlayerUrl, streamCookies)
 
                         if (emittedUrls.add(directCdnUrl)) {
-                            val type = if (directCdnUrl.contains(".m3u8", true) || directCdnUrl.contains(".workers.dev", true)) ExtractorLinkType.M3U8 else info.second
+                            val type = if (directCdnUrl.contains(".m3u8", true) || directCdnUrl.contains(".workers.dev", true)) {
+                                ExtractorLinkType.M3U8
+                            } else {
+                                info.second
+                            }
                             callback.invoke(
                                 newExtractorLink(
                                     source = "XCloud",
@@ -574,6 +622,7 @@ class DramaVerseProvider : MainAPI() {
                         }
                     }
                 }
+                if (found) break
             } catch (_: Exception) {
             }
         }
