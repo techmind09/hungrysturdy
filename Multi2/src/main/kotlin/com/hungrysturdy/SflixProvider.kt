@@ -100,8 +100,8 @@ class SflixProvider : MainAPI() {
     override var lang = "en"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
 
-    // Using raw string to prevent any $ interpolation issues
-    private val userCookies = """sflix_i18n_lang=en; _ga=GA1.1.622965780.1794742147; sflix_token=%22eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjE5NjY4NTU1NTcyNzgwNjIyNzYsImF0cCI6MywiZXh0IjoiMTc5NDc0MjE0NyIsImV4cCI6MTgwMjUxODE0NywiaWF0IjoxNzk0NzQxODQ3fQ.8aOIckQOSKyISQdl85SAJvuMlhXfWodHmcPOIvlg0pM%22; vrk4n8fqhwc3jzy7pbsmgt6dx5lha2u9=01a1b98c-7aec-7761-b581-b09b7730a724_2; dom3ic8zudi28v8lr6fgphwffqoz0j6c=01a1b98c-7aec-7761-b581-b09b7730a724; imprCounter_53d6f18bc2561bc4f4ecc19cefe348bf_expiry=Invalid Date; imprCounter_53d6f18bc2561bc4f4ecc19cefe348bf=3; _ga_CJSG3GJM85=GS2.1.s1794753588$o3$g1$t1794754299$j60$l0$h0; sb_main_29ea333f714080c847539fb7690ac422=1; pp_main_505b167260767d732d39389d9b6ebed9=1; sb_count_29ea333f714080c847539fb7690ac422=1"""
+    // Using normal string with escaped dollar signs (\$) to prevent interpolation errors
+    private val userCookies = "sflix_i18n_lang=en; _ga=GA1.1.622965780.1794742147; sflix_token=%22eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjE5NjY4NTU1NTcyNzgwNjIyNzYsImF0cCI6MywiZXh0IjoiMTc5NDc0MjE0NyIsImV4cCI6MTgwMjUxODE0NywiaWF0IjoxNzk0NzQxODQ3fQ.8aOIckQOSKyISQdl85SAJvuMlhXfWodHmcPOIvlg0pM%22; vrk4n8fqhwc3jzy7pbsmgt6dx5lha2u9=01a1b98c-7aec-7761-b581-b09b7730a724_2; dom3ic8zudi28v8lr6fgphwffqoz0j6c=01a1b98c-7aec-7761-b581-b09b7730a724; imprCounter_53d6f18bc2561bc4f4ecc19cefe348bf_expiry=Invalid Date; imprCounter_53d6f18bc2561bc4f4ecc19cefe348bf=3; _ga_CJSG3GJM85=GS2.1.s1794753588\$o3\$g1\$t1794754299\$j60\$l0\$h0; sb_main_29ea333f714080c847539fb7690ac422=1; pp_main_505b167260767d732d39389d9b6ebed9=1; sb_count_29ea333f714080c847539fb7690ac422=1"
 
     private val defaultPosterHeaders = mapOf(
         "Referer" to "$mainUrl/",
@@ -202,16 +202,14 @@ class SflixProvider : MainAPI() {
         return "$timestamp|2|$signature"
     }
 
-    private suspend fun fetchAnonymousToken(forceRefresh: Boolean = false): String {
-        if (!forceRefresh) {
-            if (isTokenValid(bearerToken)) return bearerToken!!
-        }
+    private suspend fun fetchAnonymousToken(): String {
+        if (isTokenValid(bearerToken)) return bearerToken!!
         return try {
             val ts = System.currentTimeMillis()
             val xClientToken = generateXClientToken(ts)
             val xTrSig = generateXTrSignature("GET", "application/json", "application/json", TOKEN_BOOTSTRAP_URL, null, false, ts)
             val headers = mapOf(
-                "user-agent" to WEB_USER_AGENT,
+                "user-agent" to modernUserAgent,
                 "accept" to "application/json",
                 "content-type" to "application/json",
                 "connection" to "keep-alive",
@@ -227,10 +225,10 @@ class SflixProvider : MainAPI() {
                 bearerToken = token
                 token
             } else {
-                bearerToken ?: ""
+                ""
             }
         } catch (e: Exception) {
-            bearerToken ?: ""
+            ""
         }
     }
 
@@ -580,7 +578,6 @@ class SflixProvider : MainAPI() {
                 addTrailer(trailerUrl)
             }
         } else {
-            // FIX FOR MOVIES: Ensure season=1 and episode=1 are passed for a Movie stream request
             val moviePlayData = JSONObject().apply {
                 put("detailPath", detailPath)
                 put("subjectId", subjectId)
@@ -619,7 +616,6 @@ class SflixProvider : MainAPI() {
         val payload = runCatching { JSONObject(data) }.getOrNull() ?: return false
         val defaultPath = payload.optString("detailPath")
         val defaultId = payload.optString("subjectId")
-        // FALLBACK FIX: Ensure season & episode > 0 for correct WebView URLs
         val season = payload.optInt("season", 1).takeIf { it > 0 } ?: 1
         val episode = payload.optInt("episode", 1).takeIf { it > 0 } ?: 1
         val isSeries = payload.optBoolean("isSeries", false)
@@ -650,7 +646,6 @@ class SflixProvider : MainAPI() {
         val emittedSubs = mutableSetOf<String>()
 
         for (server in servers.take(2)) {
-            // FIX: Correctly format the player URL based on whether it is a movie or series
             val targetPlayerUrl = if (isSeries) {
                 "$playerUrl/spa/videoPlayPage/movies/${server.path}?id=${server.id}&se=$season&ep=$episode&type=/movie/detail&lang=en"
             } else {
@@ -738,7 +733,7 @@ class SflixProvider : MainAPI() {
             "exoclick.com", "5gvci.com", "nap5k.com", "richinfo.co", "ifunny-promo", "/other/"
         )
 
-        withTimeoutOrNull(20_000L) { // Increased timeout to 20s to ensure streams load
+        withTimeoutOrNull(20_000L) {
             suspendCancellableCoroutine<Unit> { continuation ->
                 val resumed = AtomicBoolean(false)
                 var webView: WebView? = null
@@ -766,7 +761,6 @@ class SflixProvider : MainAPI() {
                         val cookieManager = CookieManager.getInstance().apply {
                             setAcceptCookie(true)
                             setAcceptThirdPartyCookies(wv, true)
-                            // Injecting cookies for mzfi.me to bypass CORS/Auth errors
                             setCookie("https://mzfi.me", userCookies)
                             setCookie("https://h5-api.aoneroom.com", userCookies)
                         }
@@ -799,7 +793,6 @@ class SflixProvider : MainAPI() {
                                     reqUrl.contains(".m3u8", ignoreCase = true) ||
                                     (reqUrl.contains(".mp4", ignoreCase = true) && !reqUrl.contains("loading", true))
 
-                                // Avoid extracting the trailer URL (h5-static)
                                 val isTrailer = reqUrl.contains("h5-static.aoneroom.com") || reqUrl.contains("macdn.aoneroom.com")
 
                                 if (isVideoStream && !isTrailer && !reqUrl.startsWith("blob:")) {
@@ -821,7 +814,6 @@ class SflixProvider : MainAPI() {
 
                                         foundStreams.add(CapturedStream(reqUrl, capturedHeaders))
                                         
-                                        // Once a stream is found, wait briefly and finish to avoid timeout
                                         mainHandler.postDelayed({ finish() }, 1000L)
                                     }
 
