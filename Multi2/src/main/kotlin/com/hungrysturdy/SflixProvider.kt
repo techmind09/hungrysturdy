@@ -10,109 +10,62 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import com.fasterxml.jackson.databind.JsonNode
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
-import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId
-import com.lagradost.cloudstream3.LoadResponse.Companion.addTMDbId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.io.ByteArrayInputStream
-import java.net.URI
 import java.net.URLEncoder
-import java.security.MessageDigest
 import java.security.SecureRandom
-import java.util.Base64
-import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
 import kotlin.coroutines.resume
 
 class SflixProvider : MainAPI() {
-
-    companion object {
-        const val SPORT_API = "https://h5-sport-api.aoneroom.com/wefeed-h5api-bff"
-        const val SPORT_URL = "https://www.sportslive.wine/"
-        const val WEB_USER_AGENT =
-            "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36"
-
-        val WEB_DOMAINS = listOf(
-            "https://sflix.film",
-            "https://123moviesfree.club",
-            "https://movie-box.co",
-            "https://movieboxonline.net",
-            "https://h5-api.aoneroom.com",
-            "https://netnaija.film",
-            "https://movieboxhd.net"
-        )
-
-        val HOST_POOL = listOf(
-            "https://api6.aoneroom.com",
-            "https://api5.aoneroom.com",
-            "https://api4.aoneroom.com",
-            "https://api4sg.aoneroom.com",
-            "https://api3.aoneroom.com"
-        )
-
-        private const val TOKEN_BOOTSTRAP_URL =
-            "https://apig.inmoviebox.com/wefeed-mobile-bff/tab/ranking-list?tabId=0&categoryType=4516404531735022304&page=1&perPage=1"
-
-        private const val SECRET_DEFAULT_B64 = "NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw=="
-        private const val SECRET_ALT_B64 = "WHFuMm5uTzQxL0w5Mm8xaXVYaFNMSFRiWHZZNFo1Wlo2Mm04bVNMQQ=="
-
-        var bearerToken: String? = null
-
-        fun decodeJwtExpiry(token: String): Long {
-            return try {
-                val payload = token.split(".").getOrNull(1) ?: return 0L
-                val std = payload.replace("-", "+").replace("_", "/")
-                val padded = std + "=".repeat((4 - (std.length % 4)) % 4)
-                val json = String(Base64.getUrlDecoder().decode(padded))
-                JSONObject(json).getLong("exp")
-            } catch (e: Exception) {
-                0L
-            }
-        }
-
-        fun isTokenValid(token: String?): Boolean {
-            if (token.isNullOrBlank()) return false
-            val exp = decodeJwtExpiry(token)
-            return exp > (System.currentTimeMillis() / 1000) + 3600
-        }
-    }
-
-    override var mainUrl = HOST_POOL[0]
+    override var mainUrl = "https://sflix.film"
     private val playerUrl = "https://mzfi.me"
     override var name = "Sflix"
-    override val hasMainPage = true
-    override var lang = "en"
-    override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Live)
+    override var hasMainPage = true
+    override var supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
 
+    private val random = SecureRandom()
+    private val deviceId: String = generateDeviceId()
+
+    private val modernUserAgent =
+        "com.community.mbox.in/50020130 (Linux; U; Android 14; en_IN; Pixel 8; Build/UD1A.230803.041; Cronet/145.0.7582.0)"
+    private val modernClientInfo =
+        "{\"package_name\":\"com.community.mbox.in\",\"version_name\":\"4.0.03.0920.03\",\"version_code\":50020130," +
+            "\"os\":\"android\",\"os_version\":\"14\",\"device_id\":\"$deviceId\",\"install_store\":\"official\"," +
+            "\"gaid\":\"1b2212c1-dadf-43c3-a0c8-bd6ce48ae22d\",\"brand\":\"Google\",\"model\":\"Pixel 8\"," +
+            "\"system_language\":\"en\",\"net\":\"NETWORK_WIFI\",\"region\":\"IN\",\"timezone\":\"Asia/Calcutta\",\"sp_code\":\"\"}"
+
+    private fun generateDeviceId(): String {
+        val bytes = ByteArray(16)
+        random.nextBytes(bytes)
+        return bytes.joinToString("") { String.format("%02x", it) }
+    }
+
+    // Escaped dollar signs (\$) to prevent Kotlin string interpolation errors
     private val userCookies = "sflix_i18n_lang=en; _ga=GA1.1.622965780.1794742147; sflix_token=%22eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjE5NjY4NTU1NTcyNzgwNjIyNzYsImF0cCI6MywiZXh0IjoiMTc5NDc0MjE0NyIsImV4cCI6MTgwMjUxODE0NywiaWF0IjoxNzk0NzQxODQ3fQ.8aOIckQOSKyISQdl85SAJvuMlhXfWodHmcPOIvlg0pM%22; vrk4n8fqhwc3jzy7pbsmgt6dx5lha2u9=01a1b98c-7aec-7761-b581-b09b7730a724_2; dom3ic8zudi28v8lr6fgphwffqoz0j6c=01a1b98c-7aec-7761-b581-b09b7730a724; imprCounter_53d6f18bc2561bc4f4ecc19cefe348bf_expiry=Invalid Date; imprCounter_53d6f18bc2561bc4f4ecc19cefe348bf=3; _ga_CJSG3GJM85=GS2.1.s1794753588\$o3\$g1\$t1794754299\$j60\$l0\$h0; sb_main_29ea333f714080c847539fb7690ac422=1; pp_main_505b167260767d732d39389d9b6ebed9=1; sb_count_29ea333f714080c847539fb7690ac422=1"
 
     private val defaultPosterHeaders = mapOf(
         "Referer" to "$mainUrl/",
-        "User-Agent" to WEB_USER_AGENT,
+        "User-Agent" to modernUserAgent,
         "Cookie" to userCookies,
         "Accept" to "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
     )
 
     private val requestHeaders = mapOf(
         "Referer" to "$mainUrl/",
-        "User-Agent" to WEB_USER_AGENT,
+        "User-Agent" to modernUserAgent,
         "Cookie" to userCookies,
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
     )
@@ -137,197 +90,6 @@ class SflixProvider : MainAPI() {
         "$mainUrl/ranking-list?id=6843072545655603600&page_from=more_SUBJECTS_MOVIE" to "Popular Movies",
         "$mainUrl/ranking-list?id=4516404531735022304&page_from=more_SUBJECTS_MOVIE" to "Action & Thriller"
     )
-
-    private val random = SecureRandom()
-    private val deviceId: String = generateDeviceId()
-    private val PREF_TOKEN_KEY = "sflix_app_bearer_token"
-    private val mapper: com.fasterxml.jackson.databind.ObjectMapper =
-        com.fasterxml.jackson.module.kotlin.jacksonObjectMapper()
-
-    private fun generateDeviceId(): String {
-        val bytes = ByteArray(16)
-        random.nextBytes(bytes)
-        return bytes.joinToString("") { String.format("%02x", it) }
-    }
-
-    private fun md5(input: ByteArray): String {
-        return MessageDigest.getInstance("MD5").digest(input)
-            .joinToString("") { String.format("%02x", it) }
-    }
-
-    private fun generateXClientToken(timestamp: Long = System.currentTimeMillis()): String {
-        val ts = timestamp.toString()
-        return ts + "," + md5(ts.reversed().toByteArray())
-    }
-
-    private fun buildCanonicalString(
-        method: String,
-        accept: String?,
-        contentType: String?,
-        url: String,
-        body: String?,
-        timestamp: Long
-    ): String {
-        return try {
-            val parsed = URI(url)
-            val path = parsed.path ?: ""
-            val rawQuery = parsed.rawQuery
-            val query = if (!rawQuery.isNullOrBlank()) {
-                rawQuery.split("&").mapNotNull {
-                    val p = it.split("=")
-                    if (p.isEmpty()) null else p[0] to (p.getOrNull(1) ?: "")
-                }.sortedBy { it.first }.joinToString("&") { "${it.first}=${it.second}" }
-            } else ""
-            val canonicalUrl = if (query.isNotEmpty()) "$path?$query" else path
-            val bodyHash: String
-            val bodyLength: String
-            if (body != null) {
-                val bodyBytes = body.toByteArray()
-                bodyHash = md5(if (bodyBytes.size > 102400) bodyBytes.copyOfRange(0, 102400) else bodyBytes)
-                bodyLength = bodyBytes.size.toString()
-            } else {
-                bodyHash = ""
-                bodyLength = ""
-            }
-            method.uppercase(Locale.ROOT) + "\n" + (accept ?: "") + "\n" + (contentType ?: "") + "\n" +
-                bodyLength + "\n" + timestamp + "\n" + bodyHash + "\n" + canonicalUrl
-        } catch (e: Exception) {
-            method.uppercase(Locale.ROOT) + "\n" + (accept ?: "") + "\n" + (contentType ?: "") + "\n\n" +
-                timestamp + "\n\n"
-        }
-    }
-
-    private fun generateXTrSignature(
-        method: String,
-        accept: String?,
-        contentType: String?,
-        url: String,
-        body: String?,
-        useAltKey: Boolean = false,
-        timestamp: Long = System.currentTimeMillis()
-    ): String {
-        val canonical = buildCanonicalString(method, accept, contentType, url, body, timestamp)
-        val secret = if (useAltKey) SECRET_ALT_B64 else SECRET_DEFAULT_B64
-        val secretBytes = Base64.getDecoder().decode(
-            String(Base64.getDecoder().decode(secret))
-        )
-        val mac = Mac.getInstance("HmacMD5")
-        mac.init(SecretKeySpec(secretBytes, "HmacMD5"))
-        val signature = Base64.getEncoder().encodeToString(mac.doFinal(canonical.toByteArray()))
-        return "$timestamp|2|$signature"
-    }
-
-    private fun saveToken(token: String) {
-        if (!token.isBlank() && isTokenValid(token)) {
-            bearerToken = token
-        }
-    }
-
-    private suspend fun fetchAnonymousToken(forceRefresh: Boolean = false): String {
-        if (!forceRefresh) {
-            if (isTokenValid(bearerToken)) return bearerToken!!
-        }
-        return try {
-            val ts = System.currentTimeMillis()
-            val xClientToken = generateXClientToken(ts)
-            val xTrSig = generateXTrSignature("GET", "application/json", "application/json", TOKEN_BOOTSTRAP_URL, null, false, ts)
-            val headers = mapOf(
-                "user-agent" to modernUserAgent,
-                "accept" to "application/json",
-                "content-type" to "application/json",
-                "connection" to "keep-alive",
-                "x-client-token" to xClientToken,
-                "x-tr-signature" to xTrSig,
-                "x-client-info" to modernClientInfo,
-                "x-client-status" to "0"
-            )
-            val resp = app.get(TOKEN_BOOTSTRAP_URL, headers = headers)
-            val xUser = resp.headers["x-user"]
-            val token = xUser?.let { runCatching { JSONObject(it).optString("token") }.getOrNull() }
-            if (!token.isNullOrBlank()) {
-                saveToken(token)
-                token
-            } else {
-                bearerToken ?: ""
-            }
-        } catch (e: Exception) {
-            bearerToken ?: ""
-        }
-    }
-
-    private fun persistTokenFromXUser(xUserHeader: String?) {
-        if (xUserHeader.isNullOrBlank()) return
-        try {
-            val token = JSONObject(xUserHeader).optString("token")
-            if (token.isNotBlank()) saveToken(token)
-        } catch (_: Exception) {}
-    }
-
-    private suspend fun buildAuthHeaders(
-        method: String,
-        url: String,
-        contentType: String = "application/json",
-        accept: String = "application/json",
-        body: String? = null,
-        useToken: Boolean = true
-    ): Map<String, String> {
-        val ts = System.currentTimeMillis()
-        val xClientToken = generateXClientToken(ts)
-        val xTrSig = generateXTrSignature(method, accept, contentType, url, body, false, ts)
-        val headers = mutableMapOf(
-            "user-agent" to modernUserAgent,
-            "accept" to accept,
-            "content-type" to contentType,
-            "connection" to "keep-alive",
-            "x-client-token" to xClientToken,
-            "x-tr-signature" to xTrSig,
-            "x-client-info" to modernClientInfo,
-            "x-client-status" to "0",
-            "Cookie" to userCookies
-        )
-        if (useToken) {
-            val token = fetchAnonymousToken()
-            if (token.isNotBlank()) headers["Authorization"] = "Bearer $token"
-        }
-        return headers
-    }
-
-    private fun extractPolicyResource(signCookie: String?): String? {
-        if (signCookie.isNullOrBlank()) return null
-        val edgeCacheMatch = Regex("Edge-Cache-Cookie=urlprefix=([^:;\\s]+)").find(signCookie)
-        if (edgeCacheMatch != null) {
-            val urlPrefixB64 = edgeCacheMatch.groupValues[1]
-            return try {
-                val std = urlPrefixB64.replace('_', '/').replace('-', '+')
-                val padded = std + "=".repeat((4 - (std.length % 4)) % 4)
-                String(Base64.getUrlDecoder().decode(padded)).trimEnd('/') + "/index.mpd"
-            } catch (e: Exception) {
-                null
-            }
-        }
-        val match = Regex("CloudFront-Policy=([^;]+)").find(signCookie) ?: return null
-        val policyRaw = match.groupValues[1]
-        val candidates = listOf(
-            policyRaw.replace('-', '+').replace('~', '/').replace('_', '='),
-            policyRaw.replace('-', '+').replace('_', '/')
-        )
-        for (cfB64 in candidates) {
-            try {
-                val rem = cfB64.length % 4
-                val padded = if (rem > 0) cfB64 + "=".repeat(4 - rem) else cfB64
-                val decoded = String(Base64.getDecoder().decode(padded))
-                val root = runCatching { mapper.readTree(decoded) }.getOrNull()
-                val resource = root?.get("Statement")?.get(0)?.get("Resource")?.asText()
-                if (resource != null) {
-                    val trimmed = resource.trimEnd('*', '/')
-                    return if (trimmed.endsWith(".mpd", true)) trimmed else "$trimmed/index.mpd"
-                }
-            } catch (e: Exception) {
-                continue
-            }
-        }
-        return null
-    }
 
     private fun normalizePosterUrl(raw: String?): String? {
         if (raw.isNullOrBlank()) return null
