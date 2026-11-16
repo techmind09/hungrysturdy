@@ -223,7 +223,7 @@ class DramaVerseProvider : MainAPI() {
 
             if (rawItems.isEmpty()) {
                 val hostRegex = Regex(
-                    """https?://[^"'\s<>\\]+(?:xcloud|drive\.google\.com|docs\.google\.com|gdflix|gdtot|filepress|hubcloud|hubdrive|gdrive|workers\.dev)[^"'\s<>\\]*""",
+                    """https?://[^"'\s<>\\]+(?:xcloud|pixeldrain|drive\.google\.com|docs\.google\.com|gdflix|gdtot|filepress|hubcloud|hubdrive|gdrive|workers\.dev)[^"'\s<>\\]*""",
                     RegexOption.IGNORE_CASE
                 )
                 hostRegex.findAll(html).forEach { m ->
@@ -248,7 +248,7 @@ class DramaVerseProvider : MainAPI() {
         val description = document.selectFirst(".entry-content p")?.text()
 
         val episodeMap = linkedMapOf<Int, MutableList<String>>()
-        val btnSlides = document.select("a.btn-slide, .entry-content a[href*='sohojgyan'], .entry-content a[href*='blogspot'], .entry-content a[href*='xcloud'], .entry-content a[href*='drive.google.com'], .entry-content a[href*='gdflix']")
+        val btnSlides = document.select("a.btn-slide, .entry-content a[href*='sohojgyan'], .entry-content a[href*='blogspot'], .entry-content a[href*='xcloud'], .entry-content a[href*='pixeldrain'], .entry-content a[href*='drive.google.com'], .entry-content a[href*='gdflix']")
 
         for (slide in btnSlides) {
             val slideUrl = slide.absUrl("href").ifEmpty { continue }
@@ -339,6 +339,9 @@ class DramaVerseProvider : MainAPI() {
             url.contains("xcloud", ignoreCase = true) || url.contains("xcloud1.lol", ignoreCase = true) -> {
                 extractXCloud(url, subtitleCallback, callback)
             }
+            url.contains("pixeldrain", ignoreCase = true) -> {
+                extractPixeldrain(url, callback)
+            }
             url.contains("drive.google.com", ignoreCase = true) ||
             url.contains("docs.google.com", ignoreCase = true) ||
             url.contains("drive.usercontent.google.com", ignoreCase = true) -> {
@@ -353,11 +356,13 @@ class DramaVerseProvider : MainAPI() {
                             val href = a.absUrl("href")
                             if (href.contains("xcloud", ignoreCase = true)) {
                                 extractXCloud(href, subtitleCallback, callback)
+                            } else if (href.contains("pixeldrain", ignoreCase = true)) {
+                                extractPixeldrain(href, callback)
                             } else if (href.contains("drive.google.com") || href.contains("drive.usercontent.google.com")) {
                                 extractGDrive(href, subtitleCallback, callback)
                             } else if (href.contains("googleusercontent.com") || href.contains("r2.dev") || href.contains("workers.dev")) {
                                 callback.invoke(
-                                    newExtractorLink("GDrive", "GDrive Direct", href, ExtractorLinkType.VIDEO)
+                                    newExtractorLink("Direct", "Direct Stream", href, ExtractorLinkType.VIDEO)
                                 )
                             }
                         }
@@ -365,6 +370,24 @@ class DramaVerseProvider : MainAPI() {
                     }
                 }
             }
+        }
+    }
+
+    private suspend fun extractPixeldrain(url: String, callback: (ExtractorLink) -> Unit) {
+        val fileId = Regex("""/u/([a-zA-Z0-9]+)""").find(url)?.groupValues?.get(1)
+            ?: Regex("""/api/file/([a-zA-Z0-9]+)""").find(url)?.groupValues?.get(1)
+            ?: url.substringAfterLast("/").substringBefore("?")
+
+        if (fileId.isNotEmpty()) {
+            val directApiUrl = "https://pixeldrain.com/api/file/$fileId"
+            callback.invoke(
+                newExtractorLink(
+                    source = "Pixeldrain",
+                    name = "Pixeldrain",
+                    url = directApiUrl,
+                    type = ExtractorLinkType.VIDEO
+                )
+            )
         }
     }
 
