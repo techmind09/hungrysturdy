@@ -23,7 +23,9 @@ open class GhostFlixExtractor : ExtractorApi() {
     private data class StreamResponse(
         @JsonProperty("url") val url: String? = null,
         @JsonProperty("file") val file: String? = null,
-        @JsonProperty("source") val source: String? = null
+        @JsonProperty("source") val source: String? = null,
+        @JsonProperty("stream") val stream: String? = null,
+        @JsonProperty("hls") val hls: String? = null
     )
 
     override suspend fun getUrl(
@@ -32,46 +34,88 @@ open class GhostFlixExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        val origin = extractOrigin(url)
         val effectiveReferer = referer ?: "$mainUrl/"
         val headers = mapOf(
             "User-Agent" to USER_AGENT,
-            "Accept" to "*/*",
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Referer" to effectiveReferer,
             "Origin" to mainUrl
         )
 
         try {
-            val response = app.get(url, headers = headers).text
-            if (response.isBlank()) return
+            val response = app.get(url, headers = headers, timeout = 15).text
+            if (response.isNotBlank()) {
+                val parsedJson = tryParseJson<StreamResponse>(response)
+                val jsonStreamUrl = parsedJson?.url
+                    ?: parsedJson?.file
+                    ?: parsedJson?.source
+                    ?: parsedJson?.stream
+                    ?: parsedJson?.hls
 
-            // Pehle JSON response check karein
-            val parsedJson = tryParseJson<StreamResponse>(response)
-            val jsonStreamUrl = parsedJson?.url ?: parsedJson?.file ?: parsedJson?.source
-            if (!jsonStreamUrl.isNullOrBlank()) {
-                extractLinks(jsonStreamUrl, url, subtitleCallback, callback)
+                if (!jsonStreamUrl.isNullOrBlank()) {
+                    extractLinks(jsonStreamUrl, url, origin, subtitleCallback, callback)
+                }
+
+                extractLinks(response, url, origin, subtitleCallback, callback)
+            }
+        } catch (_: Exception) {}
+
+        // Agar embed page se direct link na mile to server ke /api/resolve ya /api/source endpoints try karein
+        val idMatch = Regex("""/(?:movie|tv)/(\d+)(?:/(\d+)/(\d+))?""").find(url)
+        if (idMatch != null) {
+            val tmdbId = idMatch.groupValues[1]
+            val season = idMatch.groupValues[2]
+            val episode = idMatch.groupValues[3]
+            val isTv = url.contains("/tv/") && season.isNotEmpty() && episode.isNotEmpty()
+
+            val apiEndpoints = if (isTv) {
+                listOf(
+                    "$origin/api/resolve?type=tv&id=$tmdbId&season=$season&episode=$episode",
+                    "$origin/api/source/tv/$tmdbId/$season/$episode",
+                    "$origin/api/tv/$tmdbId/$season/$episode"
+                )
+            } else {
+                listOf(
+                    "$origin/api/resolve?type=movie&id=$tmdbId",
+                    "$origin/api/source/movie/$tmdbId",
+                    "$origin/api/movie/$tmdbId"
+                )
             }
 
-            // Raw text / HTML / JS response se bhi direct aur proxy links nikalein
-            extractLinks(response, url, subtitleCallback, callback)
-        } catch (_: Exception) {
+            val apiHeaders = mapOf(
+                "User-Agent" to USER_AGENT,
+                "Accept" to "application/json, */*",
+                "Referer" to url,
+                "Origin" to origin
+            )
+
+            for (apiUrl in apiEndpoints) {
+                try {
+                    val apiResp = app.get(apiUrl, headers = apiHeaders, timeout = 10).text
+                    if (apiResp.contains(".m3u8") || apiResp.contains(".mp4") || apiResp.contains("/api/proxy/hls")) {
+                        extractLinks(apiResp, url, origin, subtitleCallback, callback)
+                        break
+                    }
+                } catch (_: Exception) {}
+            }
         }
+    }
+
+    private fun extractOrigin(url: String): String {
+        if (!url.startsWith("http")) return mainUrl
+        val parts = url.split("/")
+        return if (parts.size >= 3) "${parts[0]}//${parts[2]}" else mainUrl
     }
 
     private suspend fun extractLinks(
         text: String,
         referer: String,
+        origin: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
         val unescaped = text.replace("\\/", "/").replace("\\u0026", "&")
-        val origin = referer.substringBefore("/", referer).let {
-            if (referer.startsWith("http")) {
-                val parts = referer.split("/")
-                if (parts.size >= 3) "${parts[0]}//${parts[2]}" else mainUrl
-            } else {
-                mainUrl
-            }
-        }
 
         val streamHeaders = mapOf(
             "User-Agent" to USER_AGENT,
@@ -80,7 +124,6 @@ open class GhostFlixExtractor : ExtractorApi() {
             "Accept" to "*/*"
         )
 
-        // Direct .m3u8, .mp4 aur proxy HLS endpoints dono ko match karega
         val regex = Regex("""https?://[^\s"'<>\\]+(?:\.(?:m3u8|mp4)|/api/proxy/hls)[^\s"'<>\\]*""")
         val matchedUrls = regex.findAll(unescaped)
             .map { it.value.trimEnd(',', ';', ')', ']') }
@@ -126,4 +169,24 @@ open class GhostFlixExtractor : ExtractorApi() {
                 }
             }
     }
+}
+
+class CineSrcExtractor : GhostFlixExtractor() {
+    override val name = "CineSrc"
+    override val mainUrl = "https://cinesrc.st"
+}
+
+class VidriftExtractor : GhostFlixExtractor() {
+    override val name = "Vidrift"
+    override val mainUrl = "https://embed.vidrift.net"
+}
+
+class VidyExtractor : GhostFlixExtractor() {
+    override val name = "Vidy"
+    override val mainUrl = "https://www.vidy.st"
+}
+
+class VidcoreExtractor : GhostFlixExtractor() {
+    override val name = "Vidcore"
+    override val mainUrl = "https://vidcore.org"
 }
