@@ -43,7 +43,7 @@ open class BaseJWPExtractor : ExtractorApi() {
                     url = streamUrl
                 ) {
                     this.referer = url
-                    this.quality = 0 // Fixed: Replaced Qualities.Unknown.value with 0
+                    this.quality = 0
                     this.headers = mapOf("Referer" to url)
                 }
             )
@@ -83,7 +83,7 @@ class EarnVidsProExtractor : BaseJWPExtractor() {
     override var mainUrl = "https://dingtezuni.com"
 }
 
-// 3. Vidara
+// 3. Vidara (Updated with .to)
 class VidaraExtractor : BaseJWPExtractor() {
     override var name = "Vidara"
     override var mainUrl = "https://vidara.to"
@@ -94,30 +94,36 @@ class VidaraAltExtractor : BaseJWPExtractor() {
     override var mainUrl = "https://vidara.so"
 }
 
-// 4. Byse
+// 4. Byse (Updated with bysebuho.com)
 class ByseExtractor : BaseJWPExtractor() {
     override var name = "Byse"
-    override var mainUrl = "https://byse.sx"
+    override var mainUrl = "https://bysebuho.com"
 }
 
 class ByseAltExtractor : BaseJWPExtractor() {
     override var name = "Byse"
-    override var mainUrl = "https://bysezejataos.com"
+    override var mainUrl = "https://byse.sx"
 }
 
-// 5. UpBolt
+// 5. UpBolt (Updated with upbolt.to)
 class UpBoltExtractor : BaseJWPExtractor() {
     override var name = "UpBolt"
-    override var mainUrl = "https://upbolt.tv"
+    override var mainUrl = "https://upbolt.to"
 }
 
-// 6. Abyss
+// 6. Abyss (Updated with player.abyssplayer.com)
 class AbyssExtractor : BaseJWPExtractor() {
     override var name = "Abyss"
-    override var mainUrl = "https://abysscdn.com"
+    override var mainUrl = "https://player.abyssplayer.com"
 }
 
 class ShortIcuExtractor : BaseJWPExtractor() {
     override var name = "Abyss"
     override var mainUrl = "https://short.icu"
+}
+
+// 7. LPlayGo
+class LPlayGoExtractor : BaseJWPExtractor() {
+    override var name = "LPlayGo"
+    override var mainUrl = "https://lplaygo.com"
 }
