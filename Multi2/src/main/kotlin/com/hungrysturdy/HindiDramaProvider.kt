@@ -1,11 +1,14 @@
 package com.hungrysturdy
 
+import android.util.Base64
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.JsUnpacker
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
+import java.net.URI
 import java.net.URLEncoder
 
 class HindiDramaProvider : MainAPI() {
@@ -184,37 +187,66 @@ class HindiDramaProvider : MainAPI() {
         }
     }
 
+    private fun getOrigin(url: String): String {
+        return try {
+            val uri = URI(url)
+            "${uri.scheme}://${uri.host}"
+        } catch (_: Exception) {
+            mainUrl
+        }
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val document = app.get(data).document
+        val userAgent = "Mozilla/5.0 (Linux; Android 15; Infinix X6851) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
+        val document = app.get(data, headers = mapOf("User-Agent" to userAgent)).document
+        val pageHtml = document.html()
         var foundLinks = false
 
+        // Match both full and relative /embed/... URLs (e.g., /embed/tvshow_srv?search=...)
         val internalEmbedSrc = document.selectFirst("#player iframe, iframe[src*='/embed/']")?.attr("src")?.trim()
-            ?: Regex("""var\s+current\s*=\s*["']([^"']+)["']""").find(document.html())?.groupValues?.get(1)?.replace("\\/", "/")
+            ?: Regex("""["']((?:https?:\\?/\\?/[^"'\s<>]+)?\\?/embed\\?/[^"'\s<>]+)["']""")
+                .find(pageHtml)
+                ?.groupValues?.get(1)
+                ?.replace("\\/", "/")
 
         val playerPageUrl = if (!internalEmbedSrc.isNullOrEmpty()) fixUrl(internalEmbedSrc) else data
         val playerHtml = if (!internalEmbedSrc.isNullOrEmpty()) {
-            app.get(playerPageUrl, referer = data).text
+            app.get(
+                playerPageUrl,
+                referer = data,
+                headers = mapOf(
+                    "User-Agent" to userAgent,
+                    "Referer" to data
+                )
+            ).text
         } else {
-            document.html()
+            pageHtml
         }
 
-        val playerDoc = org.jsoup.Jsoup.parse(playerHtml, playerPageUrl)
+        val playerDoc = Jsoup.parse(playerHtml, playerPageUrl)
         val serverList = linkedMapOf<String, String>()
 
-        playerDoc.select(".srv, [data-src], [data-url], [data-embed]").forEach { el ->
+        // 1. Collect URLs from .srv buttons and data attributes
+        playerDoc.select(".srv, [data-src], [data-url], [data-embed], [data-link], [data-video]").forEach { el ->
             val sName = el.text().trim().ifEmpty { "Server" }
-            val rawUrl = listOf("data-src", "data-url", "data-embed")
+            val rawUrl = listOf("data-src", "data-url", "data-embed", "data-link", "data-video")
                 .firstNotNullOfOrNull { attr -> el.attr(attr).trim().takeIf { it.isNotEmpty() } }
-            if (rawUrl != null && (rawUrl.startsWith("http") || rawUrl.startsWith("//") || rawUrl.startsWith("/"))) {
-                serverList[fixUrl(rawUrl)] = sName
+                ?: Regex("""['"]((?:https?:)?//[^'"]+|/[^'"]+)['"]""").find(el.attr("onclick"))?.groupValues?.get(1)
+
+            if (!rawUrl.isNullOrEmpty() && (rawUrl.startsWith("http") || rawUrl.startsWith("//") || rawUrl.startsWith("/"))) {
+                val fullUrl = fixUrl(rawUrl)
+                if (!fullUrl.contains("hindidrama.net/hindi-dubbed")) {
+                    serverList[fullUrl] = sName
+                }
             }
         }
 
+        // 2. Collect iframes
         playerDoc.select("iframe").forEach { el ->
             val src = el.attr("data-src").ifEmpty { el.attr("src") }.trim()
             if (src.isNotEmpty() && !src.startsWith("about:")) {
@@ -222,7 +254,8 @@ class HindiDramaProvider : MainAPI() {
             }
         }
 
-        val urlRegex = Regex("""https?:\\?/\\?/[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:\\?/[^"'\s<>\+)""")
+        // 3. Collect all external embed URLs inside scripts
+        val urlRegex = Regex("""https?:\\?/\\?/[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:\\?/[^"'\s<>\\]+)""")
         urlRegex.findAll(playerHtml).forEach { match ->
             val cleanUrl = match.value.replace("\\/", "/")
             if (!cleanUrl.contains("hindidrama.net") &&
@@ -231,37 +264,55 @@ class HindiDramaProvider : MainAPI() {
                 !cleanUrl.contains("bancadeltempoidea") &&
                 !cleanUrl.contains("themoviedb") &&
                 !cleanUrl.contains("googleapis") &&
-                !cleanUrl.contains("gstatic")
+                !cleanUrl.contains("gstatic") &&
+                !cleanUrl.contains("jsdelivr") &&
+                !cleanUrl.contains("w3.org")
             ) {
-                serverList.putIfAbsent(cleanUrl, cleanUrl.substringAfter("://").substringBefore("/"))
+                val hostLabel = try {
+                    URI(cleanUrl).host?.removePrefix("www.")?.substringBefore(".")?.replaceFirstChar { it.uppercase() } ?: "Server"
+                } catch (_: Exception) {
+                    "Server"
+                }
+                serverList.putIfAbsent(cleanUrl, hostLabel)
             }
         }
 
-        val userAgent = "Mozilla/5.0 (Linux; Android 15; Infinix X6851) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
-
         for ((embedUrl, serverLabel) in serverList) {
-            val builtInLoaded = loadExtractor(embedUrl, playerPageUrl, subtitleCallback, callback) ||
+            // Try Cloudstream built-in + registered custom extractors first
+            val extractorLoaded = loadExtractor(embedUrl, playerPageUrl, subtitleCallback, callback) ||
                 loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
 
-            if (builtInLoaded) {
+            if (extractorLoaded) {
                 foundLinks = true
                 continue
             }
 
+            // Direct fallback extraction with proper embed Referer & Origin
             try {
-                val headers = mapOf(
+                val embedOrigin = getOrigin(embedUrl)
+                val embedHeaders = mapOf(
                     "User-Agent" to userAgent,
                     "Referer" to playerPageUrl
                 )
-                val embedHtml = app.get(embedUrl, referer = playerPageUrl, headers = headers).text
+                val embedHtml = app.get(embedUrl, referer = playerPageUrl, headers = embedHeaders).text
                 val unpacked = JsUnpacker(embedHtml).unpack() ?: embedHtml
-                val combined = "$embedHtml\n$unpacked"
+
+                val decodedChunks = StringBuilder("$embedHtml\n$unpacked")
+                Regex("""["']([A-Za-z0-9+/=]{60,})["']""").findAll(embedHtml).forEach { b64Match ->
+                    try {
+                        val decoded = String(Base64.decode(b64Match.groupValues[1], Base64.DEFAULT))
+                        if (decoded.contains("http")) {
+                            decodedChunks.append("\n").append(decoded)
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
 
                 val streamRegex = Regex(
                     """["'](https?://[^"'\s<>]+?\.(?:m3u8|mp4)(?:\?[^"'\s<>]*)?)["']""",
                     RegexOption.IGNORE_CASE
                 )
-                val streamUrl = streamRegex.findAll(combined) // Fixed variable name to streamUrl
+                val streamUrl = streamRegex.findAll(decodedChunks.toString())
                     .map { it.groupValues[1].replace("\\/", "/") }
                     .firstOrNull { !it.contains("preview") && !it.contains("thumb") }
 
@@ -276,7 +327,8 @@ class HindiDramaProvider : MainAPI() {
                             this.quality = 0
                             this.headers = mapOf(
                                 "User-Agent" to userAgent,
-                                "Referer" to embedUrl
+                                "Referer" to embedUrl,
+                                "Origin" to embedOrigin
                             )
                         }
                     )
