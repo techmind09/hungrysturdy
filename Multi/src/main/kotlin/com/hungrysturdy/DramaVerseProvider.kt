@@ -1,3 +1,4 @@
+
 package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
@@ -26,6 +27,11 @@ class DramaVerseProvider : MainAPI() {
         "_clsk" to "5czkhx%5E1794549642448%5E1%5E1%5Ea.clarity.ms%2Fcollect"
     )
 
+    private val streamHeaders = mapOf(
+        "User-Agent" to defaultHeaders["User-Agent"].orEmpty(),
+        "Accept" to "*/*"
+    )
+
     override val mainPage = mainPageOf(
         "$mainUrl/" to "Home",
         "$mainUrl/korean/" to "Korean Drama",
@@ -34,7 +40,10 @@ class DramaVerseProvider : MainAPI() {
         "$mainUrl/upcoming/" to "Upcoming"
     )
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+    override suspend fun getMainPage(
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse {
         val url = if (page == 1) {
             request.data
         } else {
@@ -45,59 +54,120 @@ class DramaVerseProvider : MainAPI() {
             }
         }
 
-        val document = app.get(url, headers = defaultHeaders, cookies = cookies).document
-        val home = document.select("li.post-item, article.item-list, div.post-element")
-            .mapNotNull { it.toSearchResult() }
-            .ifEmpty {
-                document.select("a.post-thumb").mapNotNull { it.thumbToSearchResult() }
+        val document = app.get(
+            url,
+            headers = defaultHeaders,
+            cookies = cookies
+        ).document
+
+        val home = document.select(
+            "li.post-item, article.item-list, div.post-element"
+        ).mapNotNull {
+            it.toSearchResult()
+        }.ifEmpty {
+            document.select("a.post-thumb").mapNotNull {
+                it.thumbToSearchResult()
             }
+        }
 
         return newHomePageResponse(request.name, home)
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val titleElement = this.selectFirst("h2.post-title a, h3.post-title a")
-        val thumbElement = this.selectFirst("a.post-thumb")
-        val href = titleElement?.absUrl("href") ?: thumbElement?.absUrl("href") ?: return null
-        val title = titleElement?.text()?.trim()
-            ?: thumbElement?.attr("aria-label")?.substringBefore("|")?.trim()
+        val titleElement = selectFirst("h2.post-title a, h3.post-title a")
+        val thumbElement = selectFirst("a.post-thumb")
+
+        val href = titleElement?.absUrl("href")
+            ?: thumbElement?.absUrl("href")
             ?: return null
 
-        val posterUrl = this.selectFirst("img")?.let {
-            it.absUrl("data-src").ifEmpty { it.absUrl("src") }
+        val title = titleElement?.text()?.trim()
+            ?: thumbElement?.attr("aria-label")
+                ?.substringBefore("|")
+                ?.trim()
+            ?: return null
+
+        val posterUrl = selectFirst("img")?.let {
+            it.absUrl("data-src").ifEmpty {
+                it.absUrl("src")
+            }
         }
 
-        return newTvSeriesSearchResponse(title, href, TvType.AsianDrama) {
+        return newTvSeriesSearchResponse(
+            title,
+            href,
+            TvType.AsianDrama
+        ) {
             this.posterUrl = posterUrl
         }
     }
 
     private fun Element.thumbToSearchResult(): SearchResponse? {
-        val href = this.absUrl("href").ifEmpty { return null }
-        val img = this.selectFirst("img")
-        val title = this.attr("aria-label").substringBefore("|").trim()
-            .ifEmpty { img?.attr("alt")?.trim() ?: return null }
-        val posterUrl = img?.let {
-            it.absUrl("data-src").ifEmpty { it.absUrl("src") }
+        val href = absUrl("href").ifEmpty {
+            return null
         }
 
-        return newTvSeriesSearchResponse(title, href, TvType.AsianDrama) {
+        val img = selectFirst("img")
+
+        val title = attr("aria-label")
+            .substringBefore("|")
+            .trim()
+            .ifEmpty {
+                img?.attr("alt")?.trim() ?: return null
+            }
+
+        val posterUrl = img?.let {
+            it.absUrl("data-src").ifEmpty {
+                it.absUrl("src")
+            }
+        }
+
+        return newTvSeriesSearchResponse(
+            title,
+            href,
+            TvType.AsianDrama
+        ) {
             this.posterUrl = posterUrl
         }
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get("$mainUrl/?s=$query", headers = defaultHeaders, cookies = cookies).document
-        return document.select("li.post-item, article.item-list")
-            .mapNotNull { it.toSearchResult() }
-            .ifEmpty {
-                document.select("a.post-thumb").mapNotNull { it.thumbToSearchResult() }
+        val document = app.get(
+            "$mainUrl/?s=$query",
+            headers = defaultHeaders,
+            cookies = cookies
+        ).document
+
+        return document.select(
+            "li.post-item, article.item-list"
+        ).mapNotNull {
+            it.toSearchResult()
+        }.ifEmpty {
+            document.select("a.post-thumb").mapNotNull {
+                it.thumbToSearchResult()
             }
+        }
     }
 
-    private fun resolveRelativeUrl(baseUrl: String, rawPath: String): String {
-        val cleaned = rawPath.replace("\\/", "/").trim()
-        if (cleaned.startsWith("http://") || cleaned.startsWith("https://")) return cleaned
+    // ---------------------------------------------------------
+    // URL HELPERS
+    // ---------------------------------------------------------
+
+    private fun resolveRelativeUrl(
+        baseUrl: String,
+        rawPath: String
+    ): String {
+        val cleaned = rawPath
+            .replace("\\/", "/")
+            .trim()
+
+        if (
+            cleaned.startsWith("http://") ||
+            cleaned.startsWith("https://")
+        ) {
+            return cleaned
+        }
+
         return try {
             URI(baseUrl).resolve(cleaned).toString()
         } catch (_: Exception) {
@@ -105,8 +175,20 @@ class DramaVerseProvider : MainAPI() {
         }
     }
 
+    private fun isXCloudHlsUrl(url: String): Boolean {
+        val lower = url.lowercase()
+        val path = lower.substringBefore("?")
+
+        return (
+            lower.contains(".workers.dev/m3u8/") ||
+            lower.contains(".workers.dev/hls/") ||
+            path.endsWith(".m3u8")
+        )
+    }
+
     private fun isIgnoredOrAdUrl(href: String): Boolean {
         val lower = href.lowercase()
+
         return !lower.startsWith("http") ||
             lower.contains("ardance.org") ||
             lower.contains("invoke_layer") ||
@@ -126,177 +208,345 @@ class DramaVerseProvider : MainAPI() {
             lower.contains("facebook.com") ||
             lower.contains("twitter.com") ||
             lower.contains("instagram.com") ||
-            (lower.contains("google.com") &&
-                !lower.contains("drive.google.com") &&
-                !lower.contains("docs.google.com") &&
-                !lower.contains("googleusercontent.com"))
+            (
+                lower.contains("google.com") &&
+                    !lower.contains("drive.google.com") &&
+                    !lower.contains("docs.google.com") &&
+                    !lower.contains("googleusercontent.com")
+            )
     }
 
     private suspend fun resolveIntermediateUrl(url: String): String {
+        // HLS Worker URLs must be passed unchanged.
+        if (isXCloudHlsUrl(url)) return url
+
         var current = url
         var attempts = 0
+
         while (attempts < 4) {
             attempts++
+
             try {
-                val resp = app.get(current, headers = defaultHeaders, allowRedirects = false)
-                val loc = resp.headers["location"] ?: resp.headers["Location"]
+                val resp = app.get(
+                    current,
+                    headers = defaultHeaders,
+                    allowRedirects = false
+                )
+
+                val loc = resp.headers["location"]
+                    ?: resp.headers["Location"]
+
                 if (!loc.isNullOrEmpty()) {
                     val next = resolveRelativeUrl(current, loc)
-                    if (!next.contains("ardance.org") && !next.contains("fifa2026") && next != current) {
+
+                    if (
+                        !next.contains("ardance.org") &&
+                        !next.contains("fifa2026") &&
+                        next != current
+                    ) {
                         current = next
+                        if (isXCloudHlsUrl(current)) return current
                         continue
                     }
                 }
 
                 val html = resp.text
-                if (html.contains("Can't access link ? Stuck into ads ?")) break
 
-                val metaMatch = Regex("""content\s*=\s*["'][0-9]+;\s*url=([^"']+)["']""", RegexOption.IGNORE_CASE).find(html)
+                if (html.contains("Can't access link ? Stuck into ads ?")) {
+                    break
+                }
+
+                val metaMatch = Regex(
+                    """content\s*=\s*["'][0-9]+;\s*url=([^"']+)["']""",
+                    RegexOption.IGNORE_CASE
+                ).find(html)
+
                 if (metaMatch != null) {
-                    val nextUrl = resolveRelativeUrl(current, metaMatch.groupValues[1])
-                    if (nextUrl != current && !nextUrl.contains("ardance.org") && !nextUrl.contains("fifa2026")) {
+                    val nextUrl = resolveRelativeUrl(
+                        current,
+                        metaMatch.groupValues[1]
+                    )
+
+                    if (
+                        nextUrl != current &&
+                        !nextUrl.contains("ardance.org") &&
+                        !nextUrl.contains("fifa2026")
+                    ) {
                         current = nextUrl
+                        if (isXCloudHlsUrl(current)) return current
                         continue
                     }
                 }
 
-                val jsMatch = Regex("""(?:window\.location|location\.href|location\.replace)\s*=\s*["'](https?://[^"']+)["']""", RegexOption.IGNORE_CASE)
-                    .findAll(html)
+                val jsMatch = Regex(
+                    """(?:window\.location|location\.href|location\.replace)\s*=\s*["'](https?://[^"']+)["']""",
+                    RegexOption.IGNORE_CASE
+                ).findAll(html)
                     .map { it.groupValues[1] }
-                    .firstOrNull { !it.contains("ardance.org") && !it.contains("fifa2026") }
+                    .firstOrNull {
+                        !it.contains("ardance.org") &&
+                            !it.contains("fifa2026")
+                    }
 
                 if (jsMatch != null && jsMatch != current) {
                     current = resolveRelativeUrl(current, jsMatch)
+                    if (isXCloudHlsUrl(current)) return current
                     continue
                 }
+
                 break
             } catch (_: Exception) {
                 break
             }
         }
+
         return current
     }
 
-    private fun findEpisodeLabel(el: Element, fallbackIndex: Int): String {
-        val epRegex = Regex("(?i)(?:episode|ep)\\s*0*(\\d+)")
+    // ---------------------------------------------------------
+    // EPISODE HELPERS
+    // ---------------------------------------------------------
+
+    private fun findEpisodeLabel(
+        el: Element,
+        fallbackIndex: Int
+    ): String {
+        val epRegex = Regex(
+            "(?i)(?:episode|ep)\\s*0*(\\d+)"
+        )
+
         var curr: Element? = el
         var steps = 0
+
         while (curr != null && steps < 4) {
             steps++
-            var prev = curr?.previousElementSibling()
+
+            var prev = curr.previousElementSibling()
+
             while (prev != null) {
                 val t = prev.text().trim()
                 if (epRegex.containsMatchIn(t)) return t
                 prev = prev.previousElementSibling()
             }
-            val own = curr?.ownText()?.trim().orEmpty()
+
+            val own = curr.ownText().trim()
+
             if (epRegex.containsMatchIn(own)) return own
-            curr = curr?.parent()
+
+            curr = curr.parent()
         }
+
         val text = el.text().trim()
+
         if (epRegex.containsMatchIn(text)) return text
+
         return "Episode $fallbackIndex"
     }
 
-    private suspend fun scrapeEpisodeLinksFromIntermediate(pageUrl: String, refererUrl: String): List<Pair<Int, String>> {
+    private suspend fun scrapeEpisodeLinksFromIntermediate(
+        pageUrl: String,
+        refererUrl: String
+    ): List<Pair<Int, String>> {
         val rawItems = mutableListOf<Pair<Int, String>>()
         val seenUrls = mutableSetOf<String>()
 
         try {
             val resolvedStart = resolveIntermediateUrl(pageUrl)
-            val resp = app.get(resolvedStart, headers = defaultHeaders, referer = refererUrl)
+
+            val resp = app.get(
+                resolvedStart,
+                headers = defaultHeaders,
+                referer = refererUrl
+            )
+
             val html = resp.text
             val doc = resp.document
 
             var autoIdx = 1
 
-            doc.select("a[href], [onclick], [data-href], [data-url], div.EpFile").forEach { el ->
+            doc.select(
+                "a[href], [onclick], [data-href], [data-url], div.EpFile"
+            ).forEach { el ->
+
                 val rawHref = when {
-                    el.hasAttr("href") -> el.absUrl("href")
-                    el.hasAttr("data-href") -> el.absUrl("data-href")
-                    el.hasAttr("data-url") -> el.absUrl("data-url")
-                    el.hasAttr("onclick") -> {
-                        Regex("""["'](https?://[^"']+)["']""").find(el.attr("onclick"))?.groupValues?.get(1).orEmpty()
-                    }
-                    el.parent()?.hasAttr("href") == true -> el.parent()!!.absUrl("href")
-                    el.parent()?.hasAttr("onclick") == true -> {
-                        Regex("""["'](https?://[^"']+)["']""").find(el.parent()!!.attr("onclick"))?.groupValues?.get(1).orEmpty()
-                    }
+                    el.hasAttr("href") ->
+                        el.absUrl("href")
+
+                    el.hasAttr("data-href") ->
+                        el.absUrl("data-href")
+
+                    el.hasAttr("data-url") ->
+                        el.absUrl("data-url")
+
+                    el.hasAttr("onclick") ->
+                        Regex("""["'](https?://[^"']+)["']""")
+                            .find(el.attr("onclick"))
+                            ?.groupValues?.get(1)
+                            .orEmpty()
+
+                    el.parent()?.hasAttr("href") == true ->
+                        el.parent()!!.absUrl("href")
+
+                    el.parent()?.hasAttr("onclick") == true ->
+                        Regex("""["'](https?://[^"']+)["']""")
+                            .find(el.parent()!!.attr("onclick"))
+                            ?.groupValues?.get(1)
+                            .orEmpty()
+
                     else -> ""
                 }
 
-                if (rawHref.isNotEmpty() && !isIgnoredOrAdUrl(rawHref) && seenUrls.add(rawHref)) {
+                if (
+                    rawHref.isNotEmpty() &&
+                    !isIgnoredOrAdUrl(rawHref) &&
+                    seenUrls.add(rawHref)
+                ) {
                     val label = findEpisodeLabel(el, autoIdx)
-                    val epNum = Regex("(?i)(?:episode|ep|e)\\s*0*(\\d+)").find(label)?.groupValues?.get(1)?.toIntOrNull()
+
+                    val epNum = Regex(
+                        "(?i)(?:episode|ep|e)\\s*0*(\\d+)"
+                    ).find(label)
+                        ?.groupValues?.get(1)
+                        ?.toIntOrNull()
                         ?: autoIdx
+
                     rawItems.add(epNum to rawHref)
                     autoIdx++
                 }
             }
 
+            // IMPORTANT:
+            // [^\\s"'<>]+ keeps the colon and complete encrypted
+            // token in workers.dev URLs.
             val hostRegex = Regex(
-                """https?://(?:[a-zA-Z0-9-]+\.)*(?:xcloud\.[a-z]{2,}|xcloud\d*\.[a-z]{2,}|pixeldrain\.[a-z]{2,}|drive\.google\.com|docs\.google\.com|gdflix\.[a-z]{2,}|gdtot\.[a-z]{2,}|filepress\.[a-z]{2,}|hubcloud\.[a-z]{2,}|hubdrive\.[a-z]{2,}|workers\.dev)/[a-zA-Z0-9_/?=&.-]+""",
+                """https?://(?:[a-zA-Z0-9-]+\.)*(?:xcloud\.[a-z]{2,}|xcloud\d*\.[a-z]{2,}|pixeldrain\.[a-z]{2,}|drive\.google\.com|docs\.google\.com|gdflix\.[a-z]{2,}|gdtot\.[a-z]{2,}|filepress\.[a-z]{2,}|hubcloud\.[a-z]{2,}|hubdrive\.[a-z]{2,}|workers\.dev)/[^\s"'<>]+""",
                 RegexOption.IGNORE_CASE
             )
-            hostRegex.findAll(html).forEach { m ->
-                var href = m.value.replace("\\/", "/")
+
+            hostRegex.findAll(html).forEach { match ->
+                var href = match.value
+                    .replace("\\/", "/")
+                    .trim()
+                    .trimEnd(',', ';', ')', ']', '}')
+
                 if (href.contains("refer=")) {
-                    href = href.substringAfter("refer=").substringBefore("&")
+                    href = href.substringAfter("refer=")
+                        .substringBefore("&")
+
                     try {
                         href = URLDecoder.decode(href, "UTF-8")
                     } catch (_: Exception) {
                     }
                 }
-                if (!isIgnoredOrAdUrl(href) && seenUrls.add(href)) {
+
+                if (
+                    !isIgnoredOrAdUrl(href) &&
+                    seenUrls.add(href)
+                ) {
                     rawItems.add(autoIdx to href)
                     autoIdx++
                 }
             }
         } catch (_: Exception) {
         }
+
         return rawItems
     }
 
+    // ---------------------------------------------------------
+    // LOAD
+    // ---------------------------------------------------------
+
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url, headers = defaultHeaders, cookies = cookies).document
-        val title = document.selectFirst("h1.entry-title, h1.post-title")?.text()?.trim() ?: "Drama"
-        val poster = document.selectFirst("a.post-thumb img, .post-thumb img, .entry-content img")?.let {
-            it.absUrl("data-src").ifEmpty { it.absUrl("src") }
+        val document = app.get(
+            url,
+            headers = defaultHeaders,
+            cookies = cookies
+        ).document
+
+        val title = document.selectFirst(
+            "h1.entry-title, h1.post-title"
+        )?.text()?.trim() ?: "Drama"
+
+        val poster = document.selectFirst(
+            "a.post-thumb img, .post-thumb img, .entry-content img"
+        )?.let {
+            it.absUrl("data-src").ifEmpty {
+                it.absUrl("src")
+            }
         }
-        val description = document.selectFirst(".entry-content p")?.text()
+
+        val description = document.selectFirst(
+            ".entry-content p"
+        )?.text()
 
         val episodeMap = linkedMapOf<Int, MutableList<String>>()
-        val btnSlides = document.select("a.btn-slide, .entry-content a[href*='sohojgyan'], .entry-content a[href*='blogspot'], .entry-content a[href*='xcloud'], .entry-content a[href*='pixeldrain'], .entry-content a[href*='drive.google.com'], .entry-content a[href*='gdflix'], .entry-content a[href*='hubcloud']")
+
+        val btnSlides = document.select(
+            "a.btn-slide, " +
+                ".entry-content a[href*='sohojgyan'], " +
+                ".entry-content a[href*='blogspot'], " +
+                ".entry-content a[href*='xcloud'], " +
+                ".entry-content a[href*='pixeldrain'], " +
+                ".entry-content a[href*='drive.google.com'], " +
+                ".entry-content a[href*='gdflix'], " +
+                ".entry-content a[href*='hubcloud']"
+        )
 
         for (slide in btnSlides) {
-            val slideUrl = slide.absUrl("href").ifEmpty { continue }
-            val slideTitle = slide.selectFirst(".btn-title")?.text()?.trim()
-                ?: slide.text().trim()
-                .ifEmpty { "Episode" }
+            val slideUrl = slide.absUrl("href").ifEmpty {
+                continue
+            }
 
-            if (slideUrl.contains("sohojgyan") ||
+            val slideTitle = slide.selectFirst(".btn-title")
+                ?.text()
+                ?.trim()
+                ?: slide.text().trim().ifEmpty {
+                    "Episode"
+                }
+
+            if (
+                slideUrl.contains("sohojgyan") ||
                 slideUrl.contains("blogspot") ||
                 slideTitle.contains("Episode Wise", ignoreCase = true)
             ) {
-                val scraped = scrapeEpisodeLinksFromIntermediate(slideUrl, url)
+                val scraped = scrapeEpisodeLinksFromIntermediate(
+                    slideUrl,
+                    url
+                )
+
                 if (scraped.isNotEmpty()) {
                     for ((epNum, epHref) in scraped) {
-                        episodeMap.getOrPut(epNum) { mutableListOf() }.add(epHref)
+                        episodeMap.getOrPut(epNum) {
+                            mutableListOf()
+                        }.add(epHref)
                     }
                 } else {
                     val nextEp = (episodeMap.keys.maxOrNull() ?: 0) + 1
-                    episodeMap.getOrPut(nextEp) { mutableListOf() }.add(slideUrl)
+
+                    episodeMap.getOrPut(nextEp) {
+                        mutableListOf()
+                    }.add(slideUrl)
                 }
             } else if (!isIgnoredOrAdUrl(slideUrl)) {
-                val epNum = Regex("(?i)(?:episode|ep|e)\\s*0*(\\d+)").find(slideTitle)?.groupValues?.get(1)?.toIntOrNull()
+                val epNum = Regex(
+                    "(?i)(?:episode|ep|e)\\s*0*(\\d+)"
+                ).find(slideTitle)
+                    ?.groupValues?.get(1)
+                    ?.toIntOrNull()
                     ?: ((episodeMap.keys.maxOrNull() ?: 0) + 1)
-                episodeMap.getOrPut(epNum) { mutableListOf() }.add(slideUrl)
+
+                episodeMap.getOrPut(epNum) {
+                    mutableListOf()
+                }.add(slideUrl)
             }
         }
 
         val episodes = mutableListOf<Episode>()
+
         for ((epNum, urls) in episodeMap) {
             val combinedData = urls.distinct().joinToString("|||")
+
             episodes.add(
                 newEpisode(combinedData) {
                     this.name = "Episode $epNum"
@@ -314,11 +564,20 @@ class DramaVerseProvider : MainAPI() {
             )
         }
 
-        return newTvSeriesLoadResponse(title, url, TvType.AsianDrama, episodes) {
+        return newTvSeriesLoadResponse(
+            title,
+            url,
+            TvType.AsianDrama,
+            episodes
+        ) {
             this.posterUrl = poster
             this.plot = description
         }
     }
+
+    // ---------------------------------------------------------
+    // LOAD LINKS
+    // ---------------------------------------------------------
 
     override suspend fun loadLinks(
         data: String,
@@ -326,24 +585,53 @@ class DramaVerseProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        val rawLinks = data.split("|||").map { it.trim() }.filter { it.isNotEmpty() }
+        val rawLinks = data.split("|||")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
 
         for (itemUrl in rawLinks) {
-            if (isIgnoredOrAdUrl(itemUrl) && !itemUrl.contains("sohojgyan") && !itemUrl.contains("blogspot")) {
+            if (
+                isIgnoredOrAdUrl(itemUrl) &&
+                !itemUrl.contains("sohojgyan") &&
+                !itemUrl.contains("blogspot")
+            ) {
                 continue
             }
 
-            val currentUrl = resolveIntermediateUrl(itemUrl)
+            // Never resolve or alter encrypted Worker playlist URLs.
+            val currentUrl = if (isXCloudHlsUrl(itemUrl)) {
+                itemUrl
+            } else {
+                resolveIntermediateUrl(itemUrl)
+            }
 
-            if (currentUrl.contains("sohojgyan") || currentUrl.contains("blogspot")) {
-                val scraped = scrapeEpisodeLinksFromIntermediate(currentUrl, "$mainUrl/")
+            if (
+                currentUrl.contains("sohojgyan") ||
+                currentUrl.contains("blogspot")
+            ) {
+                val scraped = scrapeEpisodeLinksFromIntermediate(
+                    currentUrl,
+                    "$mainUrl/"
+                )
+
                 for ((_, link) in scraped) {
-                    processSingleHostLink(link, currentUrl, subtitleCallback, callback)
+                    processSingleHostLink(
+                        link,
+                        currentUrl,
+                        subtitleCallback,
+                        callback
+                    )
                 }
+
                 continue
             }
 
-            processSingleHostLink(currentUrl, "$mainUrl/", subtitleCallback, callback)
+            processSingleHostLink(
+                currentUrl,
+                "$mainUrl/",
+                subtitleCallback,
+                callback
+            )
         }
 
         return true
@@ -356,38 +644,130 @@ class DramaVerseProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ) {
         if (isIgnoredOrAdUrl(rawUrl)) return
+
+        // Direct HLS Worker URL: do not call loadExtractor or redirect resolver.
+        if (isXCloudHlsUrl(rawUrl)) {
+            emitDirectXCloudHls(
+                rawUrl,
+                referer,
+                emptyMap(),
+                callback
+            )
+            return
+        }
+
         val url = resolveIntermediateUrl(rawUrl)
+
+        // Check again after intermediate resolution.
+        if (isXCloudHlsUrl(url)) {
+            emitDirectXCloudHls(
+                url,
+                referer,
+                emptyMap(),
+                callback
+            )
+            return
+        }
 
         when {
             url.contains("xcloud", ignoreCase = true) -> {
-                extractXCloud(url, subtitleCallback, callback)
+                extractXCloud(
+                    url,
+                    subtitleCallback,
+                    callback
+                )
             }
+
             url.contains("pixeldrain", ignoreCase = true) -> {
                 extractPixeldrain(url, callback)
             }
+
             url.contains("drive.google.com", ignoreCase = true) ||
-            url.contains("docs.google.com", ignoreCase = true) ||
-            url.contains("drive.usercontent.google.com", ignoreCase = true) -> {
-                extractGDrive(url, subtitleCallback, callback)
+                url.contains("docs.google.com", ignoreCase = true) ||
+                url.contains("drive.usercontent.google.com", ignoreCase = true) -> {
+                extractGDrive(
+                    url,
+                    subtitleCallback,
+                    callback
+                )
             }
+
             else -> {
-                val handled = loadExtractor(url, referer, subtitleCallback, callback)
+                val handled = loadExtractor(
+                    url,
+                    referer,
+                    subtitleCallback,
+                    callback
+                )
+
                 if (!handled) {
                     try {
-                        val doc = app.get(url, headers = defaultHeaders, referer = referer).document
+                        val doc = app.get(
+                            url,
+                            headers = defaultHeaders,
+                            referer = referer
+                        ).document
+
                         doc.select("a[href]").forEach { a ->
                             val href = a.absUrl("href")
-                            if (isIgnoredOrAdUrl(href)) return@forEach
-                            if (href.contains("xcloud", ignoreCase = true)) {
-                                extractXCloud(href, subtitleCallback, callback)
-                            } else if (href.contains("pixeldrain", ignoreCase = true)) {
-                                extractPixeldrain(href, callback)
-                            } else if (href.contains("drive.google.com") || href.contains("drive.usercontent.google.com")) {
-                                extractGDrive(href, subtitleCallback, callback)
-                            } else if (href.contains("googleusercontent.com") || href.contains("r2.dev") || href.contains("workers.dev")) {
-                                callback.invoke(
-                                    newExtractorLink("Direct", "Direct Stream", href, ExtractorLinkType.VIDEO)
-                                )
+
+                            if (isIgnoredOrAdUrl(href)) {
+                                return@forEach
+                            }
+
+                            when {
+                                isXCloudHlsUrl(href) -> {
+                                    emitDirectXCloudHls(
+                                        href,
+                                        url,
+                                        emptyMap(),
+                                        callback
+                                    )
+                                }
+
+                                href.contains("xcloud", ignoreCase = true) -> {
+                                    extractXCloud(
+                                        href,
+                                        subtitleCallback,
+                                        callback
+                                    )
+                                }
+
+                                href.contains("pixeldrain", ignoreCase = true) -> {
+                                    extractPixeldrain(href, callback)
+                                }
+
+                                href.contains("drive.google.com") ||
+                                    href.contains("drive.usercontent.google.com") -> {
+                                    extractGDrive(
+                                        href,
+                                        subtitleCallback,
+                                        callback
+                                    )
+                                }
+
+                                href.contains("googleusercontent.com") ||
+                                    href.contains("r2.dev") -> {
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            "Direct",
+                                            "Direct Stream",
+                                            href,
+                                            ExtractorLinkType.VIDEO
+                                        )
+                                    )
+                                }
+
+                                href.contains("workers.dev", ignoreCase = true) -> {
+                                    if (isXCloudHlsUrl(href)) {
+                                        emitDirectXCloudHls(
+                                            href,
+                                            url,
+                                            emptyMap(),
+                                            callback
+                                        )
+                                    }
+                                }
                             }
                         }
                     } catch (_: Exception) {
@@ -397,13 +777,64 @@ class DramaVerseProvider : MainAPI() {
         }
     }
 
-    private suspend fun extractPixeldrain(url: String, callback: (ExtractorLink) -> Unit) {
-        val fileId = Regex("""/u/([a-zA-Z0-9]+)""").find(url)?.groupValues?.get(1)
-            ?: Regex("""/api/file/([a-zA-Z0-9]+)""").find(url)?.groupValues?.get(1)
+    // ---------------------------------------------------------
+    // DIRECT XCLOUD HLS
+    // ---------------------------------------------------------
+
+    private fun emitDirectXCloudHls(
+        url: String,
+        referer: String,
+        sessionCookies: Map<String, String>,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        if (!isXCloudHlsUrl(url)) return
+
+        val cookieHeader = sessionCookies.entries.joinToString("; ") {
+            "${it.key}=${it.value}"
+        }
+
+        callback.invoke(
+            newExtractorLink(
+                source = "XCloud",
+                name = "XCloud HLS",
+                url = url,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = referer
+
+                val headers = mutableMapOf(
+                    "User-Agent" to defaultHeaders["User-Agent"].orEmpty(),
+                    "Accept" to "*/*"
+                )
+
+                if (cookieHeader.isNotEmpty()) {
+                    headers["Cookie"] = cookieHeader
+                }
+
+                this.headers = headers
+            }
+        )
+    }
+
+    // ---------------------------------------------------------
+    // PIXELDRAIN
+    // ---------------------------------------------------------
+
+    private suspend fun extractPixeldrain(
+        url: String,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val fileId = Regex(
+            """/u/([a-zA-Z0-9]+)"""
+        ).find(url)?.groupValues?.get(1)
+            ?: Regex(
+                """/api/file/([a-zA-Z0-9]+)"""
+            ).find(url)?.groupValues?.get(1)
             ?: url.substringAfterLast("/").substringBefore("?")
 
         if (fileId.isNotEmpty()) {
             val directApiUrl = "https://pixeldrain.com/api/file/$fileId"
+
             callback.invoke(
                 newExtractorLink(
                     source = "Pixeldrain",
@@ -415,19 +846,34 @@ class DramaVerseProvider : MainAPI() {
         }
     }
 
+    // ---------------------------------------------------------
+    // GOOGLE DRIVE
+    // ---------------------------------------------------------
+
     private suspend fun extractGDrive(
         url: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         var found = false
-        val fileId = Regex("""(?:/d/|id=)([a-zA-Z0-9_-]{15,})""").find(url)?.groupValues?.get(1)
+
+        val fileId = Regex(
+            """(?:/d/|id=)([a-zA-Z0-9_-]{15,})"""
+        ).find(url)?.groupValues?.get(1)
 
         if (!fileId.isNullOrEmpty()) {
-            val directConfirmUrl = "https://drive.usercontent.google.com/download?id=$fileId&export=download&confirm=t"
+            val directConfirmUrl =
+                "https://drive.usercontent.google.com/download?id=$fileId&export=download&confirm=t"
+
             try {
-                val resp = app.get(directConfirmUrl, headers = defaultHeaders, allowRedirects = false)
-                val loc = resp.headers["location"] ?: resp.headers["Location"]
+                val resp = app.get(
+                    directConfirmUrl,
+                    headers = defaultHeaders,
+                    allowRedirects = false
+                )
+
+                val loc = resp.headers["location"]
+                    ?: resp.headers["Location"]
 
                 if (!loc.isNullOrEmpty()) {
                     callback.invoke(
@@ -440,14 +886,27 @@ class DramaVerseProvider : MainAPI() {
                             this.referer = "https://drive.google.com/"
                         }
                     )
+
                     found = true
                 } else {
-                    val formAction = resp.document.selectFirst("form#download-form")?.attr("action")
+                    val formAction = resp.document
+                        .selectFirst("form#download-form")
+                        ?.attr("action")
+
                     if (!formAction.isNullOrEmpty()) {
-                        val params = resp.document.select("form#download-form input[name]").joinToString("&") {
-                            "${it.attr("name")}=${it.attr("value")}"
-                        }
-                        val confirmedStreamUrl = if (params.isNotEmpty()) "$formAction?$params" else formAction
+                        val params = resp.document
+                            .select("form#download-form input[name]")
+                            .joinToString("&") {
+                                "${it.attr("name")}=${it.attr("value")}"
+                            }
+
+                        val confirmedStreamUrl =
+                            if (params.isNotEmpty()) {
+                                "$formAction?$params"
+                            } else {
+                                formAction
+                            }
+
                         callback.invoke(
                             newExtractorLink(
                                 source = "GDrive",
@@ -458,6 +917,7 @@ class DramaVerseProvider : MainAPI() {
                                 this.referer = "https://drive.google.com/"
                             }
                         )
+
                         found = true
                     }
                 }
@@ -475,55 +935,91 @@ class DramaVerseProvider : MainAPI() {
                         this.referer = "https://drive.google.com/"
                     }
                 )
+
                 found = true
             }
         }
 
-        loadExtractor(url, "https://drive.google.com/", subtitleCallback, callback)
+        loadExtractor(
+            url,
+            "https://drive.google.com/",
+            subtitleCallback,
+            callback
+        )
+
         return found
     }
+
+    // ---------------------------------------------------------
+    // XCLOUD STREAM RESOLVER
+    // ---------------------------------------------------------
 
     private suspend fun resolveStreamTarget(
         startUrl: String,
         refererUrl: String,
         sessionCookies: Map<String, String> = emptyMap()
     ): Pair<String, Boolean> {
+
+        // Critical: preserve encrypted Worker playlist URL exactly.
+        if (isXCloudHlsUrl(startUrl)) {
+            return startUrl to true
+        }
+
         var current = startUrl
-        var isM3u8 = current.contains(".m3u8", ignoreCase = true) || current.contains(".workers.dev", ignoreCase = true)
+        var isM3u8 = current.contains(".m3u8", ignoreCase = true)
         var hops = 0
 
         while (hops < 6) {
             hops++
+
             try {
                 val resp = app.get(
                     current,
-                    headers = defaultHeaders,
+                    headers = streamHeaders,
                     referer = refererUrl,
                     cookies = sessionCookies,
                     allowRedirects = false
                 )
-                val loc = resp.headers["location"] ?: resp.headers["Location"]
+
+                val loc = resp.headers["location"]
+                    ?: resp.headers["Location"]
+
                 if (!loc.isNullOrEmpty()) {
                     val nextUrl = resolveRelativeUrl(current, loc)
+
                     if (isIgnoredOrAdUrl(nextUrl)) break
+
                     current = nextUrl
-                    if (current.contains(".m3u8", ignoreCase = true) || current.contains(".workers.dev", ignoreCase = true)) {
+
+                    if (isXCloudHlsUrl(current)) {
+                        return current to true
+                    }
+
+                    if (current.contains(".m3u8", ignoreCase = true)) {
                         isM3u8 = true
                     }
+
                     continue
                 }
 
-                val contentType = (resp.headers["content-type"] ?: resp.headers["Content-Type"]).orEmpty()
-                if (contentType.contains("mpegurl", ignoreCase = true) ||
+                val contentType = (
+                    resp.headers["content-type"]
+                        ?: resp.headers["Content-Type"]
+                    ).orEmpty()
+
+                if (
+                    contentType.contains("mpegurl", ignoreCase = true) ||
                     resp.text.trimStart().startsWith("#EXTM3U")
                 ) {
                     isM3u8 = true
                 }
+
                 break
             } catch (_: Exception) {
                 break
             }
         }
+
         return current to isM3u8
     }
 
@@ -537,10 +1033,24 @@ class DramaVerseProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         if (isIgnoredOrAdUrl(rawRedirectUrl)) return false
-        val fullRedirectUrl = resolveRelativeUrl(refererUrl, rawRedirectUrl)
-        val (directCdnUrl, detectedM3u8) = resolveStreamTarget(fullRedirectUrl, refererUrl, sessionCookies)
 
-        if (isIgnoredOrAdUrl(directCdnUrl) || !emittedUrls.add(directCdnUrl)) return false
+        val fullRedirectUrl = resolveRelativeUrl(
+            refererUrl,
+            rawRedirectUrl
+        )
+
+        val (directCdnUrl, detectedM3u8) = resolveStreamTarget(
+            fullRedirectUrl,
+            refererUrl,
+            sessionCookies
+        )
+
+        if (
+            isIgnoredOrAdUrl(directCdnUrl) ||
+            !emittedUrls.add(directCdnUrl)
+        ) {
+            return false
+        }
 
         val hostLabel = try {
             URI(directCdnUrl).host ?: "CDN"
@@ -548,13 +1058,19 @@ class DramaVerseProvider : MainAPI() {
             "CDN"
         }
 
-        val finalType = if (detectedM3u8 || defaultType == ExtractorLinkType.M3U8) {
+        val finalType = if (
+            detectedM3u8 ||
+            defaultType == ExtractorLinkType.M3U8 ||
+            isXCloudHlsUrl(directCdnUrl)
+        ) {
             ExtractorLinkType.M3U8
         } else {
             ExtractorLinkType.VIDEO
         }
 
-        val cookieHeader = sessionCookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+        val cookieHeader = sessionCookies.entries.joinToString("; ") {
+            "${it.key}=${it.value}"
+        }
 
         callback.invoke(
             newExtractorLink(
@@ -563,17 +1079,97 @@ class DramaVerseProvider : MainAPI() {
                 url = directCdnUrl,
                 type = finalType
             ) {
-                this.referer = if (finalType == ExtractorLinkType.M3U8) refererUrl else ""
-                if (cookieHeader.isNotEmpty() && finalType == ExtractorLinkType.M3U8) {
-                    this.headers = mapOf(
-                        "User-Agent" to defaultHeaders["User-Agent"]!!,
-                        "Cookie" to cookieHeader
+                this.referer = refererUrl
+
+                if (finalType == ExtractorLinkType.M3U8) {
+                    val headers = mutableMapOf(
+                        "User-Agent" to defaultHeaders["User-Agent"].orEmpty(),
+                        "Accept" to "*/*"
                     )
+
+                    if (cookieHeader.isNotEmpty()) {
+                        headers["Cookie"] = cookieHeader
+                    }
+
+                    this.headers = headers
                 }
             }
         )
+
         return true
     }
+
+    // ---------------------------------------------------------
+    // XCLOUD CONFIG PARSING
+    // ---------------------------------------------------------
+
+    private fun extractXCloudConfigValue(
+        html: String,
+        key: String
+    ): String? {
+        val escapedKey = Regex.escape(key)
+
+        val patterns = listOf(
+            Regex(
+                """"$escapedKey"\s*:\s*"((?:\\.|[^"\\])*)"""",
+                RegexOption.IGNORE_CASE
+            ),
+            Regex(
+                """$escapedKey\s*:\s*"((?:\\.|[^"\\])*)"""",
+                RegexOption.IGNORE_CASE
+            ),
+            Regex(
+                """$escapedKey\s*=\s*"((?:\\.|[^"\\])*)"""",
+                RegexOption.IGNORE_CASE
+            ),
+            Regex(
+                """$escapedKey\s*:\s*'([^']*)'""",
+                RegexOption.IGNORE_CASE
+            ),
+            Regex(
+                """$escapedKey\s*=\s*'([^']*)'""",
+                RegexOption.IGNORE_CASE
+            )
+        )
+
+        for (pattern in patterns) {
+            val value = pattern.find(html)
+                ?.groupValues
+                ?.getOrNull(1)
+                ?: continue
+
+            return value
+                .replace("\\/", "/")
+                .replace("\\u0026", "&")
+                .replace("\\u003d", "=")
+                .replace("&amp;", "&")
+                .trim()
+        }
+
+        return null
+    }
+
+    private fun findXCloudWorkerHls(html: String): List<String> {
+        val regex = Regex(
+            """https?://[a-zA-Z0-9.-]+\.workers\.dev/(?:hls|m3u8)/[^\s"'<>]+""",
+            RegexOption.IGNORE_CASE
+        )
+
+        return regex.findAll(html)
+            .map {
+                it.value
+                    .replace("\\/", "/")
+                    .trim()
+                    .trimEnd(',', ';', ')', ']', '}')
+            }
+            .filter { isXCloudHlsUrl(it) }
+            .distinct()
+            .toList()
+    }
+
+    // ---------------------------------------------------------
+    // XCLOUD EXTRACTOR
+    // ---------------------------------------------------------
 
     private suspend fun extractXCloud(
         url: String,
@@ -583,25 +1179,63 @@ class DramaVerseProvider : MainAPI() {
         var found = false
         val emittedUrls = mutableSetOf<String>()
 
-        if (url.contains("/apis/cloud/redirect/") ||
+        // Direct Worker HLS URL.
+        if (isXCloudHlsUrl(url)) {
+            emitDirectXCloudHls(
+                url,
+                url.substringBefore("/m3u8/").substringBefore("/hls/"),
+                emptyMap(),
+                callback
+            )
+            return true
+        }
+
+        if (
+            url.contains("/apis/cloud/redirect/") ||
             url.contains("/apis/cloud2/redirect/") ||
             url.contains("/apis/redirect/")
         ) {
             val label = when {
-                url.contains("/apis/cloud2/redirect/") -> "XCloud Server 2"
-                url.contains("/apis/cloud/redirect/") -> "XCloud Server 1"
-                else -> "XCloud Mirror"
+                url.contains("/apis/cloud2/redirect/") ->
+                    "XCloud Server 2"
+
+                url.contains("/apis/cloud/redirect/") ->
+                    "XCloud Server 1"
+
+                else ->
+                    "XCloud Mirror"
             }
-            return emitXCloudRedirect(url, label, ExtractorLinkType.VIDEO, url, emptyMap(), emittedUrls, callback)
+
+            return emitXCloudRedirect(
+                url,
+                label,
+                ExtractorLinkType.VIDEO,
+                url,
+                emptyMap(),
+                emittedUrls,
+                callback
+            )
         }
 
         val resolvedUrl = resolveIntermediateUrl(url)
-        val xCloudResponse = app.get(resolvedUrl, headers = defaultHeaders)
+
+        val xCloudResponse = app.get(
+            resolvedUrl,
+            headers = defaultHeaders
+        )
+
         val xCloudDoc = xCloudResponse.document
-        val resolvedPageUrl = xCloudResponse.url.ifEmpty { resolvedUrl }
+        val resolvedPageUrl = xCloudResponse.url.ifEmpty {
+            resolvedUrl
+        }
+
         val baseCookies = xCloudResponse.cookies
 
-        val mediaId = resolvedPageUrl.substringAfterLast("/").substringBefore("?").trim()
+        val mediaId = resolvedPageUrl
+            .substringAfterLast("/")
+            .substringBefore("?")
+            .trim()
+
         val baseUri = try {
             val u = URI(resolvedPageUrl)
             "${u.scheme}://${u.host}"
@@ -609,28 +1243,46 @@ class DramaVerseProvider : MainAPI() {
             "https://xcloud1.lol"
         }
 
-        // 1. Direct links on xcloud page
+        // 1. Direct links on XCloud page.
         xCloudDoc.select("a[href]").forEach { a ->
             val href = a.absUrl("href")
+
             if (isIgnoredOrAdUrl(href)) return@forEach
 
-            if (href.contains("/apis/cloud/redirect/") ||
+            if (
+                href.contains("/apis/cloud/redirect/") ||
                 href.contains("/apis/cloud2/redirect/") ||
                 href.contains("/apis/redirect/")
             ) {
-                val btnText = a.text().trim().ifEmpty { "XCloud Direct" }
-                if (emitXCloudRedirect(href, btnText, ExtractorLinkType.VIDEO, resolvedPageUrl, baseCookies, emittedUrls, callback)) {
+                val btnText = a.text().trim()
+                    .ifEmpty { "XCloud Direct" }
+
+                if (
+                    emitXCloudRedirect(
+                        href,
+                        btnText,
+                        ExtractorLinkType.VIDEO,
+                        resolvedPageUrl,
+                        baseCookies,
+                        emittedUrls,
+                        callback
+                    )
+                ) {
                     found = true
                 }
             }
         }
 
-        // 2. Streaming player page (/stream_<id> -> stream.xcloud1.lol/<id>)
+        // 2. Streaming player page.
         val streamCandidates = linkedSetOf<String>()
-        xCloudDoc.selectFirst("div.vd a[href*='stream_'], a[href*='/stream_']")
-            ?.absUrl("href")
+
+        xCloudDoc.selectFirst(
+            "div.vd a[href*='stream_'], a[href*='/stream_']"
+        )?.absUrl("href")
             ?.takeIf { it.isNotEmpty() }
-            ?.let { streamCandidates.add(resolveIntermediateUrl(it)) }
+            ?.let {
+                streamCandidates.add(resolveIntermediateUrl(it))
+            }
 
         if (mediaId.isNotEmpty() && mediaId.length > 2) {
             streamCandidates.add("$baseUri/stream_$mediaId")
@@ -646,99 +1298,239 @@ class DramaVerseProvider : MainAPI() {
                     referer = resolvedPageUrl,
                     cookies = baseCookies
                 )
-                val finalPlayerUrl = streamResp.url.ifEmpty { streamPageUrl }
+
+                val finalPlayerUrl = streamResp.url.ifEmpty {
+                    streamPageUrl
+                }
+
                 val streamCookies = baseCookies + streamResp.cookies
                 val streamHtml = streamResp.text
 
-                // Subtitles
-                Regex("""\{[^{}]*"lang"\s*:\s*"([^"]+)"[^{}]*"tgid"\s*:\s*(\d+)[^{}]*\}""")
-                    .findAll(streamHtml)
-                    .forEach { m ->
-                        subtitleCallback.invoke(
-                            SubtitleFile(m.groupValues[1], "https://sub.xcloud.icu/${m.groupValues[2]}")
+                // Subtitles.
+                Regex(
+                    """\{[^{}]*"lang"\s*:\s*"([^"]+)"[^{}]*"tgid"\s*:\s*(\d+)[^{}]*\}"""
+                ).findAll(streamHtml).forEach { m ->
+                    subtitleCallback.invoke(
+                        SubtitleFile(
+                            m.groupValues[1],
+                            "https://sub.xcloud.icu/${m.groupValues[2]}"
                         )
-                    }
-
-                // Parse window.__XCLOUD_PLAYER__ variables (hlsUrl, primaryUrl, wasabiUrl)
-                val hlsMatch = Regex("""hlsUrl\s*[:=]\s*["']([^"']+)["']""").find(streamHtml)
-                val primaryMatch = Regex("""primaryUrl\s*[:=]\s*["']([^"']+)["']""").find(streamHtml)
-                val wasabiMatch = Regex("""wasabiUrl\s*[:=]\s*["']([^"']+)["']""").find(streamHtml)
-
-                val hlsVal = hlsMatch?.groupValues?.get(1)
-                if (!hlsVal.isNullOrEmpty() && hlsVal != "null") {
-                    if (emitXCloudRedirect(hlsVal, "XCloud HLS", ExtractorLinkType.M3U8, finalPlayerUrl, streamCookies, emittedUrls, callback)) {
-                        found = true
-                    }
+                    )
                 }
 
-                val primaryVal = primaryMatch?.groupValues?.get(1)
-                if (!primaryVal.isNullOrEmpty() && primaryVal != "null") {
-                    if (emitXCloudRedirect(primaryVal, "XCloud Server 1", ExtractorLinkType.VIDEO, finalPlayerUrl, streamCookies, emittedUrls, callback)) {
-                        found = true
-                    }
-                }
-
-                val wasabiVal = wasabiMatch?.groupValues?.get(1)
-                if (!wasabiVal.isNullOrEmpty() && wasabiVal != "null") {
-                    if (emitXCloudRedirect(wasabiVal, "XCloud Server 2", ExtractorLinkType.VIDEO, finalPlayerUrl, streamCookies, emittedUrls, callback)) {
-                        found = true
-                    }
-                }
-
-                // Fallback: PRIMARY_URL, WASABI_URL, HLS_URL in script
-                val varPatterns = listOf(
-                    "HLS_URL" to ("XCloud HLS" to ExtractorLinkType.M3U8),
-                    "PRIMARY_URL" to ("XCloud Server 1" to ExtractorLinkType.VIDEO),
-                    "WASABI_URL" to ("XCloud Server 2" to ExtractorLinkType.VIDEO)
+                // Read window.__XCLOUD_PLAYER__ config.
+                val hlsVal = extractXCloudConfigValue(
+                    streamHtml,
+                    "hlsUrl"
                 )
 
-                for ((varName, info) in varPatterns) {
-                    val match = Regex("""var\s+$varName\s*=\s*["']([^"']+)["']""").find(streamHtml)
-                    val rawVal = match?.groupValues?.get(1)
-                    if (!rawVal.isNullOrEmpty() && rawVal != "null") {
-                        if (emitXCloudRedirect(rawVal, info.first, info.second, finalPlayerUrl, streamCookies, emittedUrls, callback)) {
+                val primaryVal = extractXCloudConfigValue(
+                    streamHtml,
+                    "primaryUrl"
+                )
+
+                val wasabiVal = extractXCloudConfigValue(
+                    streamHtml,
+                    "wasabiUrl"
+                )
+
+                if (
+                    !hlsVal.isNullOrEmpty() &&
+                    hlsVal != "null"
+                ) {
+                    if (
+                        emitXCloudRedirect(
+                            hlsVal,
+                            "XCloud HLS",
+                            ExtractorLinkType.M3U8,
+                            finalPlayerUrl,
+                            streamCookies,
+                            emittedUrls,
+                            callback
+                        )
+                    ) {
+                        found = true
+                    }
+                }
+
+                if (
+                    !primaryVal.isNullOrEmpty() &&
+                    primaryVal != "null"
+                ) {
+                    if (
+                        emitXCloudRedirect(
+                            primaryVal,
+                            "XCloud Server 1",
+                            ExtractorLinkType.VIDEO,
+                            finalPlayerUrl,
+                            streamCookies,
+                            emittedUrls,
+                            callback
+                        )
+                    ) {
+                        found = true
+                    }
+                }
+
+                if (
+                    !wasabiVal.isNullOrEmpty() &&
+                    wasabiVal != "null"
+                ) {
+                    if (
+                        emitXCloudRedirect(
+                            wasabiVal,
+                            "XCloud Server 2",
+                            ExtractorLinkType.VIDEO,
+                            finalPlayerUrl,
+                            streamCookies,
+                            emittedUrls,
+                            callback
+                        )
+                    ) {
+                        found = true
+                    }
+                }
+
+                // Fallback JS variables.
+                val varPatterns = listOf(
+                    Triple(
+                        "HLS_URL",
+                        "XCloud HLS",
+                        ExtractorLinkType.M3U8
+                    ),
+                    Triple(
+                        "PRIMARY_URL",
+                        "XCloud Server 1",
+                        ExtractorLinkType.VIDEO
+                    ),
+                    Triple(
+                        "WASABI_URL",
+                        "XCloud Server 2",
+                        ExtractorLinkType.VIDEO
+                    )
+                )
+
+                for ((varName, label, type) in varPatterns) {
+                    val rawVal = extractXCloudConfigValue(
+                        streamHtml,
+                        varName
+                    )
+
+                    if (
+                        !rawVal.isNullOrEmpty() &&
+                        rawVal != "null"
+                    ) {
+                        if (
+                            emitXCloudRedirect(
+                                rawVal,
+                                label,
+                                type,
+                                finalPlayerUrl,
+                                streamCookies,
+                                emittedUrls,
+                                callback
+                            )
+                        ) {
                             found = true
                         }
                     }
                 }
 
-                // Workers dev or m3u8 in JS
-                Regex("""["'](https?://[^"'\s<>]+\.workers\.dev/[^"'\s<>]*)["']""", RegexOption.IGNORE_CASE)
-                    .findAll(streamHtml)
-                    .forEach { m ->
-                        val wUrl = m.groupValues[1]
-                        if (!isIgnoredOrAdUrl(wUrl) && emitXCloudRedirect(wUrl, "XCloud Worker HLS", ExtractorLinkType.M3U8, finalPlayerUrl, streamCookies, emittedUrls, callback)) {
-                            found = true
-                        }
-                    }
+                // All Worker HLS URLs, including /m3u8/ and /hls/.
+                val workerUrls = findXCloudWorkerHls(streamHtml)
 
-                if (found) break
+                for (workerUrl in workerUrls) {
+                    if (
+                        emitXCloudRedirect(
+                            workerUrl,
+                            "XCloud Worker HLS",
+                            ExtractorLinkType.M3U8,
+                            finalPlayerUrl,
+                            streamCookies,
+                            emittedUrls,
+                            callback
+                        )
+                    ) {
+                        found = true
+                    }
+                }
+
+                // Continue checking other stream candidates.
             } catch (_: Exception) {
             }
         }
 
-        // 3. Token page fallback
-        val tokenGenUrl = xCloudDoc.selectFirst("div.vd a[href*='token='], a[href*='xcloud1.lol'][href*='token=']")
-            ?.absUrl("href")
-            ?: if (resolvedPageUrl.contains("token=")) resolvedPageUrl else null
+        // 3. Token page fallback.
+        val tokenGenUrl = xCloudDoc.selectFirst(
+            "div.vd a[href*='token='], a[href*='xcloud1.lol'][href*='token=']"
+        )?.absUrl("href")
+            ?: if (resolvedPageUrl.contains("token=")) {
+                resolvedPageUrl
+            } else {
+                null
+            }
 
-        if (!tokenGenUrl.isNullOrEmpty() && !tokenGenUrl.contains("subtitle")) {
+        if (
+            !tokenGenUrl.isNullOrEmpty() &&
+            !tokenGenUrl.contains("subtitle")
+        ) {
             try {
-                val tokenResp = app.get(tokenGenUrl, headers = defaultHeaders, referer = resolvedPageUrl, cookies = baseCookies)
-                val tokenFinalUrl = tokenResp.url.ifEmpty { tokenGenUrl }
+                val tokenResp = app.get(
+                    tokenGenUrl,
+                    headers = defaultHeaders,
+                    referer = resolvedPageUrl,
+                    cookies = baseCookies
+                )
+
+                val tokenFinalUrl = tokenResp.url.ifEmpty {
+                    tokenGenUrl
+                }
+
                 val tokenCookies = baseCookies + tokenResp.cookies
 
                 tokenResp.document.select("a[href]").forEach { a ->
                     val href = a.absUrl("href")
+
                     if (isIgnoredOrAdUrl(href)) return@forEach
-                    if (href.contains("/apis/redirect/") ||
+
+                    if (
+                        href.contains("/apis/redirect/") ||
                         href.contains("/apis/cloud/redirect/") ||
                         href.contains("/apis/cloud2/redirect/")
                     ) {
-                        val label = a.text().trim().ifEmpty { "XCloud Token Mirror" }
-                        if (emitXCloudRedirect(href, label, ExtractorLinkType.VIDEO, tokenFinalUrl, tokenCookies, emittedUrls, callback)) {
+                        val label = a.text().trim()
+                            .ifEmpty { "XCloud Token Mirror" }
+
+                        if (
+                            emitXCloudRedirect(
+                                href,
+                                label,
+                                ExtractorLinkType.VIDEO,
+                                tokenFinalUrl,
+                                tokenCookies,
+                                emittedUrls,
+                                callback
+                            )
+                        ) {
                             found = true
                         }
+                    }
+                }
+
+                // Worker URLs can also appear on the token page.
+                findXCloudWorkerHls(tokenResp.text).forEach { workerUrl ->
+                    if (
+                        emitXCloudRedirect(
+                            workerUrl,
+                            "XCloud Worker HLS",
+                            ExtractorLinkType.M3U8,
+                            tokenFinalUrl,
+                            tokenCookies,
+                            emittedUrls,
+                            callback
+                        )
+                    ) {
+                        found = true
                     }
                 }
             } catch (_: Exception) {
