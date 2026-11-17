@@ -1,3 +1,4 @@
+
 package com.hungrysturdy
 
 import com.lagradost.cloudstream3.SubtitleFile
@@ -6,8 +7,10 @@ import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.JsUnpacker
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import java.net.URI
 
 open class BaseJWPExtractor : ExtractorApi() {
+
     override var name = "BaseJWP"
     override var mainUrl = "https://example.com"
     override val requiresReferer = true
@@ -19,51 +22,103 @@ open class BaseJWPExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         val extractedReferer = referer ?: "$mainUrl/"
-        val headers = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 15; Infinix X6851) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
-            "Referer" to extractedReferer,
-            "Origin" to extractedReferer.substringBeforeLast("/")
-        )
 
-        val response = app.get(url, referer = extractedReferer, headers = headers).text
-        val unpacked = JsUnpacker(response).unpack() ?: response
-        val combinedHtml = "$response\n$unpacked"
-
-        val streamRegex = Regex("""["'](https?://[^"'\s]+\.(?:m3u8|mp4)[^"'\s]*)["']""")
-        val foundUrls = streamRegex.findAll(combinedHtml)
-            .map { it.groupValues[1].replace("\\/", "/") }
-            .distinct()
-            .toList()
-
-        for (streamUrl in foundUrls) {
-            if (streamUrl.contains("preview") || streamUrl.contains("thumb")) continue
-
-            callback.invoke(
-                newExtractorLink(
-                    source = this.name,
-                    name = this.name,
-                    url = streamUrl
-                ) {
-                    this.referer = extractedReferer
-                    this.quality = 0
-                    this.headers = headers
-                }
-            )
+        val origin = try {
+            val uri = URI(extractedReferer)
+            "${uri.scheme}://${uri.authority}"
+        } catch (_: Exception) {
+            mainUrl.trimEnd('/')
         }
 
-        val subRegex = Regex("""["'](https?://[^"'\s]+\.(?:vtt|srt)[^"'\s]*)["']""")
-        subRegex.findAll(combinedHtml).map { it.groupValues[1] }.distinct().forEach { subUrl ->
-            subtitleCallback.invoke(
-                SubtitleFile(
-                    lang = "Hindi / English",
-                    url = subUrl
-                )
+        val headers = mapOf(
+            "User-Agent" to
+                "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Chrome/122.0.0.0 Mobile Safari/537.36",
+            "Referer" to extractedReferer,
+            "Origin" to origin
+        )
+
+        try {
+            val response = app.get(
+                url,
+                referer = extractedReferer,
+                headers = headers
+            ).text
+
+            val unpacked = try {
+                JsUnpacker(response).unpack() ?: response
+            } catch (_: Exception) {
+                response
+            }
+
+            val combinedHtml = "$response\n$unpacked"
+
+            // Video URL extraction
+            val streamRegex = Regex(
+                """["'](https?:\\?/\\?/[^"'\s]+?\.(?:m3u8|mp4)(?:\?[^"'\s]*)?)["']""",
+                RegexOption.IGNORE_CASE
             )
+
+            val foundUrls = streamRegex.findAll(combinedHtml)
+                .map {
+                    it.groupValues[1]
+                        .replace("\\/", "/")
+                        .replace("\\u0026", "&")
+                }
+                .filterNot {
+                    it.contains("preview", ignoreCase = true) ||
+                    it.contains("thumbnail", ignoreCase = true) ||
+                    it.contains("thumb", ignoreCase = true)
+                }
+                .distinct()
+                .toList()
+
+            for (streamUrl in foundUrls) {
+                try {
+                    callback.invoke(
+                        newExtractorLink(
+                            source = name,
+                            name = name,
+                            url = streamUrl
+                        ) {
+                            this.referer = extractedReferer
+                            this.quality = 0
+                            this.headers = headers
+                        }
+                    )
+                } catch (_: Exception) {
+                    continue
+                }
+            }
+
+            // Subtitle extraction
+            val subtitleRegex = Regex(
+                """["'](https?:\\?/\\?/[^"'\s]+?\.(?:vtt|srt)(?:\?[^"'\s]*)?)["']""",
+                RegexOption.IGNORE_CASE
+            )
+
+            subtitleRegex.findAll(combinedHtml)
+                .map {
+                    it.groupValues[1]
+                        .replace("\\/", "/")
+                }
+                .distinct()
+                .forEach { subtitleUrl ->
+                    subtitleCallback.invoke(
+                        SubtitleFile(
+                            lang = "Hindi / English",
+                            url = subtitleUrl
+                        )
+                    )
+                }
+
+        } catch (_: Exception) {
+            return
         }
     }
 }
 
 // 1. LuluStream
+
 class LuluVidExtractor : BaseJWPExtractor() {
     override var name = "LuluStream"
     override var mainUrl = "https://luluvid.com"
@@ -75,6 +130,7 @@ class LuluStreamAltExtractor : BaseJWPExtractor() {
 }
 
 // 2. EarnVids
+
 class EarnVidsExtractor : BaseJWPExtractor() {
     override var name = "EarnVids"
     override var mainUrl = "https://earnvids.com"
@@ -86,6 +142,7 @@ class EarnVidsProExtractor : BaseJWPExtractor() {
 }
 
 // 3. Vidara
+
 class VidaraExtractor : BaseJWPExtractor() {
     override var name = "Vidara"
     override var mainUrl = "https://vidara.to"
@@ -97,6 +154,7 @@ class VidaraAltExtractor : BaseJWPExtractor() {
 }
 
 // 4. Byse
+
 class ByseExtractor : BaseJWPExtractor() {
     override var name = "Byse"
     override var mainUrl = "https://bysebuho.com"
@@ -108,12 +166,14 @@ class ByseAltExtractor : BaseJWPExtractor() {
 }
 
 // 5. UpBolt
+
 class UpBoltExtractor : BaseJWPExtractor() {
     override var name = "UpBolt"
     override var mainUrl = "https://upbolt.to"
 }
 
 // 6. Abyss
+
 class AbyssExtractor : BaseJWPExtractor() {
     override var name = "Abyss"
     override var mainUrl = "https://player.abyssplayer.com"
@@ -125,6 +185,7 @@ class ShortIcuExtractor : BaseJWPExtractor() {
 }
 
 // 7. LPlayGo
+
 class LPlayGoExtractor : BaseJWPExtractor() {
     override var name = "LPlayGo"
     override var mainUrl = "https://lplaygo.com"
