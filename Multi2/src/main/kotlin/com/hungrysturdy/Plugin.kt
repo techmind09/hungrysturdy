@@ -18,11 +18,9 @@ class Plugin : Plugin() {
         registerExtractorAPI(EarnVidsProExtractor())
         registerExtractorAPI(VidaraExtractor())
         registerExtractorAPI(VidaraAltExtractor())
-        registerExtractorAPI(ByseExtractor())
-        registerExtractorAPI(ByseAltExtractor())
         registerExtractorAPI(UpBoltExtractor())
         registerExtractorAPI(AbyssExtractor())
         registerExtractorAPI(ShortIcuExtractor())
-        registerExtractorAPI(LPlayGoExtractor()) // Added here
+        registerExtractorAPI(LPlayGoExtractor())
     }
 }
