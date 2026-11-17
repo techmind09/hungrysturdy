@@ -47,7 +47,6 @@ open class BaseJWPExtractor : ExtractorApi() {
                     this.referer = extractedReferer
                     this.quality = 0
                     this.headers = headers
-                    this.httpHeaders = headers
                 }
             )
         }
