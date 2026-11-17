@@ -110,7 +110,10 @@ class DramaVerseProvider : MainAPI() {
         return !lower.startsWith("http") ||
             lower.contains("ardance.org") ||
             lower.contains("invoke_layer") ||
+            lower.contains("fifa2026.mom") ||
             lower.contains("fifa2026") ||
+            lower.contains("/redir.php") ||
+            lower.contains("/redir2.php") ||
             lower.contains("5gvci.com") ||
             lower.contains("llvpn.com") ||
             lower.contains("sohojgyan.com") ||
@@ -139,7 +142,7 @@ class DramaVerseProvider : MainAPI() {
                 val loc = resp.headers["location"] ?: resp.headers["Location"]
                 if (!loc.isNullOrEmpty()) {
                     val next = resolveRelativeUrl(current, loc)
-                    if (!next.contains("ardance.org") && next != current) {
+                    if (!next.contains("ardance.org") && !next.contains("fifa2026") && next != current) {
                         current = next
                         continue
                     }
@@ -151,7 +154,7 @@ class DramaVerseProvider : MainAPI() {
                 val metaMatch = Regex("""content\s*=\s*["'][0-9]+;\s*url=([^"']+)["']""", RegexOption.IGNORE_CASE).find(html)
                 if (metaMatch != null) {
                     val nextUrl = resolveRelativeUrl(current, metaMatch.groupValues[1])
-                    if (nextUrl != current && !nextUrl.contains("ardance.org")) {
+                    if (nextUrl != current && !nextUrl.contains("ardance.org") && !nextUrl.contains("fifa2026")) {
                         current = nextUrl
                         continue
                     }
@@ -207,7 +210,6 @@ class DramaVerseProvider : MainAPI() {
 
             var autoIdx = 1
 
-            // 1. DOM anchor/button elements check karo (episode numbers ke saath)
             doc.select("a[href], [onclick], [data-href], [data-url], div.EpFile").forEach { el ->
                 val rawHref = when {
                     el.hasAttr("href") -> el.absUrl("href")
@@ -232,7 +234,6 @@ class DramaVerseProvider : MainAPI() {
                 }
             }
 
-            // 2. Raw HTML regex scan (kisi bhi XCloud, GDrive, Pixeldrain, GDFlix, HubCloud domain ke liye)
             val hostRegex = Regex(
                 """https?://(?:[a-zA-Z0-9-]+\.)*(?:xcloud\.[a-z]{2,}|xcloud\d*\.[a-z]{2,}|pixeldrain\.[a-z]{2,}|drive\.google\.com|docs\.google\.com|gdflix\.[a-z]{2,}|gdtot\.[a-z]{2,}|filepress\.[a-z]{2,}|hubcloud\.[a-z]{2,}|hubdrive\.[a-z]{2,}|workers\.dev)/[a-zA-Z0-9_/?=&.-]+""",
                 RegexOption.IGNORE_CASE
@@ -328,6 +329,10 @@ class DramaVerseProvider : MainAPI() {
         val rawLinks = data.split("|||").map { it.trim() }.filter { it.isNotEmpty() }
 
         for (itemUrl in rawLinks) {
+            if (isIgnoredOrAdUrl(itemUrl) && !itemUrl.contains("sohojgyan") && !itemUrl.contains("blogspot")) {
+                continue
+            }
+
             val currentUrl = resolveIntermediateUrl(itemUrl)
 
             if (currentUrl.contains("sohojgyan") || currentUrl.contains("blogspot")) {
@@ -350,6 +355,7 @@ class DramaVerseProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        if (isIgnoredOrAdUrl(rawUrl)) return
         val url = resolveIntermediateUrl(rawUrl)
 
         when {
@@ -371,6 +377,7 @@ class DramaVerseProvider : MainAPI() {
                         val doc = app.get(url, headers = defaultHeaders, referer = referer).document
                         doc.select("a[href]").forEach { a ->
                             val href = a.absUrl("href")
+                            if (isIgnoredOrAdUrl(href)) return@forEach
                             if (href.contains("xcloud", ignoreCase = true)) {
                                 extractXCloud(href, subtitleCallback, callback)
                             } else if (href.contains("pixeldrain", ignoreCase = true)) {
@@ -419,7 +426,6 @@ class DramaVerseProvider : MainAPI() {
         if (!fileId.isNullOrEmpty()) {
             val directConfirmUrl = "https://drive.usercontent.google.com/download?id=$fileId&export=download&confirm=t"
             try {
-                // allowRedirects = false taaki poori video file download hone ka wait na kare
                 val resp = app.get(directConfirmUrl, headers = defaultHeaders, allowRedirects = false)
                 val loc = resp.headers["location"] ?: resp.headers["Location"]
 
@@ -477,7 +483,6 @@ class DramaVerseProvider : MainAPI() {
         return found
     }
 
-    // Sirf 302 Location headers follow karta hai — video body download nahi karta
     private suspend fun resolveFinalStreamUrl(
         startUrl: String,
         refererUrl: String,
@@ -485,7 +490,7 @@ class DramaVerseProvider : MainAPI() {
     ): String {
         var current = startUrl
         var hops = 0
-        while (hops < 5) {
+        while (hops < 6) {
             hops++
             try {
                 val resp = app.get(
@@ -497,7 +502,9 @@ class DramaVerseProvider : MainAPI() {
                 )
                 val loc = resp.headers["location"] ?: resp.headers["Location"]
                 if (!loc.isNullOrEmpty()) {
-                    current = resolveRelativeUrl(current, loc)
+                    val nextUrl = resolveRelativeUrl(current, loc)
+                    if (isIgnoredOrAdUrl(nextUrl)) break
+                    current = nextUrl
                 } else {
                     break
                 }
@@ -508,28 +515,116 @@ class DramaVerseProvider : MainAPI() {
         return current
     }
 
+    private suspend fun emitXCloudRedirect(
+        rawRedirectUrl: String,
+        label: String,
+        defaultType: ExtractorLinkType,
+        refererUrl: String,
+        sessionCookies: Map<String, String>,
+        emittedUrls: MutableSet<String>,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        if (isIgnoredOrAdUrl(rawRedirectUrl)) return false
+        val fullRedirectUrl = resolveRelativeUrl(refererUrl, rawRedirectUrl)
+        val directCdnUrl = resolveFinalStreamUrl(fullRedirectUrl, refererUrl, sessionCookies)
+
+        if (isIgnoredOrAdUrl(directCdnUrl) || !emittedUrls.add(directCdnUrl)) return false
+
+        val hostLabel = try {
+            URI(directCdnUrl).host ?: "CDN"
+        } catch (_: Exception) {
+            "CDN"
+        }
+        val finalType = if (
+            directCdnUrl.contains(".m3u8", ignoreCase = true) ||
+            directCdnUrl.contains(".workers.dev", ignoreCase = true)
+        ) {
+            ExtractorLinkType.M3U8
+        } else {
+            defaultType
+        }
+
+        callback.invoke(
+            newExtractorLink(
+                source = "XCloud",
+                name = "$label - $hostLabel",
+                url = directCdnUrl,
+                type = finalType
+            ) {
+                this.referer = ""
+            }
+        )
+        return true
+    }
+
     private suspend fun extractXCloud(
         url: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         var found = false
+        val emittedUrls = mutableSetOf<String>()
+
+        // Case A: Agar input URL khud hi direct /apis/cloud/redirect/, /apis/cloud2/redirect/, ya /apis/redirect/ hai
+        if (url.contains("/apis/cloud/redirect/") ||
+            url.contains("/apis/cloud2/redirect/") ||
+            url.contains("/apis/redirect/")
+        ) {
+            val label = when {
+                url.contains("/apis/cloud2/redirect/") -> "XCloud Server 2"
+                url.contains("/apis/cloud/redirect/") -> "XCloud Server 1"
+                else -> "XCloud Mirror"
+            }
+            return emitXCloudRedirect(url, label, ExtractorLinkType.VIDEO, url, emptyMap(), emittedUrls, callback)
+        }
+
         val resolvedUrl = resolveIntermediateUrl(url)
         val xCloudResponse = app.get(resolvedUrl, headers = defaultHeaders)
         val xCloudDoc = xCloudResponse.document
         val resolvedPageUrl = xCloudResponse.url.ifEmpty { resolvedUrl }
         val baseCookies = xCloudResponse.cookies
 
-        val emittedUrls = mutableSetOf<String>()
-
         val mediaId = resolvedPageUrl.substringAfterLast("/").substringBefore("?").trim()
         val baseUri = try {
             val u = URI(resolvedPageUrl)
             "${u.scheme}://${u.host}"
         } catch (_: Exception) {
-            "https://xcloud.tattoo"
+            "https://xcloud1.lol"
         }
 
+        // Case B: Token / Download page (https://xcloud1.lol/<id>?token=...) ke andar se /apis/redirect/ aur /apis/cloud/redirect/ links nikalo
+        xCloudDoc.select("a[href]").forEach { a ->
+            val href = a.absUrl("href")
+            if (isIgnoredOrAdUrl(href)) return@forEach
+
+            if (href.contains("/apis/cloud/redirect/") ||
+                href.contains("/apis/cloud2/redirect/") ||
+                href.contains("/apis/redirect/")
+            ) {
+                val btnText = a.text().trim().ifEmpty { "XCloud Direct" }
+                if (emitXCloudRedirect(href, btnText, ExtractorLinkType.VIDEO, resolvedPageUrl, baseCookies, emittedUrls, callback)) {
+                    found = true
+                }
+            } else if (href.matches(Regex("(?i).*\\.(mkv|mp4|m3u8)(\\?.*)?$")) ||
+                href.contains("r2.cloudflarestorage.com") ||
+                href.contains("workers.dev") ||
+                href.contains("googleusercontent.com")
+            ) {
+                if (emittedUrls.add(href)) {
+                    val type = if (href.contains(".m3u8", true) || href.contains(".workers.dev", true)) {
+                        ExtractorLinkType.M3U8
+                    } else {
+                        ExtractorLinkType.VIDEO
+                    }
+                    callback.invoke(
+                        newExtractorLink("XCloud", a.text().trim().ifEmpty { "XCloud File" }, href, type)
+                    )
+                    found = true
+                }
+            }
+        }
+
+        // Case C: Streaming player page (stream.xcloud1.lol/<id> aur /stream_<id>) se PRIMARY_URL, WASABI_URL, HLS_URL nikalo
         val streamCandidates = linkedSetOf<String>()
         xCloudDoc.selectFirst("div.vd a[href*='stream_'], a[href*='/stream_']")
             ?.absUrl("href")
@@ -537,18 +632,23 @@ class DramaVerseProvider : MainAPI() {
             ?.let { streamCandidates.add(resolveIntermediateUrl(it)) }
 
         if (mediaId.isNotEmpty() && mediaId.length > 2) {
-            streamCandidates.add("$baseUri/stream_$mediaId")
             streamCandidates.add("https://stream.xcloud1.lol/$mediaId")
+            streamCandidates.add("$baseUri/stream_$mediaId")
         }
 
         for (streamPageUrl in streamCandidates) {
             try {
-                val streamResp = app.get(streamPageUrl, headers = defaultHeaders, cookies = baseCookies)
+                val streamResp = app.get(
+                    streamPageUrl,
+                    headers = defaultHeaders,
+                    referer = resolvedPageUrl,
+                    cookies = baseCookies
+                )
                 val finalPlayerUrl = streamResp.url.ifEmpty { streamPageUrl }
                 val streamCookies = baseCookies + streamResp.cookies
                 val streamHtml = streamResp.text
 
-                // Subtitles (https://sub.xcloud.icu/<tgid>)
+                // Subtitles
                 Regex("""\{[^{}]*"lang"\s*:\s*"([^"]+)"[^{}]*"tgid"\s*:\s*(\d+)[^{}]*\}""")
                     .findAll(streamHtml)
                     .forEach { m ->
@@ -557,38 +657,7 @@ class DramaVerseProvider : MainAPI() {
                         )
                     }
 
-                // 1. Direct .m3u8 / .mp4 / .mkv links agar HTML mein hon
-                Regex("""["'](https?://[^"'\s<>]+\.(?:m3u8|mp4|mkv)(?:\?[^"'\s<>]*)?)["']""", RegexOption.IGNORE_CASE)
-                    .findAll(streamHtml)
-                    .forEach { m ->
-                        val vUrl = m.groupValues[1]
-                        if (emittedUrls.add(vUrl)) {
-                            val type = if (vUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            callback.invoke(
-                                newExtractorLink("XCloud", "XCloud Stream", vUrl, type) {
-                                    this.referer = finalPlayerUrl
-                                }
-                            )
-                            found = true
-                        }
-                    }
-
-                // 2. Cloudflare Workers HLS links (.workers.dev)
-                Regex("""["'](https?://[^"'\s<>]+\.workers\.dev/[^"'\s<>]*)["']""", RegexOption.IGNORE_CASE)
-                    .findAll(streamHtml)
-                    .forEach { m ->
-                        val wUrl = m.groupValues[1]
-                        if (emittedUrls.add(wUrl)) {
-                            callback.invoke(
-                                newExtractorLink("XCloud", "XCloud Worker HLS", wUrl, ExtractorLinkType.M3U8) {
-                                    this.referer = finalPlayerUrl
-                                }
-                            )
-                            found = true
-                        }
-                    }
-
-                // 3. PRIMARY_URL, WASABI_URL, HLS_URL variables se 302 Location resolve karo
+                // Script variables: PRIMARY_URL (/apis/cloud/redirect/...), WASABI_URL (/apis/cloud2/redirect/...), HLS_URL
                 val varPatterns = listOf(
                     "PRIMARY_URL" to ("XCloud Server 1" to ExtractorLinkType.VIDEO),
                     "WASABI_URL" to ("XCloud Server 2" to ExtractorLinkType.VIDEO),
@@ -599,30 +668,69 @@ class DramaVerseProvider : MainAPI() {
                     val match = Regex("""var\s+$varName\s*=\s*["']([^"']+)["']""").find(streamHtml)
                     val rawVal = match?.groupValues?.get(1)
                     if (!rawVal.isNullOrEmpty() && rawVal != "null") {
-                        val redirectUrl = resolveRelativeUrl(finalPlayerUrl, rawVal)
-                        val directCdnUrl = resolveFinalStreamUrl(redirectUrl, finalPlayerUrl, streamCookies)
+                        if (emitXCloudRedirect(rawVal, info.first, info.second, finalPlayerUrl, streamCookies, emittedUrls, callback)) {
+                            found = true
+                        }
+                    }
+                }
 
-                        if (emittedUrls.add(directCdnUrl)) {
-                            val type = if (directCdnUrl.contains(".m3u8", true) || directCdnUrl.contains(".workers.dev", true)) {
-                                ExtractorLinkType.M3U8
-                            } else {
-                                info.second
-                            }
+                // Direct .m3u8 / .workers.dev / .mkv links agar HTML/JS me hon
+                Regex("""["'](https?://[^"'\s<>]+\.(?:m3u8|mp4|mkv)(?:\?[^"'\s<>]*)?)["']""", RegexOption.IGNORE_CASE)
+                    .findAll(streamHtml)
+                    .forEach { m ->
+                        val vUrl = m.groupValues[1]
+                        if (!isIgnoredOrAdUrl(vUrl) && emittedUrls.add(vUrl)) {
+                            val type = if (vUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                             callback.invoke(
-                                newExtractorLink(
-                                    source = "XCloud",
-                                    name = info.first,
-                                    url = directCdnUrl,
-                                    type = type
-                                ) {
-                                    this.referer = ""
+                                newExtractorLink("XCloud", "XCloud Direct", vUrl, type) {
+                                    this.referer = finalPlayerUrl
                                 }
                             )
                             found = true
                         }
                     }
+
+                Regex("""["'](https?://[^"'\s<>]+\.workers\.dev/[^"'\s<>]*)["']""", RegexOption.IGNORE_CASE)
+                    .findAll(streamHtml)
+                    .forEach { m ->
+                        val wUrl = m.groupValues[1]
+                        if (!isIgnoredOrAdUrl(wUrl) && emittedUrls.add(wUrl)) {
+                            callback.invoke(
+                                newExtractorLink("XCloud", "XCloud Worker HLS", wUrl, ExtractorLinkType.M3U8) {
+                                    this.referer = finalPlayerUrl
+                                }
+                            )
+                            found = true
+                        }
+                    }
+            } catch (_: Exception) {
+            }
+        }
+
+        // Case D: Token page URL (https://xcloud1.lol/<id>?token=...) ko khud bhi open karke /apis/redirect/ buttons nikalo
+        val tokenGenUrl = xCloudDoc.selectFirst("div.vd a[href*='token='], a[href*='xcloud1.lol'][href*='token=']")
+            ?.absUrl("href")
+            ?: if (resolvedPageUrl.contains("token=")) resolvedPageUrl else null
+
+        if (!tokenGenUrl.isNullOrEmpty() && !tokenGenUrl.contains("subtitle")) {
+            try {
+                val tokenResp = app.get(tokenGenUrl, headers = defaultHeaders, referer = resolvedPageUrl, cookies = baseCookies)
+                val tokenFinalUrl = tokenResp.url.ifEmpty { tokenGenUrl }
+                val tokenCookies = baseCookies + tokenResp.cookies
+
+                tokenResp.document.select("a[href]").forEach { a ->
+                    val href = a.absUrl("href")
+                    if (isIgnoredOrAdUrl(href)) return@forEach
+                    if (href.contains("/apis/redirect/") ||
+                        href.contains("/apis/cloud/redirect/") ||
+                        href.contains("/apis/cloud2/redirect/")
+                    ) {
+                        val label = a.text().trim().ifEmpty { "XCloud Token Mirror" }
+                        if (emitXCloudRedirect(href, label, ExtractorLinkType.VIDEO, tokenFinalUrl, tokenCookies, emittedUrls, callback)) {
+                            found = true
+                        }
+                    }
                 }
-                if (found) break
             } catch (_: Exception) {
             }
         }
