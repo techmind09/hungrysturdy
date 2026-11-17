@@ -23,5 +23,6 @@ class Plugin : Plugin() {
         registerExtractorAPI(UpBoltExtractor())
         registerExtractorAPI(AbyssExtractor())
         registerExtractorAPI(ShortIcuExtractor())
+        registerExtractorAPI(LPlayGoExtractor()) // Added here
     }
 }
