@@ -2,6 +2,7 @@ package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.lagradost.cloudstream3.utils.JsUnpacker
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.nodes.Element
@@ -117,16 +118,22 @@ class HindiDramaProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
-        val title = document.selectFirst("h1, .entry-title")?.text()
+
+        val title = document.selectFirst("h1")?.text()
             ?.substringBefore("– Episode")
+            ?.substringBefore("- Episode")
             ?.trim()
-            ?: document.selectFirst(".dcard h3 a, .dcard h3")?.text()?.trim()
-            ?: document.selectFirst("meta[property=og:title]")?.attr("content")?.substringBefore("|")?.trim()
+            ?: document.selectFirst(".dcard h3")?.text()?.trim()
+            ?: document.selectFirst("meta[property=og:title]")?.attr("content")
+                ?.removePrefix("Watch ")
+                ?.substringBefore(" Episode ")
+                ?.substringBefore(" Hindi Dubbed")
+                ?.substringBefore("|")
+                ?.trim()
             ?: return null
 
-        // Fixed poster selection: prioritize sidebar card/poster image over generic og:image
         val poster = fixUrlNull(
-            document.selectFirst(".dcard img, .poster img")?.let {
+            document.selectFirst("img[src*='themoviedb.org'], .dcard img, .poster img")?.let {
                 it.attr("data-src").ifEmpty { it.attr("src") }
             } ?: document.selectFirst("meta[property=og:image]")?.attr("content")
         )
@@ -136,26 +143,29 @@ class HindiDramaProvider : MainAPI() {
 
         val genreTags = document.select(".meta .chip:not(.star), .genres a")
             .map { it.text().trim() }
-            .filter { it.isNotEmpty() && !it.contains("views") && it != "2026" && it != "1h" }
+            .filter {
+                it.isNotEmpty() &&
+                    !it.contains("views", ignoreCase = true) &&
+                    !it.matches(Regex("""^\d{4}$""")) &&
+                    !it.matches(Regex("""^\d+h.*"""))
+            }
 
-        val episodes = document.select(".eplist ul li a, .strip .ep, a[href*='/hindi-dubbed/watch-']").mapNotNull { el ->
+        val episodes = document.select(".eplist ul li a, a[href*='/hindi-dubbed/watch-']").mapNotNull { el ->
             val anchor = if (el.tagName() == "a") el else el.selectFirst("a") ?: return@mapNotNull null
             val rawHref = anchor.attr("href").trim()
-            if (rawHref.isEmpty()) return@mapNotNull null
+            if (rawHref.isEmpty() || rawHref.contains("/hindi-dubbed-online/")) return@mapNotNull null
             val epHref = fixUrl(rawHref)
 
-            val epBadge = el.selectFirst(".ep-badge")?.text()?.trim()
-            val epTitle = anchor.text().trim().ifEmpty {
-                anchor.attr("title").trim().ifEmpty { epBadge ?: "Episode" }
-            }
+            val epTitle = anchor.text().trim().ifEmpty { "Episode" }
             val epNum = Regex("""(?:Episode|Ep|E|e)\s*(\d+)""")
-                .find(epBadge ?: epTitle)
+                .find(epTitle)
                 ?.groupValues?.get(1)?.toIntOrNull()
+                ?: Regex("""-e(\d+)""").find(epHref)?.groupValues?.get(1)?.toIntOrNull()
 
             newEpisode(epHref) {
-                this.name = epBadge ?: epTitle
+                this.name = epTitle
                 this.episode = epNum
-                this.posterUrl = el.extractPoster()
+                this.posterUrl = poster
             }
         }.distinctBy { it.data }
 
@@ -183,82 +193,93 @@ class HindiDramaProvider : MainAPI() {
         val document = app.get(data).document
         var foundLinks = false
 
-        // Find internal embed iframe URL
         val internalEmbedSrc = document.selectFirst("#player iframe, iframe[src*='/embed/']")?.attr("src")?.trim()
             ?: Regex("""var\s+current\s*=\s*["']([^"']+)["']""").find(document.html())?.groupValues?.get(1)?.replace("\\/", "/")
 
-        val playerDoc = if (!internalEmbedSrc.isNullOrEmpty()) {
-            val fullEmbedUrl = fixUrl(internalEmbedSrc)
-            app.get(fullEmbedUrl, referer = data).document
-        } else {
-            document
-        }
-
         val playerPageUrl = if (!internalEmbedSrc.isNullOrEmpty()) fixUrl(internalEmbedSrc) else data
+        val playerHtml = if (!internalEmbedSrc.isNullOrEmpty()) {
+            app.get(playerPageUrl, referer = data).text
+        } else {
+            document.html()
+        }
 
-        // Direct server switcher buttons (.srv) iteration to fetch all servers (LuluStream, Abyss, UpBolt, Byse, Vidara, EarnVids)
-        val serverButtons = playerDoc.select(".srv")
-        if (serverButtons.isNotEmpty()) {
-            for (btn in serverButtons) {
-                val serverName = btn.text().trim().ifEmpty { "Server" }
-                val rawSrc = btn.attr("data-src").ifEmpty { btn.attr("data-url") }.ifEmpty { btn.attr("href") }.trim()
-                if (rawSrc.isNotEmpty()) {
-                    val serverEmbedUrl = fixUrl(rawSrc)
-                    try {
-                        val serverHeaders = mapOf(
-                            "User-Agent" to "Mozilla/5.0 (Linux; Android 15; Infinix X6851) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
-                            "Referer" to playerPageUrl
-                        )
-                        val serverDocText = app.get(serverEmbedUrl, headers = serverHeaders).text
+        val playerDoc = org.jsoup.Jsoup.parse(playerHtml, playerPageUrl)
+        val serverList = linkedMapOf<String, String>()
 
-                        // Extract m3u8 or mp4 from server page
-                        val streamMatch = Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""").find(serverDocText)
-                            ?: Regex("""["'](https?://[^"']+\.mp4[^"']*)["']""").find(serverDocText)
-
-                        val streamUrl = streamMatch?.groupValues?.get(1)?.replace("\\/", "/")
-
-                        if (!streamUrl.isNullOrEmpty() && !streamUrl.contains("preview") && !streamUrl.contains("thumb")) {
-                            callback.invoke(
-                                newExtractorLink(
-                                    source = serverName,
-                                    name = serverName,
-                                    url = streamUrl
-                                ) {
-                                    this.referer = serverEmbedUrl
-                                    this.quality = 0
-                                    this.headers = serverHeaders
-                                }
-                            )
-                            foundLinks = true
-                        } else {
-                            // Fallback to standard extractor if direct regex didn't match
-                            if (loadExtractor(serverEmbedUrl, playerPageUrl, subtitleCallback, callback)) {
-                                foundLinks = true
-                            }
-                        }
-                    } catch (e: Exception) {
-                        // Try standard extractor as backup
-                        if (loadExtractor(serverEmbedUrl, playerPageUrl, subtitleCallback, callback)) {
-                            foundLinks = true
-                        }
-                    }
-                }
+        playerDoc.select(".srv, [data-src], [data-url], [data-embed]").forEach { el ->
+            val sName = el.text().trim().ifEmpty { "Server" }
+            val rawUrl = listOf("data-src", "data-url", "data-embed")
+                .firstNotNullOfOrNull { attr -> el.attr(attr).trim().takeIf { it.isNotEmpty() } }
+            if (rawUrl != null && (rawUrl.startsWith("http") || rawUrl.startsWith("//") || rawUrl.startsWith("/"))) {
+                serverList[fixUrl(rawUrl)] = sName
             }
         }
 
-        // Fallback generic search if no .srv buttons matched
-        if (!foundLinks) {
-            val embedUrls = linkedSetOf<String>()
-            playerDoc.select("iframe, video source").forEach { el ->
-                val src = el.attr("data-src").ifEmpty { el.attr("src") }.trim()
-                if (src.isNotEmpty() && !src.startsWith("about:")) {
-                    embedUrls.add(fixUrl(src))
-                }
+        playerDoc.select("iframe").forEach { el ->
+            val src = el.attr("data-src").ifEmpty { el.attr("src") }.trim()
+            if (src.isNotEmpty() && !src.startsWith("about:")) {
+                serverList.putIfAbsent(fixUrl(src), "Embed")
             }
-            for (embedUrl in embedUrls) {
-                if (loadExtractor(embedUrl, playerPageUrl, subtitleCallback, callback)) {
+        }
+
+        val urlRegex = Regex("""https?:\\?/\\?/[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:\\?/[^"'\s<>\\]+)""")
+        urlRegex.findAll(playerHtml).forEach { match ->
+            val cleanUrl = match.value.replace("\\/", "/")
+            if (!cleanUrl.contains("hindidrama.net") &&
+                !cleanUrl.contains("googletagmanager") &&
+                !cleanUrl.contains("cloudflare") &&
+                !cleanUrl.contains("bancadeltempoidea") &&
+                !cleanUrl.contains("themoviedb") &&
+                !cleanUrl.contains("googleapis") &&
+                !cleanUrl.contains("gstatic")
+            ) {
+                serverList.putIfAbsent(cleanUrl, cleanUrl.substringAfter("://").substringBefore("/"))
+            }
+        }
+
+        val userAgent = "Mozilla/5.0 (Linux; Android 15; Infinix X6851) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
+
+        for ((embedUrl, serverLabel) in serverList) {
+            val builtInLoaded = loadExtractor(embedUrl, playerPageUrl, subtitleCallback, callback) ||
+                loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
+
+            if (builtInLoaded) {
+                foundLinks = true
+                continue
+            }
+
+            try {
+                val headers = mapOf(
+                    "User-Agent" to userAgent,
+                    "Referer" to playerPageUrl
+                )
+                val embedHtml = app.get(embedUrl, referer = playerPageUrl, headers = headers).text
+                val unpacked = JsUnpacker(embedHtml).unpack() ?: embedHtml
+                val combined = "$embedHtml\n$unpacked"
+
+                val streamUrl = Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""")
+                    .findAll(combined)
+                    .map { it.groupValues[1].replace("\\/", "/") }
+                    .firstOrNull { !it.contains("preview") && !it.contains("thumb") }
+
+                if (!streamUrl.isNullOrEmpty()) {
+                    callback.invoke(
+                        newExtractorLink(
+                            source = serverLabel,
+                            name = serverLabel,
+                            url = streamUrl
+                        ) {
+                            this.referer = embedUrl
+                            this.quality = 0
+                            this.headers = mapOf(
+                                "User-Agent" to userAgent,
+                                "Referer" to embedUrl
+                            )
+                        }
+                    )
                     foundLinks = true
                 }
+            } catch (_: Exception) {
             }
         }
 
