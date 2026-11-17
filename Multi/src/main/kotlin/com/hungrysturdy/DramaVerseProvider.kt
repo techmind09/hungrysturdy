@@ -1,3 +1,4 @@
+
 package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
@@ -5,8 +6,10 @@ import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLDecoder
+import java.net.URLEncoder
 
 class DramaVerseProvider : MainAPI() {
+
     override var mainUrl = "https://mydverse.com"
     override var name = "DramaVerse"
     override val supportedTypes = setOf(TvType.AsianDrama, TvType.Movie)
@@ -33,6 +36,8 @@ class DramaVerseProvider : MainAPI() {
         "Accept" to "*/*"
     )
 
+    private val xcloudReferer = "https://xcloud.tattoo/"
+
     override val mainPage = mainPageOf(
         "$mainUrl/" to "Home",
         "$mainUrl/korean/" to "Korean Drama",
@@ -41,18 +46,19 @@ class DramaVerseProvider : MainAPI() {
         "$mainUrl/upcoming/" to "Upcoming"
     )
 
+    // ---------------------------------------------------------
+    // MAIN PAGE
+    // ---------------------------------------------------------
+
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
+
         val url = if (page == 1) {
             request.data
         } else {
-            if (request.data.endsWith("/")) {
-                "${request.data}page/$page/"
-            } else {
-                "${request.data}/page/$page/"
-            }
+            "${request.data.trimEnd('/')}/page/$page/"
         }
 
         val document = app.get(
@@ -75,7 +81,11 @@ class DramaVerseProvider : MainAPI() {
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
-        val titleElement = selectFirst("h2.post-title a, h3.post-title a")
+
+        val titleElement = selectFirst(
+            "h2.post-title a, h3.post-title a"
+        )
+
         val thumbElement = selectFirst("a.post-thumb")
 
         val href = titleElement?.absUrl("href")
@@ -104,6 +114,7 @@ class DramaVerseProvider : MainAPI() {
     }
 
     private fun Element.thumbToSearchResult(): SearchResponse? {
+
         val href = absUrl("href").ifEmpty {
             return null
         }
@@ -133,8 +144,11 @@ class DramaVerseProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
+
+        val encodedQuery = URLEncoder.encode(query, "UTF-8")
+
         val document = app.get(
-            "$mainUrl/?s=$query",
+            "$mainUrl/?s=$encodedQuery",
             headers = defaultHeaders,
             cookies = cookies
         ).document
@@ -158,8 +172,10 @@ class DramaVerseProvider : MainAPI() {
         baseUrl: String,
         rawPath: String
     ): String {
+
         val cleaned = rawPath
             .replace("\\/", "/")
+            .replace("&amp;", "&")
             .trim()
 
         if (
@@ -176,15 +192,25 @@ class DramaVerseProvider : MainAPI() {
         }
     }
 
+    private fun isXCloudHost(url: String): Boolean {
+        val lower = url.lowercase()
+
+        return lower.contains("xcloud")
+    }
+
     private fun isXCloudHlsUrl(url: String): Boolean {
-        val lower = url.lowercase().substringBefore("?")
+
+        val lower = url
+            .lowercase()
+            .substringBefore("#")
 
         return lower.contains(".workers.dev/hls/") ||
-               lower.contains(".workers.dev/m3u8/") ||
-               lower.endsWith(".m3u8")
+            lower.contains(".workers.dev/m3u8/") ||
+            lower.substringBefore("?").endsWith(".m3u8")
     }
 
     private fun isIgnoredOrAdUrl(href: String): Boolean {
+
         val lower = href.lowercase()
 
         return !lower.startsWith("http") ||
@@ -214,42 +240,63 @@ class DramaVerseProvider : MainAPI() {
             )
     }
 
+    // ---------------------------------------------------------
+    // REDIRECT RESOLVER
+    // ---------------------------------------------------------
+
     private suspend fun resolveIntermediateUrl(url: String): String {
+
         if (isXCloudHlsUrl(url)) return url
 
         var current = url
         var attempts = 0
 
-        while (attempts < 4) {
+        while (attempts < 5) {
+
             attempts++
 
             try {
+
                 val resp = app.get(
                     current,
                     headers = defaultHeaders,
                     allowRedirects = false
                 )
 
-                val loc = resp.headers["location"]
+                val location = resp.headers["location"]
                     ?: resp.headers["Location"]
 
-                if (!loc.isNullOrEmpty()) {
-                    val next = resolveRelativeUrl(current, loc)
+                if (!location.isNullOrEmpty()) {
+
+                    val next = resolveRelativeUrl(
+                        current,
+                        location
+                    )
 
                     if (
+                        next != current &&
                         !next.contains("ardance.org") &&
-                        !next.contains("fifa2026") &&
-                        next != current
+                        !next.contains("fifa2026")
                     ) {
+
                         current = next
-                        if (isXCloudHlsUrl(current)) return current
+
+                        if (isXCloudHlsUrl(current)) {
+                            return current
+                        }
+
                         continue
                     }
                 }
 
                 val html = resp.text
 
-                if (html.contains("Can't access link ? Stuck into ads ?")) {
+                if (
+                    html.contains(
+                        "Can't access link ? Stuck into ads ?",
+                        ignoreCase = true
+                    )
+                ) {
                     break
                 }
 
@@ -259,6 +306,7 @@ class DramaVerseProvider : MainAPI() {
                 ).find(html)
 
                 if (metaMatch != null) {
+
                     val nextUrl = resolveRelativeUrl(
                         current,
                         metaMatch.groupValues[1]
@@ -269,29 +317,43 @@ class DramaVerseProvider : MainAPI() {
                         !nextUrl.contains("ardance.org") &&
                         !nextUrl.contains("fifa2026")
                     ) {
+
                         current = nextUrl
-                        if (isXCloudHlsUrl(current)) return current
+
+                        if (isXCloudHlsUrl(current)) {
+                            return current
+                        }
+
                         continue
                     }
                 }
 
                 val jsMatch = Regex(
-                    """(?:window\.location|location\.href|location\.replace)\s*=\s*["'](https?://[^"']+)["']""",
+                    """(?:window\.location|location\.href|location\.replace)\s*(?:=|\()\s*["'](https?://[^"']+)["']""",
                     RegexOption.IGNORE_CASE
-                ).findAll(html)
-                    .map { it.groupValues[1] }
-                    .firstOrNull {
-                        !it.contains("ardance.org") &&
-                            !it.contains("fifa2026")
+                ).find(html)?.groupValues?.get(1)
+
+                if (
+                    !jsMatch.isNullOrEmpty() &&
+                    jsMatch != current &&
+                    !jsMatch.contains("ardance.org") &&
+                    !jsMatch.contains("fifa2026")
+                ) {
+
+                    current = resolveRelativeUrl(
+                        current,
+                        jsMatch
+                    )
+
+                    if (isXCloudHlsUrl(current)) {
+                        return current
                     }
 
-                if (jsMatch != null && jsMatch != current) {
-                    current = resolveRelativeUrl(current, jsMatch)
-                    if (isXCloudHlsUrl(current)) return current
                     continue
                 }
 
                 break
+
             } catch (_: Exception) {
                 break
             }
@@ -308,6 +370,7 @@ class DramaVerseProvider : MainAPI() {
         el: Element,
         fallbackIndex: Int
     ): String {
+
         val epRegex = Regex(
             "(?i)(?:episode|ep)\\s*0*(\\d+)"
         )
@@ -316,26 +379,36 @@ class DramaVerseProvider : MainAPI() {
         var steps = 0
 
         while (curr != null && steps < 4) {
+
             steps++
 
             var prev = curr.previousElementSibling()
 
             while (prev != null) {
-                val t = prev.text().trim()
-                if (epRegex.containsMatchIn(t)) return t
+
+                val text = prev.text().trim()
+
+                if (epRegex.containsMatchIn(text)) {
+                    return text
+                }
+
                 prev = prev.previousElementSibling()
             }
 
             val own = curr.ownText().trim()
 
-            if (epRegex.containsMatchIn(own)) return own
+            if (epRegex.containsMatchIn(own)) {
+                return own
+            }
 
             curr = curr.parent()
         }
 
         val text = el.text().trim()
 
-        if (epRegex.containsMatchIn(text)) return text
+        if (epRegex.containsMatchIn(text)) {
+            return text
+        }
 
         return "Episode $fallbackIndex"
     }
@@ -344,10 +417,12 @@ class DramaVerseProvider : MainAPI() {
         pageUrl: String,
         refererUrl: String
     ): List<Pair<Int, String>> {
+
         val rawItems = mutableListOf<Pair<Int, String>>()
         val seenUrls = mutableSetOf<String>()
 
         try {
+
             val resolvedStart = resolveIntermediateUrl(pageUrl)
 
             val resp = app.get(
@@ -366,18 +441,26 @@ class DramaVerseProvider : MainAPI() {
             ).forEach { el ->
 
                 val rawHref = when {
+
                     el.hasAttr("href") ->
                         el.absUrl("href")
 
                     el.hasAttr("data-href") ->
-                        el.absUrl("data-href")
+                        resolveRelativeUrl(
+                            resolvedStart,
+                            el.attr("data-href")
+                        )
 
                     el.hasAttr("data-url") ->
-                        el.absUrl("data-url")
+                        resolveRelativeUrl(
+                            resolvedStart,
+                            el.attr("data-url")
+                        )
 
                     el.hasAttr("onclick") ->
-                        Regex("""["'](https?://[^"']+)["']""")
-                            .find(el.attr("onclick"))
+                        Regex(
+                            """["'](https?://[^"']+)["']"""
+                        ).find(el.attr("onclick"))
                             ?.groupValues?.get(1)
                             .orEmpty()
 
@@ -385,8 +468,9 @@ class DramaVerseProvider : MainAPI() {
                         el.parent()!!.absUrl("href")
 
                     el.parent()?.hasAttr("onclick") == true ->
-                        Regex("""["'](https?://[^"']+)["']""")
-                            .find(el.parent()!!.attr("onclick"))
+                        Regex(
+                            """["'](https?://[^"']+)["']"""
+                        ).find(el.parent()!!.attr("onclick"))
                             ?.groupValues?.get(1)
                             .orEmpty()
 
@@ -398,7 +482,11 @@ class DramaVerseProvider : MainAPI() {
                     !isIgnoredOrAdUrl(rawHref) &&
                     seenUrls.add(rawHref)
                 ) {
-                    val label = findEpisodeLabel(el, autoIdx)
+
+                    val label = findEpisodeLabel(
+                        el,
+                        autoIdx
+                    )
 
                     val epNum = Regex(
                         "(?i)(?:episode|ep|e)\\s*0*(\\d+)"
@@ -418,17 +506,23 @@ class DramaVerseProvider : MainAPI() {
             )
 
             hostRegex.findAll(html).forEach { match ->
+
                 var href = match.value
                     .replace("\\/", "/")
+                    .replace("&amp;", "&")
                     .trim()
                     .trimEnd(',', ';', ')', ']', '}')
 
                 if (href.contains("refer=")) {
-                    href = href.substringAfter("refer=")
+
+                    val referValue = href.substringAfter("refer=")
                         .substringBefore("&")
 
                     try {
-                        href = URLDecoder.decode(href, "UTF-8")
+                        href = URLDecoder.decode(
+                            referValue,
+                            "UTF-8"
+                        )
                     } catch (_: Exception) {
                     }
                 }
@@ -437,10 +531,12 @@ class DramaVerseProvider : MainAPI() {
                     !isIgnoredOrAdUrl(href) &&
                     seenUrls.add(href)
                 ) {
+
                     rawItems.add(autoIdx to href)
                     autoIdx++
                 }
             }
+
         } catch (_: Exception) {
         }
 
@@ -452,6 +548,7 @@ class DramaVerseProvider : MainAPI() {
     // ---------------------------------------------------------
 
     override suspend fun load(url: String): LoadResponse {
+
         val document = app.get(
             url,
             headers = defaultHeaders,
@@ -488,6 +585,7 @@ class DramaVerseProvider : MainAPI() {
         )
 
         for (slide in btnSlides) {
+
             val slideUrl = slide.absUrl("href").ifEmpty {
                 continue
             }
@@ -504,25 +602,32 @@ class DramaVerseProvider : MainAPI() {
                 slideUrl.contains("blogspot") ||
                 slideTitle.contains("Episode Wise", ignoreCase = true)
             ) {
+
                 val scraped = scrapeEpisodeLinksFromIntermediate(
                     slideUrl,
                     url
                 )
 
                 if (scraped.isNotEmpty()) {
+
                     for ((epNum, epHref) in scraped) {
+
                         episodeMap.getOrPut(epNum) {
                             mutableListOf()
                         }.add(epHref)
                     }
+
                 } else {
+
                     val nextEp = (episodeMap.keys.maxOrNull() ?: 0) + 1
 
                     episodeMap.getOrPut(nextEp) {
                         mutableListOf()
                     }.add(slideUrl)
                 }
+
             } else if (!isIgnoredOrAdUrl(slideUrl)) {
+
                 val epNum = Regex(
                     "(?i)(?:episode|ep|e)\\s*0*(\\d+)"
                 ).find(slideTitle)
@@ -539,7 +644,10 @@ class DramaVerseProvider : MainAPI() {
         val episodes = mutableListOf<Episode>()
 
         for ((epNum, urls) in episodeMap) {
-            val combinedData = urls.distinct().joinToString("|||")
+
+            val combinedData = urls
+                .distinct()
+                .joinToString("|||")
 
             episodes.add(
                 newEpisode(combinedData) {
@@ -550,6 +658,7 @@ class DramaVerseProvider : MainAPI() {
         }
 
         if (episodes.isEmpty()) {
+
             episodes.add(
                 newEpisode(url) {
                     this.name = "Full Movie / Stream"
@@ -579,11 +688,13 @@ class DramaVerseProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+
         val rawLinks = data.split("|||")
             .map { it.trim() }
             .filter { it.isNotEmpty() }
 
         for (itemUrl in rawLinks) {
+
             if (
                 isIgnoredOrAdUrl(itemUrl) &&
                 !itemUrl.contains("sohojgyan") &&
@@ -602,12 +713,14 @@ class DramaVerseProvider : MainAPI() {
                 currentUrl.contains("sohojgyan") ||
                 currentUrl.contains("blogspot")
             ) {
+
                 val scraped = scrapeEpisodeLinksFromIntermediate(
                     currentUrl,
                     "$mainUrl/"
                 )
 
                 for ((_, link) in scraped) {
+
                     processSingleHostLink(
                         link,
                         currentUrl,
@@ -630,42 +743,84 @@ class DramaVerseProvider : MainAPI() {
         return true
     }
 
+    // ---------------------------------------------------------
+    // HOST ROUTER
+    // ---------------------------------------------------------
+
     private suspend fun processSingleHostLink(
         rawUrl: String,
         referer: String,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+
         if (isIgnoredOrAdUrl(rawUrl)) return
 
         if (isXCloudHlsUrl(rawUrl)) {
-            extractXCloudHls(rawUrl, callback)
+
+            extractXCloudHls(
+                rawUrl,
+                callback
+            )
+
             return
         }
 
         val url = resolveIntermediateUrl(rawUrl)
 
         if (isXCloudHlsUrl(url)) {
-            extractXCloudHls(url, callback)
+
+            extractXCloudHls(
+                url,
+                callback
+            )
+
             return
         }
 
         when {
-            url.contains("xcloud", ignoreCase = true) -> {
-                extractXCloud(url, subtitleCallback, callback)
+
+            isXCloudHost(url) -> {
+
+                val found = extractXCloud(
+                    url,
+                    subtitleCallback,
+                    callback
+                )
+
+                // IMPORTANT: XCloud fallback
+                if (!found) {
+
+                    loadExtractor(
+                        url,
+                        referer,
+                        subtitleCallback,
+                        callback
+                    )
+                }
             }
 
             url.contains("pixeldrain", ignoreCase = true) -> {
-                extractPixeldrain(url, callback)
+
+                extractPixeldrain(
+                    url,
+                    callback
+                )
             }
 
             url.contains("drive.google.com", ignoreCase = true) ||
                 url.contains("docs.google.com", ignoreCase = true) ||
                 url.contains("drive.usercontent.google.com", ignoreCase = true) -> {
-                extractGDrive(url, subtitleCallback, callback)
+
+                extractGDrive(
+                    url,
+                    subtitleCallback,
+                    callback
+                )
             }
 
             else -> {
+
                 val handled = loadExtractor(
                     url,
                     referer,
@@ -674,7 +829,9 @@ class DramaVerseProvider : MainAPI() {
                 )
 
                 if (!handled) {
+
                     try {
+
                         val doc = app.get(
                             url,
                             headers = defaultHeaders,
@@ -682,6 +839,7 @@ class DramaVerseProvider : MainAPI() {
                         ).document
 
                         doc.select("a[href]").forEach { a ->
+
                             val href = a.absUrl("href")
 
                             if (isIgnoredOrAdUrl(href)) {
@@ -689,26 +847,46 @@ class DramaVerseProvider : MainAPI() {
                             }
 
                             when {
+
                                 isXCloudHlsUrl(href) -> {
-                                    extractXCloudHls(href, callback)
+
+                                    extractXCloudHls(
+                                        href,
+                                        callback
+                                    )
                                 }
 
-                                href.contains("xcloud", ignoreCase = true) -> {
-                                    extractXCloud(href, subtitleCallback, callback)
+                                isXCloudHost(href) -> {
+
+                                    extractXCloud(
+                                        href,
+                                        subtitleCallback,
+                                        callback
+                                    )
                                 }
 
                                 href.contains("pixeldrain", ignoreCase = true) -> {
-                                    extractPixeldrain(href, callback)
+
+                                    extractPixeldrain(
+                                        href,
+                                        callback
+                                    )
                                 }
 
                                 href.contains("drive.google.com") ||
                                     href.contains("drive.usercontent.google.com") -> {
-                                    extractGDrive(href, subtitleCallback, callback)
+
+                                    extractGDrive(
+                                        href,
+                                        subtitleCallback,
+                                        callback
+                                    )
                                 }
 
                                 href.contains("googleusercontent.com") ||
                                     href.contains("r2.dev") -> {
-                                    callback.invoke(
+
+                                    callback(
                                         newExtractorLink(
                                             "Direct",
                                             "Direct Stream",
@@ -717,14 +895,9 @@ class DramaVerseProvider : MainAPI() {
                                         )
                                     )
                                 }
-
-                                href.contains("workers.dev", ignoreCase = true) -> {
-                                    if (isXCloudHlsUrl(href)) {
-                                        extractXCloudHls(href, callback)
-                                    }
-                                }
                             }
                         }
+
                     } catch (_: Exception) {
                     }
                 }
@@ -733,26 +906,29 @@ class DramaVerseProvider : MainAPI() {
     }
 
     // ---------------------------------------------------------
-    // DIRECT XCLOUD HLS EXTRACTOR
+    // XCLOUD HLS EXTRACTOR
     // ---------------------------------------------------------
 
     private suspend fun extractXCloudHls(
         hlsUrl: String,
         callback: (ExtractorLink) -> Unit
-    ) {
-        try {
-            val headers = mapOf(
-                "User-Agent" to defaultHeaders["User-Agent"].orEmpty(),
-                "Referer" to "https://xcloud.tattoo/"
-            )
+    ): Boolean {
+
+        return try {
 
             val response = app.get(
                 hlsUrl,
-                headers = headers
+                headers = mapOf(
+                    "User-Agent" to defaultHeaders["User-Agent"].orEmpty(),
+                    "Referer" to xcloudReferer,
+                    "Accept" to "*/*"
+                )
             )
 
-            if (!response.text.trimStart().startsWith("#EXTM3U")) {
-                return
+            val playlist = response.text.trimStart()
+
+            if (!playlist.startsWith("#EXTM3U")) {
+                return false
             }
 
             callback(
@@ -762,11 +938,15 @@ class DramaVerseProvider : MainAPI() {
                     url = hlsUrl,
                     type = ExtractorLinkType.M3U8
                 ) {
-                    this.referer = "https://xcloud.tattoo/"
+                    this.referer = xcloudReferer
                     this.quality = Qualities.Unknown.value
                 }
             )
+
+            true
+
         } catch (_: Exception) {
+            false
         }
     }
 
@@ -778,18 +958,22 @@ class DramaVerseProvider : MainAPI() {
         url: String,
         callback: (ExtractorLink) -> Unit
     ) {
+
         val fileId = Regex(
             """/u/([a-zA-Z0-9]+)"""
         ).find(url)?.groupValues?.get(1)
             ?: Regex(
                 """/api/file/([a-zA-Z0-9]+)"""
             ).find(url)?.groupValues?.get(1)
-            ?: url.substringAfterLast("/").substringBefore("?")
+            ?: url.substringAfterLast("/")
+                .substringBefore("?")
 
         if (fileId.isNotEmpty()) {
-            val directApiUrl = "https://pixeldrain.com/api/file/$fileId"
 
-            callback.invoke(
+            val directApiUrl =
+                "https://pixeldrain.com/api/file/$fileId"
+
+            callback(
                 newExtractorLink(
                     source = "Pixeldrain",
                     name = "Pixeldrain",
@@ -809,6 +993,7 @@ class DramaVerseProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+
         var found = false
 
         val fileId = Regex(
@@ -816,10 +1001,12 @@ class DramaVerseProvider : MainAPI() {
         ).find(url)?.groupValues?.get(1)
 
         if (!fileId.isNullOrEmpty()) {
+
             val directConfirmUrl =
                 "https://drive.usercontent.google.com/download?id=$fileId&export=download&confirm=t"
 
             try {
+
                 val resp = app.get(
                     directConfirmUrl,
                     headers = defaultHeaders,
@@ -830,11 +1017,15 @@ class DramaVerseProvider : MainAPI() {
                     ?: resp.headers["Location"]
 
                 if (!loc.isNullOrEmpty()) {
-                    callback.invoke(
+
+                    callback(
                         newExtractorLink(
                             source = "GDrive",
                             name = "GDrive Direct",
-                            url = loc,
+                            url = resolveRelativeUrl(
+                                directConfirmUrl,
+                                loc
+                            ),
                             type = ExtractorLinkType.VIDEO
                         ) {
                             this.referer = "https://drive.google.com/"
@@ -842,16 +1033,30 @@ class DramaVerseProvider : MainAPI() {
                     )
 
                     found = true
+
                 } else {
+
                     val formAction = resp.document
                         .selectFirst("form#download-form")
-                        ?.attr("action")
+                        ?.absUrl("action")
 
                     if (!formAction.isNullOrEmpty()) {
+
                         val params = resp.document
                             .select("form#download-form input[name]")
                             .joinToString("&") {
-                                "${it.attr("name")}=${it.attr("value")}"
+
+                                val key = URLEncoder.encode(
+                                    it.attr("name"),
+                                    "UTF-8"
+                                )
+
+                                val value = URLEncoder.encode(
+                                    it.attr("value"),
+                                    "UTF-8"
+                                )
+
+                                "$key=$value"
                             }
 
                         val confirmedStreamUrl =
@@ -861,7 +1066,7 @@ class DramaVerseProvider : MainAPI() {
                                 formAction
                             }
 
-                        callback.invoke(
+                        callback(
                             newExtractorLink(
                                 source = "GDrive",
                                 name = "GDrive Direct",
@@ -875,11 +1080,13 @@ class DramaVerseProvider : MainAPI() {
                         found = true
                     }
                 }
+
             } catch (_: Exception) {
             }
 
             if (!found) {
-                callback.invoke(
+
+                callback(
                     newExtractorLink(
                         source = "GDrive",
                         name = "GDrive Stream",
@@ -894,14 +1101,14 @@ class DramaVerseProvider : MainAPI() {
             }
         }
 
-        loadExtractor(
+        val extractorFound = loadExtractor(
             url,
             "https://drive.google.com/",
             subtitleCallback,
             callback
         )
 
-        return found
+        return found || extractorFound
     }
 
     // ---------------------------------------------------------
@@ -913,45 +1120,154 @@ class DramaVerseProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+
         var found = false
 
         try {
+
             val resolvedUrl = resolveIntermediateUrl(url)
+
             val resp = app.get(
                 resolvedUrl,
                 headers = defaultHeaders,
-                referer = "https://xcloud.tattoo/"
+                referer = xcloudReferer
             )
 
             val html = resp.text
+                .replace("\\/", "/")
+                .replace("&amp;", "&")
+                .replace("\\u0026", "&")
+                .replace("\\u003d", "=")
 
-            Regex(
-                """\{[^{}]*"lang"\s*:\s*"([^"]+)"[^{}]*"tgid"\s*:\s*(\d+)[^{}]*\}"""
-            ).findAll(html).forEach { m ->
-                subtitleCallback.invoke(
+            // -------------------------------------------------
+            // SUBTITLES
+            // -------------------------------------------------
+
+            val subtitleRegex = Regex(
+                """"lang"\s*:\s*"([^"]+)"[^}]*?"tgid"\s*:\s*(\d+)""",
+                RegexOption.IGNORE_CASE
+            )
+
+            subtitleRegex.findAll(html).forEach { match ->
+
+                subtitleCallback(
                     SubtitleFile(
-                        m.groupValues[1],
-                        "https://sub.xcloud.icu/${m.groupValues[2]}"
+                        match.groupValues[1],
+                        "https://sub.xcloud.icu/${match.groupValues[2]}"
                     )
                 )
             }
 
-            val workerRegex = Regex(
-                """https?://[a-zA-Z0-9.-]+\.workers\.dev/(?:hls|m3u8)/[^\s"'<>]+""",
-                RegexOption.IGNORE_CASE
+            // -------------------------------------------------
+            // HLS URL DETECTION
+            // -------------------------------------------------
+
+            val hlsLinks = linkedSetOf<String>()
+
+            val patterns = listOf(
+
+                // Cloudflare Workers HLS
+                Regex(
+                    """https?://[a-zA-Z0-9.-]+\.workers\.dev/(?:hls|m3u8)/[^\s"'<>\\]+""",
+                    RegexOption.IGNORE_CASE
+                ),
+
+                // Direct M3U8
+                Regex(
+                    """https?://[^\s"'<>\\]+\.m3u8(?:\?[^\s"'<>\\]*)?""",
+                    RegexOption.IGNORE_CASE
+                ),
+
+                // JSON / JavaScript source
+                Regex(
+                    """(?:src|file|source|url|hls|playlist)\s*[:=]\s*["'](https?://[^"']+)["']""",
+                    RegexOption.IGNORE_CASE
+                )
             )
 
-            workerRegex.findAll(html).forEach { match ->
-                val workerUrl = match.value
-                    .replace("\\/", "/")
-                    .trim()
-                    .trimEnd(',', ';', ')', ']', '}')
+            patterns.forEach { pattern ->
 
-                if (isXCloudHlsUrl(workerUrl)) {
-                    extractXCloudHls(workerUrl, callback)
+                pattern.findAll(html).forEach { match ->
+
+                    val candidate = if (
+                        match.groupValues.size > 1 &&
+                        match.groupValues[1].startsWith("http")
+                    ) {
+                        match.groupValues[1]
+                    } else {
+                        match.value
+                    }
+                        .replace("\\/", "/")
+                        .replace("&amp;", "&")
+                        .trim()
+                        .trimEnd(',', ';', ')', ']', '}')
+
+                    if (isXCloudHlsUrl(candidate)) {
+                        hlsLinks.add(candidate)
+                    }
+                }
+            }
+
+            // -------------------------------------------------
+            // IFRAME / VIDEO / SOURCE
+            // -------------------------------------------------
+
+            resp.document.select(
+                "iframe[src], video[src], source[src], " +
+                    "video source[src], [data-src], [data-url]"
+            ).forEach { element ->
+
+                val candidates = listOf(
+                    element.absUrl("src"),
+                    element.absUrl("data-src"),
+                    element.absUrl("data-url")
+                )
+
+                candidates.forEach { candidate ->
+
+                    if (
+                        candidate.isNotBlank() &&
+                        isXCloudHlsUrl(candidate)
+                    ) {
+                        hlsLinks.add(candidate)
+                    }
+                }
+            }
+
+            // -------------------------------------------------
+            // VERIFY HLS AND SEND LINKS
+            // -------------------------------------------------
+
+            for (hlsUrl in hlsLinks) {
+
+                val extracted = extractXCloudHls(
+                    hlsUrl,
+                    callback
+                )
+
+                if (extracted) {
                     found = true
                 }
             }
+
+            // -------------------------------------------------
+            // ADDITIONAL HOST EXTRACTION
+            // -------------------------------------------------
+
+            if (!found) {
+
+                val extractorFound = loadExtractor(
+                    resolvedUrl,
+                    xcloudReferer,
+                    subtitleCallback,
+                    callback
+                )
+
+                if (extractorFound) {
+                    found = true
+                }
+            }
+
         } catch (_: Exception) {
         }
 
