@@ -257,8 +257,11 @@ class HindiDramaProvider : MainAPI() {
                 val unpacked = JsUnpacker(embedHtml).unpack() ?: embedHtml
                 val combined = "$embedHtml\n$unpacked"
 
-                val streamUrl = Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""")
-                    .findAll(combined)
+                val streamRegex = Regex(
+                    """["'](https?://[^"'\s<>]+?\.(?:m3u8|mp4)(?:\?[^"'\s<>]*)?)["']""",
+                    RegexOption.IGNORE_CASE
+                )
+                val streamMatch = streamRegex.findAll(combined)
                     .map { it.groupValues[1].replace("\\/", "/") }
                     .firstOrNull { !it.contains("preview") && !it.contains("thumb") }
 
