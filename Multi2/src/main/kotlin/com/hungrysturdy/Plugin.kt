@@ -23,8 +23,7 @@ class Plugin : Plugin() {
         registerExtractorAPI(ShortIcuExtractor())
         registerExtractorAPI(LPlayGoExtractor())
         registerExtractorAPI(VidMolyExtractor())
-        registerExtractorAPI(StreamTapeExtractor())
-        registerExtractorAPI(SprintCDNExtractor())
-        registerExtractorAPI(VMPXExtractor())
+        registerExtractorAPI(SwVidMolyExtractor())
+        registerExtractorAPI(VidMolyToExtractor())
     }
 }
