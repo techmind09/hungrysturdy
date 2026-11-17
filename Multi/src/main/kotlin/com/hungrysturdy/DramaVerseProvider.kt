@@ -1,4 +1,3 @@
-
 package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
@@ -31,12 +30,8 @@ class DramaVerseProvider : MainAPI() {
         "_clsk" to "5czkhx%5E1794549642448%5E1%5E1%5Ea.clarity.ms%2Fcollect"
     )
 
-    private val streamHeaders = mapOf(
-        "User-Agent" to defaultHeaders["User-Agent"].orEmpty(),
-        "Accept" to "*/*"
-    )
-
     private val xcloudReferer = "https://xcloud.tattoo/"
+    private val xcloudStreamReferer = "https://stream.xcloud1.lol/"
 
     override val mainPage = mainPageOf(
         "$mainUrl/" to "Home",
@@ -194,19 +189,36 @@ class DramaVerseProvider : MainAPI() {
 
     private fun isXCloudHost(url: String): Boolean {
         val lower = url.lowercase()
-
         return lower.contains("xcloud")
     }
 
     private fun isXCloudHlsUrl(url: String): Boolean {
-
         val lower = url
             .lowercase()
             .substringBefore("#")
+            .substringBefore("?")
 
         return lower.contains(".workers.dev/hls/") ||
             lower.contains(".workers.dev/m3u8/") ||
-            lower.substringBefore("?").endsWith(".m3u8")
+            lower.endsWith(".m3u8")
+    }
+
+    private fun isSupportedHostUrl(url: String): Boolean {
+        val lower = url.lowercase()
+        return lower.contains("xcloud") ||
+            lower.contains("pixeldrain") ||
+            lower.contains("drive.google.com") ||
+            lower.contains("docs.google.com") ||
+            lower.contains("drive.usercontent.google.com") ||
+            lower.contains("googleusercontent.com") ||
+            lower.contains("gdflix") ||
+            lower.contains("gdtot") ||
+            lower.contains("filepress") ||
+            lower.contains("hubcloud") ||
+            lower.contains("hubdrive") ||
+            lower.contains("workers.dev") ||
+            lower.contains("r2.dev") ||
+            isXCloudHlsUrl(lower)
     }
 
     private fun isIgnoredOrAdUrl(href: String): Boolean {
@@ -218,6 +230,11 @@ class DramaVerseProvider : MainAPI() {
             lower.contains("invoke_layer") ||
             lower.contains("fifa2026.mom") ||
             lower.contains("fifa2026") ||
+            lower.contains("machb.org") ||
+            lower.contains("viinyzfu.com") ||
+            lower.contains("join4ra.com") ||
+            lower.contains("werefilledwit.org") ||
+            lower.contains("zeusy.wiki") ||
             lower.contains("/redir.php") ||
             lower.contains("/redir2.php") ||
             lower.contains("5gvci.com") ||
@@ -275,8 +292,7 @@ class DramaVerseProvider : MainAPI() {
 
                     if (
                         next != current &&
-                        !next.contains("ardance.org") &&
-                        !next.contains("fifa2026")
+                        !isIgnoredOrAdUrl(next)
                     ) {
 
                         current = next
@@ -314,8 +330,7 @@ class DramaVerseProvider : MainAPI() {
 
                     if (
                         nextUrl != current &&
-                        !nextUrl.contains("ardance.org") &&
-                        !nextUrl.contains("fifa2026")
+                        !isIgnoredOrAdUrl(nextUrl)
                     ) {
 
                         current = nextUrl
@@ -336,8 +351,7 @@ class DramaVerseProvider : MainAPI() {
                 if (
                     !jsMatch.isNullOrEmpty() &&
                     jsMatch != current &&
-                    !jsMatch.contains("ardance.org") &&
-                    !jsMatch.contains("fifa2026")
+                    !isIgnoredOrAdUrl(jsMatch)
                 ) {
 
                     current = resolveRelativeUrl(
@@ -480,6 +494,7 @@ class DramaVerseProvider : MainAPI() {
                 if (
                     rawHref.isNotEmpty() &&
                     !isIgnoredOrAdUrl(rawHref) &&
+                    isSupportedHostUrl(rawHref) &&
                     seenUrls.add(rawHref)
                 ) {
 
@@ -757,24 +772,22 @@ class DramaVerseProvider : MainAPI() {
         if (isIgnoredOrAdUrl(rawUrl)) return
 
         if (isXCloudHlsUrl(rawUrl)) {
-
-            extractXCloudHls(
+            emitXCloudHls(
                 rawUrl,
+                xcloudStreamReferer,
                 callback
             )
-
             return
         }
 
         val url = resolveIntermediateUrl(rawUrl)
 
         if (isXCloudHlsUrl(url)) {
-
-            extractXCloudHls(
+            emitXCloudHls(
                 url,
+                xcloudStreamReferer,
                 callback
             )
-
             return
         }
 
@@ -788,9 +801,7 @@ class DramaVerseProvider : MainAPI() {
                     callback
                 )
 
-                // IMPORTANT: XCloud fallback
                 if (!found) {
-
                     loadExtractor(
                         url,
                         referer,
@@ -801,7 +812,6 @@ class DramaVerseProvider : MainAPI() {
             }
 
             url.contains("pixeldrain", ignoreCase = true) -> {
-
                 extractPixeldrain(
                     url,
                     callback
@@ -849,15 +859,14 @@ class DramaVerseProvider : MainAPI() {
                             when {
 
                                 isXCloudHlsUrl(href) -> {
-
-                                    extractXCloudHls(
+                                    emitXCloudHls(
                                         href,
+                                        xcloudStreamReferer,
                                         callback
                                     )
                                 }
 
                                 isXCloudHost(href) -> {
-
                                     extractXCloud(
                                         href,
                                         subtitleCallback,
@@ -866,7 +875,6 @@ class DramaVerseProvider : MainAPI() {
                                 }
 
                                 href.contains("pixeldrain", ignoreCase = true) -> {
-
                                     extractPixeldrain(
                                         href,
                                         callback
@@ -906,48 +914,120 @@ class DramaVerseProvider : MainAPI() {
     }
 
     // ---------------------------------------------------------
-    // XCLOUD HLS EXTRACTOR
+    // XCLOUD HLS & VIDEO EMITTERS
     // ---------------------------------------------------------
 
-    private suspend fun extractXCloudHls(
+    private suspend fun emitXCloudHls(
         hlsUrl: String,
+        refererUrl: String = xcloudStreamReferer,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        if (!isXCloudHlsUrl(hlsUrl)) return false
 
-        return try {
-
-            val response = app.get(
-                hlsUrl,
-                headers = mapOf(
-                    "User-Agent" to defaultHeaders["User-Agent"].orEmpty(),
-                    "Referer" to xcloudReferer,
-                    "Accept" to "*/*"
-                )
-            )
-
-            val playlist = response.text.trimStart()
-
-            if (!playlist.startsWith("#EXTM3U")) {
-                return false
-            }
-
-            callback(
-                newExtractorLink(
-                    source = "XCloud",
-                    name = "XCloud Direct HLS",
-                    url = hlsUrl,
-                    type = ExtractorLinkType.M3U8
-                ) {
-                    this.referer = xcloudReferer
-                    this.quality = Qualities.Unknown.value
-                }
-            )
-
-            true
-
+        val originUrl = try {
+            val u = URI(refererUrl)
+            "${u.scheme}://${u.host}"
         } catch (_: Exception) {
-            false
+            "https://stream.xcloud1.lol"
         }
+
+        callback(
+            newExtractorLink(
+                source = "XCloud",
+                name = "XCloud Direct HLS",
+                url = hlsUrl,
+                type = ExtractorLinkType.M3U8
+            ) {
+                this.referer = refererUrl
+                this.quality = Qualities.Unknown.value
+                this.headers = mapOf(
+                    "User-Agent" to defaultHeaders["User-Agent"].orEmpty(),
+                    "Accept" to "*/*",
+                    "Referer" to refererUrl,
+                    "Origin" to originUrl
+                )
+            }
+        )
+
+        return true
+    }
+
+    private suspend fun emitXCloudVideoLink(
+        rawUrl: String,
+        label: String,
+        refererUrl: String,
+        sessionCookies: Map<String, String>,
+        emittedUrls: MutableSet<String>,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val fullUrl = resolveRelativeUrl(refererUrl, rawUrl)
+        if (isIgnoredOrAdUrl(fullUrl)) return false
+
+        if (isXCloudHlsUrl(fullUrl)) {
+            if (!emittedUrls.add(fullUrl)) return false
+            return emitXCloudHls(fullUrl, refererUrl, callback)
+        }
+
+        var targetUrl = fullUrl
+        var hops = 0
+        while (hops < 4) {
+            hops++
+            try {
+                val resp = app.get(
+                    targetUrl,
+                    headers = defaultHeaders,
+                    referer = refererUrl,
+                    cookies = sessionCookies,
+                    allowRedirects = false
+                )
+                val loc = resp.headers["location"] ?: resp.headers["Location"]
+                if (!loc.isNullOrBlank()) {
+                    val next = resolveRelativeUrl(targetUrl, loc)
+                    if (isIgnoredOrAdUrl(next) || next == targetUrl) break
+                    targetUrl = next
+                    if (isXCloudHlsUrl(targetUrl)) break
+                    continue
+                }
+                break
+            } catch (_: Exception) {
+                break
+            }
+        }
+
+        if (isIgnoredOrAdUrl(targetUrl) || !emittedUrls.add(targetUrl)) {
+            return false
+        }
+
+        if (isXCloudHlsUrl(targetUrl)) {
+            return emitXCloudHls(targetUrl, refererUrl, callback)
+        }
+
+        val cookieHeader = sessionCookies.entries.joinToString("; ") {
+            "${it.key}=${it.value}"
+        }
+
+        callback(
+            newExtractorLink(
+                source = "XCloud",
+                name = label,
+                url = targetUrl,
+                type = ExtractorLinkType.VIDEO
+            ) {
+                this.referer = refererUrl
+                this.quality = Qualities.Unknown.value
+                val headers = mutableMapOf(
+                    "User-Agent" to defaultHeaders["User-Agent"].orEmpty(),
+                    "Accept" to "*/*",
+                    "Referer" to refererUrl
+                )
+                if (cookieHeader.isNotEmpty()) {
+                    headers["Cookie"] = cookieHeader
+                }
+                this.headers = headers
+            }
+        )
+
+        return true
     }
 
     // ---------------------------------------------------------
@@ -1112,7 +1192,38 @@ class DramaVerseProvider : MainAPI() {
     }
 
     // ---------------------------------------------------------
-    // XCLOUD TATTOO EXTRACTOR
+    // XCLOUD CONFIG PARSER
+    // ---------------------------------------------------------
+
+    private fun extractXCloudConfigValue(
+        html: String,
+        key: String
+    ): String? {
+        val escapedKey = Regex.escape(key)
+        val patterns = listOf(
+            Regex("""["']?$escapedKey["']?\s*:\s*["']((?:\\.|[^"'\\])+)["']""", RegexOption.IGNORE_CASE),
+            Regex("""(?:var|let|const)\s+$escapedKey\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE),
+            Regex("""$escapedKey\s*=\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+        )
+
+        for (pattern in patterns) {
+            val value = pattern.find(html)?.groupValues?.getOrNull(1)
+                ?.replace("\\/", "/")
+                ?.replace("\\u0026", "&")
+                ?.replace("\\u003d", "=")
+                ?.replace("&amp;", "&")
+                ?.trim()
+
+            if (!value.isNullOrBlank() && value != "null" && value != "undefined") {
+                return value
+            }
+        }
+
+        return null
+    }
+
+    // ---------------------------------------------------------
+    // XCLOUD TATTOO & STREAM.XCLOUD1.LOL EXTRACTOR
     // ---------------------------------------------------------
 
     private suspend fun extractXCloud(
@@ -1122,149 +1233,237 @@ class DramaVerseProvider : MainAPI() {
     ): Boolean {
 
         var found = false
+        val emittedUrls = mutableSetOf<String>()
+
+        if (isXCloudHlsUrl(url)) {
+            return emitXCloudHls(url, xcloudStreamReferer, callback)
+        }
 
         try {
 
             val resolvedUrl = resolveIntermediateUrl(url)
 
-            val resp = app.get(
-                resolvedUrl,
-                headers = defaultHeaders,
-                referer = xcloudReferer
-            )
-
-            val html = resp.text
-                .replace("\\/", "/")
-                .replace("&amp;", "&")
-                .replace("\\u0026", "&")
-                .replace("\\u003d", "=")
-
-            // -------------------------------------------------
-            // SUBTITLES
-            // -------------------------------------------------
-
-            val subtitleRegex = Regex(
-                """"lang"\s*:\s*"([^"]+)"[^}]*?"tgid"\s*:\s*(\d+)""",
-                RegexOption.IGNORE_CASE
-            )
-
-            subtitleRegex.findAll(html).forEach { match ->
-
-                subtitleCallback(
-                    SubtitleFile(
-                        match.groupValues[1],
-                        "https://sub.xcloud.icu/${match.groupValues[2]}"
-                    )
-                )
+            if (isXCloudHlsUrl(resolvedUrl)) {
+                return emitXCloudHls(resolvedUrl, xcloudStreamReferer, callback)
             }
 
-            // -------------------------------------------------
-            // HLS URL DETECTION
-            // -------------------------------------------------
+            // Extract mediaId from URLs like:
+            // https://xcloud.tattoo/06da63bc80e3fba
+            // https://stream.xcloud1.lol/06da63bc80e3fba
+            val cleanPath = resolvedUrl
+                .substringBefore("?")
+                .substringBefore("#")
+                .trimEnd('/')
 
-            val hlsLinks = linkedSetOf<String>()
+            val mediaId = cleanPath
+                .substringAfterLast("/")
+                .removePrefix("stream_")
+                .trim()
 
-            val patterns = listOf(
+            val streamPages = linkedSetOf<String>()
+            var baseCookies = emptyMap<String, String>()
 
-                // Cloudflare Workers HLS
-                Regex(
-                    """https?://[a-zA-Z0-9.-]+\.workers\.dev/(?:hls|m3u8)/[^\s"'<>\\]+""",
-                    RegexOption.IGNORE_CASE
-                ),
+            // 1. Prioritize direct streaming player URL (stream.xcloud1.lol/<id>)
+            if (mediaId.isNotEmpty() && mediaId.length >= 6) {
+                streamPages.add("https://stream.xcloud1.lol/$mediaId")
+            }
 
-                // Direct M3U8
-                Regex(
-                    """https?://[^\s"'<>\\]+\.m3u8(?:\?[^\s"'<>\\]*)?""",
-                    RegexOption.IGNORE_CASE
-                ),
-
-                // JSON / JavaScript source
-                Regex(
-                    """(?:src|file|source|url|hls|playlist)\s*[:=]\s*["'](https?://[^"']+)["']""",
-                    RegexOption.IGNORE_CASE
+            // 2. Also inspect the landing page (xcloud.tattoo/<id>) for cookies,
+            // dynamic player URLs, or direct download redirects
+            try {
+                val landingResp = app.get(
+                    resolvedUrl,
+                    headers = defaultHeaders,
+                    referer = xcloudReferer
                 )
-            )
 
-            patterns.forEach { pattern ->
+                val landingFinalUrl = landingResp.url.ifEmpty { resolvedUrl }
+                baseCookies = landingResp.cookies
+                streamPages.add(landingFinalUrl)
 
-                pattern.findAll(html).forEach { match ->
-
-                    val candidate = if (
-                        match.groupValues.size > 1 &&
-                        match.groupValues[1].startsWith("http")
-                    ) {
-                        match.groupValues[1]
-                    } else {
-                        match.value
+                landingResp.document.select("a[href], [data-href], [data-url]").forEach { el ->
+                    val rawHref = when {
+                        el.hasAttr("href") -> el.absUrl("href")
+                        el.hasAttr("data-href") -> resolveRelativeUrl(landingFinalUrl, el.attr("data-href"))
+                        el.hasAttr("data-url") -> resolveRelativeUrl(landingFinalUrl, el.attr("data-url"))
+                        else -> ""
                     }
+
+                    if (rawHref.isBlank() || isIgnoredOrAdUrl(rawHref)) return@forEach
+
+                    when {
+                        rawHref.contains("stream.xcloud", ignoreCase = true) ||
+                            rawHref.contains("/stream_", ignoreCase = true) -> {
+                            streamPages.add(rawHref)
+                        }
+
+                        rawHref.contains("/apis/cloud/redirect/", ignoreCase = true) ||
+                            rawHref.contains("/apis/cloud2/redirect/", ignoreCase = true) ||
+                            rawHref.contains("/apis/redirect/", ignoreCase = true) -> {
+                            val btnLabel = el.text().trim().ifEmpty { "XCloud Direct" }
+                            if (
+                                emitXCloudVideoLink(
+                                    rawHref,
+                                    btnLabel,
+                                    landingFinalUrl,
+                                    baseCookies,
+                                    emittedUrls,
+                                    callback
+                                )
+                            ) {
+                                found = true
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                streamPages.add(resolvedUrl)
+            }
+
+            if (mediaId.isNotEmpty() && mediaId.length >= 6) {
+                streamPages.add("https://xcloud.tattoo/stream_$mediaId")
+                streamPages.add("https://xcloud1.lol/stream_$mediaId")
+            }
+
+            // 3. Parse each candidate player page (especially stream.xcloud1.lol/<id>)
+            for (pageUrl in streamPages) {
+                try {
+                    val resp = app.get(
+                        pageUrl,
+                        headers = defaultHeaders,
+                        referer = xcloudReferer,
+                        cookies = baseCookies
+                    )
+
+                    val finalPlayerUrl = resp.url.ifEmpty { pageUrl }
+                    val playerCookies = baseCookies + resp.cookies
+
+                    val html = resp.text
                         .replace("\\/", "/")
                         .replace("&amp;", "&")
-                        .trim()
-                        .trimEnd(',', ';', ')', ']', '}')
+                        .replace("\\u0026", "&")
+                        .replace("\\u003d", "=")
 
-                    if (isXCloudHlsUrl(candidate)) {
-                        hlsLinks.add(candidate)
+                    // Subtitles
+                    val subtitleRegex = Regex(
+                        """"lang"\s*:\s*"([^"]+)"[^}]*?"tgid"\s*:\s*(\d+)""",
+                        RegexOption.IGNORE_CASE
+                    )
+
+                    subtitleRegex.findAll(html).forEach { match ->
+                        subtitleCallback(
+                            SubtitleFile(
+                                match.groupValues[1],
+                                "https://sub.xcloud.icu/${match.groupValues[2]}"
+                            )
+                        )
                     }
-                }
-            }
 
-            // -------------------------------------------------
-            // IFRAME / VIDEO / SOURCE
-            // -------------------------------------------------
+                    // Worker pool domains if relative HLS paths are used
+                    val workerDomains = Regex(
+                        """https?://[a-zA-Z0-9.-]+\.workers\.dev""",
+                        RegexOption.IGNORE_CASE
+                    ).findAll(html)
+                        .map { it.value.trimEnd('/') }
+                        .distinct()
+                        .toList()
 
-            resp.document.select(
-                "iframe[src], video[src], source[src], " +
-                    "video source[src], [data-src], [data-url]"
-            ).forEach { element ->
+                    val hlsLinks = linkedSetOf<String>()
 
-                val candidates = listOf(
-                    element.absUrl("src"),
-                    element.absUrl("data-src"),
-                    element.absUrl("data-url")
-                )
+                    // Extract HLS keys from cfg / window.__XCLOUD_PLAYER__
+                    val hlsConfigKeys = listOf(
+                        "hlsUrl",
+                        "photosHlsUrl",
+                        "HLS_URL",
+                        "PHOTOS_HLS_URL"
+                    )
 
-                candidates.forEach { candidate ->
-
-                    if (
-                        candidate.isNotBlank() &&
-                        isXCloudHlsUrl(candidate)
-                    ) {
-                        hlsLinks.add(candidate)
+                    for (key in hlsConfigKeys) {
+                        val rawVal = extractXCloudConfigValue(html, key) ?: continue
+                        if (rawVal.startsWith("http://") || rawVal.startsWith("https://")) {
+                            hlsLinks.add(rawVal)
+                        } else if (rawVal.startsWith("/hls/") || rawVal.startsWith("/m3u8/")) {
+                            if (workerDomains.isNotEmpty()) {
+                                workerDomains.forEach { domain ->
+                                    hlsLinks.add("$domain$rawVal")
+                                }
+                            } else {
+                                hlsLinks.add(resolveRelativeUrl(finalPlayerUrl, rawVal))
+                            }
+                        }
                     }
-                }
-            }
 
-            // -------------------------------------------------
-            // VERIFY HLS AND SEND LINKS
-            // -------------------------------------------------
+                    // Direct regex extraction for .workers.dev/hls/ or .m3u8
+                    val hlsPatterns = listOf(
+                        Regex(
+                            """https?://[a-zA-Z0-9.-]+\.workers\.dev/(?:hls|m3u8)/[^\s"'<>\\]+""",
+                            RegexOption.IGNORE_CASE
+                        ),
+                        Regex(
+                            """https?://[^\s"'<>\\]+\.m3u8(?:\?[^\s"'<>\\]*)?""",
+                            RegexOption.IGNORE_CASE
+                        ),
+                        Regex(
+                            """(?:src|file|source|url|hls|playlist)\s*[:=]\s*["'](https?://[^"']+)["']""",
+                            RegexOption.IGNORE_CASE
+                        )
+                    )
 
-            for (hlsUrl in hlsLinks) {
+                    hlsPatterns.forEach { pattern ->
+                        pattern.findAll(html).forEach { match ->
+                            val candidate = if (
+                                match.groupValues.size > 1 &&
+                                match.groupValues[1].startsWith("http")
+                            ) {
+                                match.groupValues[1]
+                            } else {
+                                match.value
+                            }
+                                .replace("\\/", "/")
+                                .replace("&amp;", "&")
+                                .trim()
+                                .trimEnd(',', ';', ')', ']', '}')
 
-                val extracted = extractXCloudHls(
-                    hlsUrl,
-                    callback
-                )
+                            if (isXCloudHlsUrl(candidate)) {
+                                hlsLinks.add(candidate)
+                            }
+                        }
+                    }
 
-                if (extracted) {
-                    found = true
-                }
-            }
+                    // Emit all discovered HLS streams
+                    for (hlsUrl in hlsLinks) {
+                        if (emittedUrls.add(hlsUrl)) {
+                            if (emitXCloudHls(hlsUrl, finalPlayerUrl, callback)) {
+                                found = true
+                            }
+                        }
+                    }
 
-            // -------------------------------------------------
-            // ADDITIONAL HOST EXTRACTION
-            // -------------------------------------------------
+                    // Also extract Primary & Wasabi MP4/MKV backup servers from cfg
+                    val videoConfigKeys = listOf(
+                        "primaryUrl" to "XCloud Server 1",
+                        "PRIMARY_URL" to "XCloud Server 1",
+                        "wasabiUrl" to "XCloud Server 2",
+                        "WASABI_URL" to "XCloud Server 2"
+                    )
 
-            if (!found) {
+                    for ((key, label) in videoConfigKeys) {
+                        val rawVal = extractXCloudConfigValue(html, key) ?: continue
+                        if (
+                            emitXCloudVideoLink(
+                                rawVal,
+                                label,
+                                finalPlayerUrl,
+                                playerCookies,
+                                emittedUrls,
+                                callback
+                            )
+                        ) {
+                            found = true
+                        }
+                    }
 
-                val extractorFound = loadExtractor(
-                    resolvedUrl,
-                    xcloudReferer,
-                    subtitleCallback,
-                    callback
-                )
-
-                if (extractorFound) {
-                    found = true
+                } catch (_: Exception) {
                 }
             }
 
