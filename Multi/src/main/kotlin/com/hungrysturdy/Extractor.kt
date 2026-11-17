@@ -160,7 +160,6 @@ object KatServerLogic {
 
     private fun cleanUrl(raw: String): String {
         var cleaned = raw.replace("&amp;", "&").replace("\\/", "/").trim()
-        // Unwarp fastdl-one wrapper URLs if present
         if (cleaned.contains("fastdl-one.pages.dev") && cleaned.contains("url=")) {
             cleaned = cleaned.substringAfter("url=").substringBefore("&")
             try {
