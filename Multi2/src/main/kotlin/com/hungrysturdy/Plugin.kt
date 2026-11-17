@@ -11,19 +11,42 @@ class Plugin : Plugin() {
         registerMainAPI(SflixProvider())
         registerMainAPI(HindiDramaProvider())
 
-        // Custom Server Extractors
+        // LuluStream Extractors
         registerExtractorAPI(LuluVidExtractor())
         registerExtractorAPI(LuluStreamAltExtractor())
+        registerExtractorAPI(LuluVdoExtractor())
+
+        // EarnVids Extractors
         registerExtractorAPI(EarnVidsExtractor())
         registerExtractorAPI(EarnVidsProExtractor())
+
+        // Vidara Extractors
         registerExtractorAPI(VidaraExtractor())
         registerExtractorAPI(VidaraAltExtractor())
+
+        // UpBolt Extractors
         registerExtractorAPI(UpBoltExtractor())
+        registerExtractorAPI(UpBoltTvExtractor())
+
+        // Abyss & Short.icu Extractors
         registerExtractorAPI(AbyssExtractor())
+        registerExtractorAPI(AbyssCdnExtractor())
         registerExtractorAPI(ShortIcuExtractor())
+
+        // LPlayGo & VidMoly Extractors
         registerExtractorAPI(LPlayGoExtractor())
         registerExtractorAPI(VidMolyExtractor())
         registerExtractorAPI(SwVidMolyExtractor())
         registerExtractorAPI(VidMolyToExtractor())
+
+        // StreamTape Extractors (All Domains)
+        registerExtractorAPI(StreamTapeExtractor())
+        registerExtractorAPI(StreamTapeToExtractor())
+        registerExtractorAPI(StreamTapeNetExtractor())
+        registerExtractorAPI(StreamTapeXyzExtractor())
+        registerExtractorAPI(ShaveTapeExtractor())
+        registerExtractorAPI(StrCloudExtractor())
+        registerExtractorAPI(StrTapeTechExtractor())
+        registerExtractorAPI(StapeFunExtractor())
     }
 }
