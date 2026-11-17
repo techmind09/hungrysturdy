@@ -61,7 +61,6 @@ open class GhostFlixExtractor : ExtractorApi() {
             }
         } catch (_: Exception) {}
 
-        // Agar embed page se direct link na mile to server ke /api/resolve ya /api/source endpoints try karein
         val idMatch = Regex("""/(?:movie|tv)/(\d+)(?:/(\d+)/(\d+))?""").find(url)
         if (idMatch != null) {
             val tmdbId = idMatch.groupValues[1]
@@ -169,24 +168,4 @@ open class GhostFlixExtractor : ExtractorApi() {
                 }
             }
     }
-}
-
-class CineSrcExtractor : GhostFlixExtractor() {
-    override val name = "CineSrc"
-    override val mainUrl = "https://cinesrc.st"
-}
-
-class VidriftExtractor : GhostFlixExtractor() {
-    override val name = "Vidrift"
-    override val mainUrl = "https://embed.vidrift.net"
-}
-
-class VidyExtractor : GhostFlixExtractor() {
-    override val name = "Vidy"
-    override val mainUrl = "https://www.vidy.st"
-}
-
-class VidcoreExtractor : GhostFlixExtractor() {
-    override val name = "Vidcore"
-    override val mainUrl = "https://vidcore.org"
 }
