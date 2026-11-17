@@ -29,7 +29,10 @@ open class BaseJWPExtractor : ExtractorApi() {
         val unpacked = JsUnpacker(response).unpack() ?: response
         val combinedHtml = "$response\n$unpacked"
 
-        val streamRegex = Regex("""["'](https?://[^"'\s]+\.(?:m3u8|mp4)[^"'\s]*)["']""")
+        val streamRegex = Regex(
+            """["'](https?://[^"'\s<>]+?\.(?:m3u8|mp4)(?:\?[^"'\s<>]*)?)["']""",
+            RegexOption.IGNORE_CASE
+        )
         val foundUrls = streamRegex.findAll(combinedHtml)
             .map { it.groupValues[1].replace("\\/", "/") }
             .distinct()
@@ -63,7 +66,6 @@ open class BaseJWPExtractor : ExtractorApi() {
     }
 }
 
-// 1. LuluStream
 class LuluVidExtractor : BaseJWPExtractor() {
     override var name = "LuluStream"
     override var mainUrl = "https://luluvid.com"
@@ -74,7 +76,6 @@ class LuluStreamAltExtractor : BaseJWPExtractor() {
     override var mainUrl = "https://lulustream.com"
 }
 
-// 2. EarnVids
 class EarnVidsExtractor : BaseJWPExtractor() {
     override var name = "EarnVids"
     override var mainUrl = "https://earnvids.com"
@@ -85,7 +86,6 @@ class EarnVidsProExtractor : BaseJWPExtractor() {
     override var mainUrl = "https://dingtezuni.com"
 }
 
-// 3. Vidara
 class VidaraExtractor : BaseJWPExtractor() {
     override var name = "Vidara"
     override var mainUrl = "https://vidara.to"
@@ -93,16 +93,14 @@ class VidaraExtractor : BaseJWPExtractor() {
 
 class VidaraAltExtractor : BaseJWPExtractor() {
     override var name = "Vidara"
-    override var mainUrl = "https://vidara.so"
+    override var mainUrl = "https://s1q2105.com"
 }
 
-// 4. UpBolt
 class UpBoltExtractor : BaseJWPExtractor() {
     override var name = "UpBolt"
     override var mainUrl = "https://upbolt.to"
 }
 
-// 5. Abyss
 class AbyssExtractor : BaseJWPExtractor() {
     override var name = "Abyss"
     override var mainUrl = "https://player.abyssplayer.com"
@@ -113,8 +111,27 @@ class ShortIcuExtractor : BaseJWPExtractor() {
     override var mainUrl = "https://short.icu"
 }
 
-// 6. LPlayGo
 class LPlayGoExtractor : BaseJWPExtractor() {
     override var name = "LPlayGo"
     override var mainUrl = "https://lplaygo.com"
+}
+
+class VidMolyExtractor : BaseJWPExtractor() {
+    override var name = "VidMoly"
+    override var mainUrl = "https://vidmoly.me"
+}
+
+class StreamTapeExtractor : BaseJWPExtractor() {
+    override var name = "StreamTape"
+    override var mainUrl = "https://streamtape.com"
+}
+
+class SprintCDNExtractor : BaseJWPExtractor() {
+    override var name = "SprintCDN"
+    override var mainUrl = "https://edge1-moscow-sprintcdn.owphbf24.com"
+}
+
+class VMPXExtractor : BaseJWPExtractor() {
+    override var name = "VMPX"
+    override var mainUrl = "https://vmpx.online"
 }
