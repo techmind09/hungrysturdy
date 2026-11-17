@@ -483,13 +483,15 @@ class DramaVerseProvider : MainAPI() {
         return found
     }
 
-    private suspend fun resolveFinalStreamUrl(
+    private suspend fun resolveStreamTarget(
         startUrl: String,
         refererUrl: String,
         sessionCookies: Map<String, String> = emptyMap()
-    ): String {
+    ): Pair<String, Boolean> {
         var current = startUrl
+        var isM3u8 = current.contains(".m3u8", ignoreCase = true) || current.contains(".workers.dev", ignoreCase = true)
         var hops = 0
+
         while (hops < 6) {
             hops++
             try {
@@ -505,14 +507,24 @@ class DramaVerseProvider : MainAPI() {
                     val nextUrl = resolveRelativeUrl(current, loc)
                     if (isIgnoredOrAdUrl(nextUrl)) break
                     current = nextUrl
-                } else {
-                    break
+                    if (current.contains(".m3u8", ignoreCase = true) || current.contains(".workers.dev", ignoreCase = true)) {
+                        isM3u8 = true
+                    }
+                    continue
                 }
+
+                val contentType = (resp.headers["content-type"] ?: resp.headers["Content-Type"]).orEmpty()
+                if (contentType.contains("mpegurl", ignoreCase = true) ||
+                    resp.text.trimStart().startsWith("#EXTM3U")
+                ) {
+                    isM3u8 = true
+                }
+                break
             } catch (_: Exception) {
                 break
             }
         }
-        return current
+        return current to isM3u8
     }
 
     private suspend fun emitXCloudRedirect(
@@ -526,7 +538,7 @@ class DramaVerseProvider : MainAPI() {
     ): Boolean {
         if (isIgnoredOrAdUrl(rawRedirectUrl)) return false
         val fullRedirectUrl = resolveRelativeUrl(refererUrl, rawRedirectUrl)
-        val directCdnUrl = resolveFinalStreamUrl(fullRedirectUrl, refererUrl, sessionCookies)
+        val (directCdnUrl, detectedM3u8) = resolveStreamTarget(fullRedirectUrl, refererUrl, sessionCookies)
 
         if (isIgnoredOrAdUrl(directCdnUrl) || !emittedUrls.add(directCdnUrl)) return false
 
@@ -535,14 +547,14 @@ class DramaVerseProvider : MainAPI() {
         } catch (_: Exception) {
             "CDN"
         }
-        val finalType = if (
-            directCdnUrl.contains(".m3u8", ignoreCase = true) ||
-            directCdnUrl.contains(".workers.dev", ignoreCase = true)
-        ) {
+
+        val finalType = if (detectedM3u8 || defaultType == ExtractorLinkType.M3U8) {
             ExtractorLinkType.M3U8
         } else {
-            defaultType
+            ExtractorLinkType.VIDEO
         }
+
+        val cookieHeader = sessionCookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
 
         callback.invoke(
             newExtractorLink(
@@ -551,7 +563,13 @@ class DramaVerseProvider : MainAPI() {
                 url = directCdnUrl,
                 type = finalType
             ) {
-                this.referer = ""
+                this.referer = if (finalType == ExtractorLinkType.M3U8) refererUrl else ""
+                if (cookieHeader.isNotEmpty() && finalType == ExtractorLinkType.M3U8) {
+                    this.headers = mapOf(
+                        "User-Agent" to defaultHeaders["User-Agent"]!!,
+                        "Cookie" to cookieHeader
+                    )
+                }
             }
         )
         return true
@@ -565,7 +583,6 @@ class DramaVerseProvider : MainAPI() {
         var found = false
         val emittedUrls = mutableSetOf<String>()
 
-        // Case A: Agar input URL khud hi direct /apis/cloud/redirect/, /apis/cloud2/redirect/, ya /apis/redirect/ hai
         if (url.contains("/apis/cloud/redirect/") ||
             url.contains("/apis/cloud2/redirect/") ||
             url.contains("/apis/redirect/")
@@ -592,7 +609,7 @@ class DramaVerseProvider : MainAPI() {
             "https://xcloud1.lol"
         }
 
-        // Case B: Token / Download page (https://xcloud1.lol/<id>?token=...) ke andar se /apis/redirect/ aur /apis/cloud/redirect/ links nikalo
+        // 1. Direct links on xcloud page
         xCloudDoc.select("a[href]").forEach { a ->
             val href = a.absUrl("href")
             if (isIgnoredOrAdUrl(href)) return@forEach
@@ -605,26 +622,10 @@ class DramaVerseProvider : MainAPI() {
                 if (emitXCloudRedirect(href, btnText, ExtractorLinkType.VIDEO, resolvedPageUrl, baseCookies, emittedUrls, callback)) {
                     found = true
                 }
-            } else if (href.matches(Regex("(?i).*\\.(mkv|mp4|m3u8)(\\?.*)?$")) ||
-                href.contains("r2.cloudflarestorage.com") ||
-                href.contains("workers.dev") ||
-                href.contains("googleusercontent.com")
-            ) {
-                if (emittedUrls.add(href)) {
-                    val type = if (href.contains(".m3u8", true) || href.contains(".workers.dev", true)) {
-                        ExtractorLinkType.M3U8
-                    } else {
-                        ExtractorLinkType.VIDEO
-                    }
-                    callback.invoke(
-                        newExtractorLink("XCloud", a.text().trim().ifEmpty { "XCloud File" }, href, type)
-                    )
-                    found = true
-                }
             }
         }
 
-        // Case C: Streaming player page (stream.xcloud1.lol/<id> aur /stream_<id>) se PRIMARY_URL, WASABI_URL, HLS_URL nikalo
+        // 2. Streaming player page (/stream_<id> -> stream.xcloud1.lol/<id>)
         val streamCandidates = linkedSetOf<String>()
         xCloudDoc.selectFirst("div.vd a[href*='stream_'], a[href*='/stream_']")
             ?.absUrl("href")
@@ -632,8 +633,9 @@ class DramaVerseProvider : MainAPI() {
             ?.let { streamCandidates.add(resolveIntermediateUrl(it)) }
 
         if (mediaId.isNotEmpty() && mediaId.length > 2) {
-            streamCandidates.add("https://stream.xcloud1.lol/$mediaId")
             streamCandidates.add("$baseUri/stream_$mediaId")
+            streamCandidates.add("https://stream.xcloud1.lol/$mediaId")
+            streamCandidates.add("https://xcloud.tattoo/stream_$mediaId")
         }
 
         for (streamPageUrl in streamCandidates) {
@@ -657,11 +659,37 @@ class DramaVerseProvider : MainAPI() {
                         )
                     }
 
-                // Script variables: PRIMARY_URL (/apis/cloud/redirect/...), WASABI_URL (/apis/cloud2/redirect/...), HLS_URL
+                // Parse window.__XCLOUD_PLAYER__ variables (hlsUrl, primaryUrl, wasabiUrl)
+                val hlsMatch = Regex("""hlsUrl\s*[:=]\s*["']([^"']+)["']""").find(streamHtml)
+                val primaryMatch = Regex("""primaryUrl\s*[:=]\s*["']([^"']+)["']""").find(streamHtml)
+                val wasabiMatch = Regex("""wasabiUrl\s*[:=]\s*["']([^"']+)["']""").find(streamHtml)
+
+                val hlsVal = hlsMatch?.groupValues?.get(1)
+                if (!hlsVal.isNullOrEmpty() && hlsVal != "null") {
+                    if (emitXCloudRedirect(hlsVal, "XCloud HLS", ExtractorLinkType.M3U8, finalPlayerUrl, streamCookies, emittedUrls, callback)) {
+                        found = true
+                    }
+                }
+
+                val primaryVal = primaryMatch?.groupValues?.get(1)
+                if (!primaryVal.isNullOrEmpty() && primaryVal != "null") {
+                    if (emitXCloudRedirect(primaryVal, "XCloud Server 1", ExtractorLinkType.VIDEO, finalPlayerUrl, streamCookies, emittedUrls, callback)) {
+                        found = true
+                    }
+                }
+
+                val wasabiVal = wasabiMatch?.groupValues?.get(1)
+                if (!wasabiVal.isNullOrEmpty() && wasabiVal != "null") {
+                    if (emitXCloudRedirect(wasabiVal, "XCloud Server 2", ExtractorLinkType.VIDEO, finalPlayerUrl, streamCookies, emittedUrls, callback)) {
+                        found = true
+                    }
+                }
+
+                // Fallback: PRIMARY_URL, WASABI_URL, HLS_URL in script
                 val varPatterns = listOf(
+                    "HLS_URL" to ("XCloud HLS" to ExtractorLinkType.M3U8),
                     "PRIMARY_URL" to ("XCloud Server 1" to ExtractorLinkType.VIDEO),
-                    "WASABI_URL" to ("XCloud Server 2" to ExtractorLinkType.VIDEO),
-                    "HLS_URL" to ("XCloud HLS" to ExtractorLinkType.M3U8)
+                    "WASABI_URL" to ("XCloud Server 2" to ExtractorLinkType.VIDEO)
                 )
 
                 for ((varName, info) in varPatterns) {
@@ -674,40 +702,22 @@ class DramaVerseProvider : MainAPI() {
                     }
                 }
 
-                // Direct .m3u8 / .workers.dev / .mkv links agar HTML/JS me hon
-                Regex("""["'](https?://[^"'\s<>]+\.(?:m3u8|mp4|mkv)(?:\?[^"'\s<>]*)?)["']""", RegexOption.IGNORE_CASE)
-                    .findAll(streamHtml)
-                    .forEach { m ->
-                        val vUrl = m.groupValues[1]
-                        if (!isIgnoredOrAdUrl(vUrl) && emittedUrls.add(vUrl)) {
-                            val type = if (vUrl.contains(".m3u8", true)) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            callback.invoke(
-                                newExtractorLink("XCloud", "XCloud Direct", vUrl, type) {
-                                    this.referer = finalPlayerUrl
-                                }
-                            )
-                            found = true
-                        }
-                    }
-
+                // Workers dev or m3u8 in JS
                 Regex("""["'](https?://[^"'\s<>]+\.workers\.dev/[^"'\s<>]*)["']""", RegexOption.IGNORE_CASE)
                     .findAll(streamHtml)
                     .forEach { m ->
                         val wUrl = m.groupValues[1]
-                        if (!isIgnoredOrAdUrl(wUrl) && emittedUrls.add(wUrl)) {
-                            callback.invoke(
-                                newExtractorLink("XCloud", "XCloud Worker HLS", wUrl, ExtractorLinkType.M3U8) {
-                                    this.referer = finalPlayerUrl
-                                }
-                            )
+                        if (!isIgnoredOrAdUrl(wUrl) && emitXCloudRedirect(wUrl, "XCloud Worker HLS", ExtractorLinkType.M3U8, finalPlayerUrl, streamCookies, emittedUrls, callback)) {
                             found = true
                         }
                     }
+
+                if (found) break
             } catch (_: Exception) {
             }
         }
 
-        // Case D: Token page URL (https://xcloud1.lol/<id>?token=...) ko khud bhi open karke /apis/redirect/ buttons nikalo
+        // 3. Token page fallback
         val tokenGenUrl = xCloudDoc.selectFirst("div.vd a[href*='token='], a[href*='xcloud1.lol'][href*='token=']")
             ?.absUrl("href")
             ?: if (resolvedPageUrl.contains("token=")) resolvedPageUrl else null
