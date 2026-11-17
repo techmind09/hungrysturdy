@@ -228,6 +228,12 @@ class HindiDramaProvider : MainAPI() {
 
         var foundLinks = false
 
+        val customHeaders = mapOf(
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 15; Infinix X6851) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
+            "Referer" to playerPageUrl,
+            "Origin" to playerPageUrl.substringBeforeLast("/")
+        )
+
         for (embedUrl in embedUrls) {
             val loaded = loadExtractor(embedUrl, playerPageUrl, subtitleCallback, callback) ||
                 loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
@@ -235,7 +241,7 @@ class HindiDramaProvider : MainAPI() {
             if (loaded) {
                 foundLinks = true
             } else if (embedUrl.contains("luluvid", ignoreCase = true) || embedUrl.contains("lulustream", ignoreCase = true)) {
-                if (extractLuluVid(embedUrl, callback)) {
+                if (extractLuluVid(embedUrl, callback, customHeaders)) {
                     foundLinks = true
                 }
             }
@@ -246,16 +252,11 @@ class HindiDramaProvider : MainAPI() {
 
     private suspend fun extractLuluVid(
         embedUrl: String,
-        callback: (ExtractorLink) -> Unit
+        callback: (ExtractorLink) -> Unit,
+        customHeaders: Map<String, String>
     ): Boolean {
         return try {
-            val responseText = app.get(
-                embedUrl,
-                referer = "$mainUrl/",
-                headers = mapOf(
-                    "User-Agent" to "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36"
-                )
-            ).text
+            val responseText = app.get(embedUrl, headers = customHeaders).text
 
             val streamUrl = Regex("""["'](https?://[^"']+\.m3u8[^"']*)["']""").find(responseText)?.groupValues?.get(1)
                 ?: Regex("""["'](https?://[^"']+\.mp4[^"']*)["']""").find(responseText)?.groupValues?.get(1)
@@ -268,7 +269,9 @@ class HindiDramaProvider : MainAPI() {
                         url = streamUrl
                     ) {
                         this.referer = embedUrl
-                        this.quality = 0 // Fixed here: Replaced Qualities.Unknown.value with 0
+                        this.quality = 0
+                        this.headers = customHeaders
+                        this.httpHeaders = customHeaders
                     }
                 )
                 true
