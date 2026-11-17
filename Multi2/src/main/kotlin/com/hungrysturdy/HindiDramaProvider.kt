@@ -196,6 +196,25 @@ class HindiDramaProvider : MainAPI() {
         }
     }
 
+    private fun normalizeStreamTapeUrl(rawUrl: String): String {
+        val streamTapeMirrors = listOf(
+            "streamtape.to",
+            "streamtape.net",
+            "streamtape.xyz",
+            "shavetape.cash",
+            "strcloud.link",
+            "strtape.tech",
+            "stape.fun"
+        )
+        var updated = rawUrl
+        for (mirror in streamTapeMirrors) {
+            if (updated.contains(mirror, ignoreCase = true)) {
+                updated = updated.replace(mirror, "streamtape.com", ignoreCase = true)
+            }
+        }
+        return updated.replace("streamtape.com/v/", "streamtape.com/e/", ignoreCase = true)
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -207,7 +226,6 @@ class HindiDramaProvider : MainAPI() {
         val pageHtml = document.html()
         var foundLinks = false
 
-        // Match both full and relative /embed/... URLs (e.g., /embed/tvshow_srv?search=...)
         val internalEmbedSrc = document.selectFirst("#player iframe, iframe[src*='/embed/']")?.attr("src")?.trim()
             ?: Regex("""["']((?:https?:\\?/\\?/[^"'\s<>]+)?\\?/embed\\?/[^"'\s<>]+)["']""")
                 .find(pageHtml)
@@ -231,7 +249,6 @@ class HindiDramaProvider : MainAPI() {
         val playerDoc = Jsoup.parse(playerHtml, playerPageUrl)
         val serverList = linkedMapOf<String, String>()
 
-        // 1. Collect URLs from .srv buttons and data attributes
         playerDoc.select(".srv, [data-src], [data-url], [data-embed], [data-link], [data-video]").forEach { el ->
             val sName = el.text().trim().ifEmpty { "Server" }
             val rawUrl = listOf("data-src", "data-url", "data-embed", "data-link", "data-video")
@@ -246,7 +263,6 @@ class HindiDramaProvider : MainAPI() {
             }
         }
 
-        // 2. Collect iframes
         playerDoc.select("iframe").forEach { el ->
             val src = el.attr("data-src").ifEmpty { el.attr("src") }.trim()
             if (src.isNotEmpty() && !src.startsWith("about:")) {
@@ -254,7 +270,6 @@ class HindiDramaProvider : MainAPI() {
             }
         }
 
-        // 3. Collect all external embed URLs inside scripts
         val urlRegex = Regex("""https?:\\?/\\?/[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:\\?/[^"'\s<>\\]+)""")
         urlRegex.findAll(playerHtml).forEach { match ->
             val cleanUrl = match.value.replace("\\/", "/")
@@ -277,17 +292,23 @@ class HindiDramaProvider : MainAPI() {
             }
         }
 
-        for ((embedUrl, serverLabel) in serverList) {
-            // Try Cloudstream built-in + registered custom extractors first
+        for ((rawEmbedUrl, rawLabel) in serverList) {
+            val embedUrl = normalizeStreamTapeUrl(rawEmbedUrl)
+            val serverLabel = if (embedUrl.contains("streamtape.com", ignoreCase = true)) {
+                "StreamTape"
+            } else {
+                rawLabel
+            }
+
             val extractorLoaded = loadExtractor(embedUrl, playerPageUrl, subtitleCallback, callback) ||
-                loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)
+                loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback) ||
+                loadExtractor(embedUrl, null, subtitleCallback, callback)
 
             if (extractorLoaded) {
                 foundLinks = true
                 continue
             }
 
-            // Direct fallback extraction with proper embed Referer & Origin
             try {
                 val embedOrigin = getOrigin(embedUrl)
                 val embedHeaders = mapOf(
