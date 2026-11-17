@@ -18,12 +18,14 @@ open class BaseJWPExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        val extractedReferer = referer ?: "$mainUrl/"
         val headers = mapOf(
-            "User-Agent" to "Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
-            "Referer" to (referer ?: "$mainUrl/")
+            "User-Agent" to "Mozilla/5.0 (Linux; Android 15; Infinix X6851) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
+            "Referer" to extractedReferer,
+            "Origin" to extractedReferer.substringBeforeLast("/")
         )
 
-        val response = app.get(url, referer = referer ?: "$mainUrl/", headers = headers).text
+        val response = app.get(url, referer = extractedReferer, headers = headers).text
         val unpacked = JsUnpacker(response).unpack() ?: response
         val combinedHtml = "$response\n$unpacked"
 
@@ -42,9 +44,10 @@ open class BaseJWPExtractor : ExtractorApi() {
                     name = this.name,
                     url = streamUrl
                 ) {
-                    this.referer = url
+                    this.referer = extractedReferer
                     this.quality = 0
-                    this.headers = mapOf("Referer" to url)
+                    this.headers = headers
+                    this.httpHeaders = headers
                 }
             )
         }
@@ -83,7 +86,7 @@ class EarnVidsProExtractor : BaseJWPExtractor() {
     override var mainUrl = "https://dingtezuni.com"
 }
 
-// 3. Vidara (Updated with .to)
+// 3. Vidara
 class VidaraExtractor : BaseJWPExtractor() {
     override var name = "Vidara"
     override var mainUrl = "https://vidara.to"
@@ -94,7 +97,7 @@ class VidaraAltExtractor : BaseJWPExtractor() {
     override var mainUrl = "https://vidara.so"
 }
 
-// 4. Byse (Updated with bysebuho.com)
+// 4. Byse
 class ByseExtractor : BaseJWPExtractor() {
     override var name = "Byse"
     override var mainUrl = "https://bysebuho.com"
@@ -105,13 +108,13 @@ class ByseAltExtractor : BaseJWPExtractor() {
     override var mainUrl = "https://byse.sx"
 }
 
-// 5. UpBolt (Updated with upbolt.to)
+// 5. UpBolt
 class UpBoltExtractor : BaseJWPExtractor() {
     override var name = "UpBolt"
     override var mainUrl = "https://upbolt.to"
 }
 
-// 6. Abyss (Updated with player.abyssplayer.com)
+// 6. Abyss
 class AbyssExtractor : BaseJWPExtractor() {
     override var name = "Abyss"
     override var mainUrl = "https://player.abyssplayer.com"
