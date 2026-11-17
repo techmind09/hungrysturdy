@@ -272,7 +272,7 @@ class GhostflixProvider : MainAPI() {
 
         val serverMap = linkedMapOf<String, String>()
 
-        // 1. Ghostflix Watch API Response Parse (sources array with label & src)
+        // 1. Ghostflix Watch API Response Parse
         val watchApiCandidates = if (isTv) {
             listOf(
                 "$mainUrl/api/watch?type=tv&id=$id&season=$s&episode=$e",
@@ -316,7 +316,7 @@ class GhostflixProvider : MainAPI() {
             } catch (_: Exception) {}
         }
 
-        // 2. Exact Verified Ghostflix Response Sources (Fallback / Direct)
+        // 2. Default Fallback Sources
         val defaultSources = if (isTv) {
             listOf(
                 "CineSrc" to "https://cinesrc.st/embed/tv/$id/$s/$e",
@@ -351,14 +351,12 @@ class GhostflixProvider : MainAPI() {
         serverMap.toList().amap { (serverName, embedUrl) ->
             val extractedLinks = mutableListOf<ExtractorLink>()
 
-            // A. Built-in Cloudstream Extractors (VidLink, EmbedSu, VidSrc, etc.)
             try {
                 loadExtractor(embedUrl, "$mainUrl/", subtitleCallback) { link ->
                     extractedLinks.add(link)
                 }
             } catch (_: Exception) {}
 
-            // B. Custom GhostFlixExtractor (CineSrc, Vidrift, Vidy, Vidcore, Proxy HLS)
             try {
                 customExtractor.getUrl(embedUrl, "$mainUrl/", subtitleCallback) { link ->
                     extractedLinks.add(link)
