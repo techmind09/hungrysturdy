@@ -1,4 +1,3 @@
-
 package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
@@ -781,7 +780,7 @@ class DramaVerseProvider : MainAPI() {
     // DIRECT XCLOUD HLS
     // ---------------------------------------------------------
 
-    private fun emitDirectXCloudHls(
+    private suspend fun emitDirectXCloudHls(
         url: String,
         referer: String,
         sessionCookies: Map<String, String>,
