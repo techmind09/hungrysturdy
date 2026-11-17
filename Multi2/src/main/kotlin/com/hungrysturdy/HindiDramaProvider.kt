@@ -222,7 +222,7 @@ class HindiDramaProvider : MainAPI() {
             }
         }
 
-        val urlRegex = Regex("""https?:\\?/\\?/[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:\\?/[^"'\s<>\\]+)""")
+        val urlRegex = Regex("""https?:\\?/\\?/[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(?:\\?/[^"'\s<>\+)""")
         urlRegex.findAll(playerHtml).forEach { match ->
             val cleanUrl = match.value.replace("\\/", "/")
             if (!cleanUrl.contains("hindidrama.net") &&
@@ -261,7 +261,7 @@ class HindiDramaProvider : MainAPI() {
                     """["'](https?://[^"'\s<>]+?\.(?:m3u8|mp4)(?:\?[^"'\s<>]*)?)["']""",
                     RegexOption.IGNORE_CASE
                 )
-                val streamMatch = streamRegex.findAll(combined)
+                val streamUrl = streamRegex.findAll(combined) // Fixed variable name to streamUrl
                     .map { it.groupValues[1].replace("\\/", "/") }
                     .firstOrNull { !it.contains("preview") && !it.contains("thumb") }
 
