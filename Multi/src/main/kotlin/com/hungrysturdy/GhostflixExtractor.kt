@@ -1,7 +1,9 @@
 package com.hungrysturdy
 
+import com.fasterxml.jackson.annotation.JsonProperty
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
@@ -30,20 +32,28 @@ open class GhostFlixExtractor : ExtractorApi() {
         )
     }
 
+    private data class StreamResponse(
+        @JsonProperty("url") val url: String? = null,
+        @JsonProperty("file") val file: String? = null,
+        @JsonProperty("source") val source: String? = null,
+        @JsonProperty("stream") val stream: String? = null,
+        @JsonProperty("hls") val hls: String? = null,
+        @JsonProperty("playlist") val playlist: String? = null,
+        @JsonProperty("src") val src: String? = null
+    )
+
     override suspend fun getUrl(
         url: String,
         referer: String?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-
         val origin = getOrigin(url)
-
         val effectiveReferer = referer ?: "$origin/"
 
         val headers = mapOf(
             "User-Agent" to USER_AGENT,
-            "Accept" to "*/*",
+            "Accept" to "text/html,application/xhtml+xml,application/json,*/*",
             "Referer" to effectiveReferer,
             "Origin" to origin
         )
@@ -69,22 +79,13 @@ open class GhostFlixExtractor : ExtractorApi() {
 
             val sourceName = when {
                 host.contains("cinesrc.st") -> "CineSrc"
-
                 host.contains("vidrift.net") -> "Vidrift"
-
-                host.contains("greenkite.top") ||
-                    host.contains("goldenkite.top") -> "GreenKite"
-
+                host.contains("greenkite.top") || host.contains("goldenkite.top") -> "GreenKite"
                 host.contains("vidy.st") -> "Vidy"
-
                 host.contains("vidcore.org") -> "Vidcore"
-
                 host.contains("vidlink.pro") -> "VidLink"
-
                 host.contains("vidsrc") -> "VidSrc"
-
                 host.contains("ghostflix") -> "Ghostflix"
-
                 else -> name
             }
 
@@ -92,7 +93,8 @@ open class GhostFlixExtractor : ExtractorApi() {
 
             val streamType = if (
                 stream.contains(".mp4", true) &&
-                !stream.contains(".m3u8", true)
+                !stream.contains(".m3u8", true) &&
+                !stream.contains("/hls", true)
             ) {
                 ExtractorLinkType.VIDEO
             } else {
@@ -117,14 +119,27 @@ open class GhostFlixExtractor : ExtractorApi() {
             responseText: String,
             baseUrl: String
         ) {
-
             val clean = responseText
                 .replace("\\/", "/")
                 .replace("\\u0026", "&")
                 .replace("&amp;", "&")
 
-            // Don't extract media segments from an HLS playlist.
+            // Try parsing as JSON first
+            val parsedJson = tryParseJson<StreamResponse>(clean)
+            val jsonUrl = parsedJson?.url
+                ?: parsedJson?.file
+                ?: parsedJson?.source
+                ?: parsedJson?.stream
+                ?: parsedJson?.hls
+                ?: parsedJson?.playlist
+                ?: parsedJson?.src
+
+            if (!jsonUrl.isNullOrBlank()) {
+                emitStream(jsonUrl, baseUrl)
+            }
+
             if (clean.trimStart().startsWith("#EXTM3U")) {
+                emitStream(baseUrl, baseUrl)
                 return
             }
 
@@ -140,7 +155,7 @@ open class GhostFlixExtractor : ExtractorApi() {
 
             // Relative URLs
             val relativeRegex = Regex(
-                """["']([^"']*(?:\.m3u8|\.mp4|/api/orion/|/api/playlist/)[^"']*)["']""",
+                """["']([^"']*(?:\.m3u8|\.mp4|/api/orion/|/api/playlist/|/api/proxy/hls)[^"']*)["']""",
                 RegexOption.IGNORE_CASE
             )
 
@@ -177,22 +192,48 @@ open class GhostFlixExtractor : ExtractorApi() {
             return
         }
 
-        // Embed page
+        // 1. Try fetching the embed page
         try {
-            val response = app.get(
-                url,
-                headers = headers,
-                timeout = 20
-            )
-
-            if (response.code != 200) return
-
-            processResponse(
-                response.text,
-                url
-            )
-
+            val response = app.get(url, headers = headers, timeout = 20)
+            if (response.code == 200) {
+                processResponse(response.text, url)
+            }
         } catch (_: Exception) {
+        }
+
+        // 2. If no links found yet, try probing alternative API resolve paths based on URL
+        if (emitted.isEmpty()) {
+            val match = Regex("""/(?:movie|tv)/(\d+)(?:/(\d+)/(\d+))?""").find(url)
+            if (match != null) {
+                val id = match.groupValues[1]
+                val season = match.groupValues[2]
+                val episode = match.groupValues[3]
+                val isTv = url.contains("/tv/") && season.isNotEmpty() && episode.isNotEmpty()
+
+                val apiCandidates = if (isTv) {
+                    listOf(
+                        "$origin/api/resolve?type=tv&id=$id&season=$season&episode=$episode",
+                        "$origin/api/playlist/tv/$id/$season/$episode",
+                        "$origin/api/source/tv/$id/$season/$episode"
+                    )
+                } else {
+                    listOf(
+                        "$origin/api/resolve?type=movie&id=$id",
+                        "$origin/api/playlist/movie/$id",
+                        "$origin/api/source/movie/$id"
+                    )
+                }
+
+                for (apiUrl in apiCandidates) {
+                    try {
+                        val apiResp = app.get(apiUrl, headers = headers, timeout = 10)
+                        if (apiResp.code == 200 && apiResp.text.isNotBlank()) {
+                            processResponse(apiResp.text, apiUrl)
+                            if (emitted.isNotEmpty()) break
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
         }
     }
 
@@ -211,31 +252,21 @@ open class GhostFlixExtractor : ExtractorApi() {
         return value.contains(".m3u8") ||
             value.contains(".mp4") ||
             value.contains("/api/orion/") ||
-            value.contains("/api/playlist/")
+            value.contains("/api/playlist/") ||
+            value.contains("/api/proxy/hls") ||
+            value.contains("/vd/")
     }
 
     private fun getQuality(url: String): Int {
         val value = url.lowercase()
 
         return when {
-            value.contains("2160") ||
-                value.contains("4k") ->
-                Qualities.P2160.value
-
-            value.contains("1080") ->
-                Qualities.P1080.value
-
-            value.contains("720") ->
-                Qualities.P720.value
-
-            value.contains("480") ->
-                Qualities.P480.value
-
-            value.contains("360") ->
-                Qualities.P360.value
-
-            else ->
-                Qualities.Unknown.value
+            value.contains("2160") || value.contains("4k") -> Qualities.P2160.value
+            value.contains("1080") -> Qualities.P1080.value
+            value.contains("720") -> Qualities.P720.value
+            value.contains("480") -> Qualities.P480.value
+            value.contains("360") -> Qualities.P360.value
+            else -> Qualities.Unknown.value
         }
     }
 
