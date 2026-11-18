@@ -243,7 +243,7 @@ class GhostflixProvider : MainAPI() {
                         target,
                         TvType.TvSeries
                     ) {
-                        posterUrl = poster
+                        this.posterUrl = poster
                     }
                 )
             } else {
@@ -253,7 +253,7 @@ class GhostflixProvider : MainAPI() {
                         target,
                         TvType.Movie
                     ) {
-                        posterUrl = poster
+                        this.posterUrl = poster
                     }
                 )
             }
@@ -304,11 +304,11 @@ class GhostflixProvider : MainAPI() {
         val tmdbId = match.groupValues[2]
         val isTv = mediaType == "tv"
 
-        var title = "Ghostflix $tmdbId"
-        var description = ""
+        var mediaTitle = "Ghostflix $tmdbId"
+        var plotOverview = ""
         var poster: String? = null
         var backdrop: String? = null
-        var year: Int? = null
+        var releaseYear: Int? = null
         var seasons: List<TmdbSeason> = emptyList()
 
         try {
@@ -318,18 +318,18 @@ class GhostflixProvider : MainAPI() {
             ).parsedSafe<TmdbDetails>()
 
             if (details != null) {
-                title = details.title
+                mediaTitle = details.title
                     ?: details.name
-                    ?: title
+                    ?: mediaTitle
 
-                description = details.overview.orEmpty()
+                plotOverview = details.overview.orEmpty()
                 poster = imageUrl(details.posterPath)
 
                 backdrop = details.backdropPath?.let {
                     "$TMDB_BACKDROP_BASE$it"
                 }
 
-                year = (
+                releaseYear = (
                     details.releaseDate
                         ?: details.firstAirDate
                     )?.take(4)?.toIntOrNull()
@@ -348,15 +348,15 @@ class GhostflixProvider : MainAPI() {
             )
 
             return newMovieLoadResponse(
-                title,
+                mediaTitle,
                 url,
                 TvType.Movie,
                 playData
             ) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = backdrop ?: poster
-                this.plot = description
-                this.year = year
+                this.plot = plotOverview
+                this.year = releaseYear
             }
         }
 
@@ -366,8 +366,8 @@ class GhostflixProvider : MainAPI() {
             (it.seasonNumber ?: 0) > 0
         }
 
-        for (season in validSeasons) {
-            val seasonNumber = season.seasonNumber ?: continue
+        for (seasonItem in validSeasons) {
+            val seasonNumber = seasonItem.seasonNumber ?: continue
 
             try {
                 val seasonResponse = app.get(
@@ -392,19 +392,19 @@ class GhostflixProvider : MainAPI() {
 
                     episodes.add(
                         newEpisode(playData) {
-                            name = ep.name
+                            this.name = ep.name
                                 ?: "Episode $episodeNumber"
 
                             this.season = seasonNumber
                             this.episode = episodeNumber
 
-                            posterUrl = imageUrl(ep.stillPath)
-                            description = ep.overview
+                            this.posterUrl = imageUrl(ep.stillPath)
+                            this.description = ep.overview
                         }
                     )
                 }
             } catch (_: Exception) {
-                val count = (season.episodeCount ?: 0)
+                val count = (seasonItem.episodeCount ?: 0)
                     .coerceIn(1, 100)
 
                 for (episodeNumber in 1..count) {
@@ -419,7 +419,7 @@ class GhostflixProvider : MainAPI() {
 
                     episodes.add(
                         newEpisode(playData) {
-                            name = "Episode $episodeNumber"
+                            this.name = "Episode $episodeNumber"
                             this.season = seasonNumber
                             this.episode = episodeNumber
                         }
@@ -429,15 +429,15 @@ class GhostflixProvider : MainAPI() {
         }
 
         return newTvSeriesLoadResponse(
-            title,
+            mediaTitle,
             url,
             TvType.TvSeries,
             episodes
         ) {
             this.posterUrl = poster
             this.backgroundPosterUrl = backdrop ?: poster
-            this.plot = description
-            this.year = year
+            this.plot = plotOverview
+            this.year = releaseYear
         }
     }
 
