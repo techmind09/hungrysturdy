@@ -9,8 +9,8 @@ import java.util.concurrent.ConcurrentHashMap
 
 class GhostflixProvider : MainAPI() {
     // Multi-domain support for both .uk and .st
-    override var mainUrl = "https://ghostflix.uk"
-    private val altUrl = "https://ghostflix.st"
+    override var mainUrl = "https://ghostflix.st"
+    private val altUrl = "https://ghostflix.uk"
     
     override var name = "Ghostflix"
     override val hasMainPage = true
