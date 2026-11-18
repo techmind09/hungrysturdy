@@ -11,6 +11,7 @@ class Plugin : Plugin() {
         registerMainAPI(SflixProvider())
         registerMainAPI(HindiDramaProvider())
         registerMainAPI(MovieFoxProvider())
+        registerMainAPI(KDHindiDubbed())
         // LuluStream Extractors
         registerExtractorAPI(LuluVidExtractor())
         registerExtractorAPI(LuluStreamAltExtractor())
