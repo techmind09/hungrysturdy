@@ -8,7 +8,7 @@ import org.jsoup.nodes.Element
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 
 class KDHindiDubbed : MainAPI() {
-    override var mainUrl = "https://dramacool.website"
+    override var mainUrl = "https://kdhindidubbed.cfd"
     override var name = "KDHindiDubbed"
     override val hasMainPage = true
     override var lang = "hi"
