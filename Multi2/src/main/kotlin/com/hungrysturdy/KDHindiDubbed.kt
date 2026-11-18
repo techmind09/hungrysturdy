@@ -1,14 +1,14 @@
 package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 
 class KDHindiDubbed : MainAPI() {
-    override var mainUrl = "https://kdhindidubbed.cfd"
+    override var mainUrl = "https://dramacool.website"
     override var name = "KDHindiDubbed"
     override val hasMainPage = true
     override var lang = "hi"
@@ -75,17 +75,13 @@ class KDHindiDubbed : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
-        // Fix: Pagination logic to prevent Page 1 redirecting to identical Homepage
         val urlWithoutPage = request.data.substringBeforeLast("page/")
-        val pageUrl = if (page == 1) {
-            urlWithoutPage
-        } else {
-            "${urlWithoutPage}page/$page/"
-        }
+        val pageUrl = if (page == 1) urlWithoutPage else "${urlWithoutPage}page/$page/"
 
         val document = fetchDoc(pageUrl)
-        val home = document.select("article.post, article.item, div.post-item, div.herald-lay-c").mapNotNull { it.toSearchResult() }
-        
+        val home = document.select("article.post, article.item, div.post-item, div.herald-lay-c")
+            .mapNotNull { it.toSearchResult() }
+
         return newHomePageResponse(request.name, home, hasNext = home.isNotEmpty())
     }
 
@@ -93,10 +89,8 @@ class KDHindiDubbed : MainAPI() {
         val titleElement = this.selectFirst("h2.entry-title a, h2 a, h3 a, a.title, h2.title a, .post-title a") ?: return null
         val title = titleElement.text().trim()
         val href = fixUrl(titleElement.attr("href"))
-        
         if (title.isBlank() || href.isBlank()) return null
 
-        // Fix: Prioritize lazy-load attributes to prevent blank/same posters
         val imgElement = this.selectFirst("img")
         val posterUrl = fixUrl(
             imgElement?.attr("data-src")?.takeIf { it.isNotBlank() }
@@ -107,7 +101,6 @@ class KDHindiDubbed : MainAPI() {
         )
 
         val type = if (title.contains("Movie", true)) TvType.Movie else TvType.TvSeries
-        
         return newMovieSearchResponse(title, href, type) {
             this.posterUrl = posterUrl
         }
@@ -116,7 +109,6 @@ class KDHindiDubbed : MainAPI() {
     override suspend fun search(query: String): List<SearchResponse> {
         val encoded = java.net.URLEncoder.encode(query.trim(), "UTF-8")
         val document = fetchDoc("$mainUrl/?s=$encoded")
-        
         return document.select("article.post, article.item, div.post-item, div.herald-lay-c")
             .mapNotNull { it.toSearchResult() }
             .distinctBy { it.url }
@@ -142,6 +134,7 @@ class KDHindiDubbed : MainAPI() {
         val pagesToScan = mutableListOf<Pair<Document, String>>()
         pagesToScan.add(document to "")
 
+        // Sub-pages like links.dramashindi.online / kdhindidubbed.cfd / 480p-720p-1080p Single Episode buttons
         val subPageLinks = document.select(".entry-content a[href]").mapNotNull { el ->
             val href = el.attr("href").trim()
             val text = el.text().trim()
@@ -155,6 +148,8 @@ class KDHindiDubbed : MainAPI() {
 
             if (href.startsWith("http") && (
                     text.contains("DOWNLOAD", true) ||
+                    text.contains("Single Episode", true) ||
+                    href.contains("dramashindi") ||
                     href.contains("kdhindidubbed") ||
                     (href.contains("dramacool") && href != url && !href.contains("/category/") && !href.contains("/tag/"))
                 )
@@ -231,7 +226,11 @@ class KDHindiDubbed : MainAPI() {
                u.contains("vikingfile") ||
                u.contains("send.now") ||
                u.contains("susanexpectcare") ||
-               u.contains("voe.sx")
+               u.contains("voe.sx") ||
+               u.contains("hubcloud.mov/drive/") ||
+               u.contains("hubcloud.cx/drive/") ||
+               u.contains("hbplay.pages.dev") ||
+               u.contains("gamerxyt")
     }
 
     private fun parseEpisodesFromDoc(
@@ -240,7 +239,7 @@ class KDHindiDubbed : MainAPI() {
         episodeMap: LinkedHashMap<Int, MutableList<EpisodeLink>>,
         allLinksForMovie: MutableList<EpisodeLink>
     ) {
-        val contentRoot = doc.selectFirst(".entry-content") ?: doc.body()
+        val contentRoot = doc.selectFirst(".entry-content, .post-content, article") ?: doc.body()
         val elements = contentRoot.select("h1, h2, h3, h4, h5, h6, p, strong, b, span, a[href], li")
 
         var currentEp = 1
@@ -255,9 +254,8 @@ class KDHindiDubbed : MainAPI() {
                 else if (ownText.contains("480p", true)) currentQuality = "480p"
             }
 
-            val epMatch = Regex("""(?i)Episode\s*[-–:]?\s*0*(\d{1,3})""").find(ownText)
-                ?: Regex("""(?i)\bEp\s*[-–:]?\s*0*(\d{1,3})\b""").find(ownText)
-
+            // Matches "Ep01 – 480p [246.66 MB]" or "Episode - 01"
+            val epMatch = Regex("""(?i)(?:Episode|Ep)\s*[-–:]?\s*0*(\d{1,3})""").find(ownText)
             if (epMatch != null && el.tagName() != "a") {
                 currentEp = epMatch.groupValues[1].toIntOrNull() ?: currentEp
             }
@@ -269,7 +267,8 @@ class KDHindiDubbed : MainAPI() {
                 if (href.isBlank() || !href.startsWith("http")) continue
                 if (href.contains("/category/") || href.contains("/tag/") || href.contains("t.me") ||
                     href.contains("telegram.me") || href.contains("facebook.com") || href.contains("twitter.com") ||
-                    linkText.contains("Telegram", true) || linkText.contains("DOWNLOAD LINKS", true)) continue
+                    href.contains("kdramalover.com") || linkText.contains("Telegram", true) ||
+                    linkText.contains("DOWNLOAD LINKS", true) || linkText.contains("Single Episode", true)) continue
 
                 val linkEp = Regex("""(?i)(?:Episode|Ep)\s*[-–:]?\s*0*(\d{1,3})""").find(linkText)?.groupValues?.get(1)?.toIntOrNull()
                 if (linkEp != null) {
@@ -278,13 +277,15 @@ class KDHindiDubbed : MainAPI() {
 
                 if (isDirectServerHost(href) ||
                     href.contains("momofile") ||
+                    href.contains("gdflix") ||
                     href.contains("redir") ||
                     href.contains("fifa") ||
+                    linkText.contains("HubCloud", true) ||
+                    linkText.contains("Instant DL", true) ||
                     linkText.contains("MultipleLink", true) ||
                     linkText.contains("XCloud", true) ||
                     linkText.contains("Download", true) ||
-                    linkText.contains("Watch", true) ||
-                    linkText.contains("Server", true)
+                    linkText.contains("Watch", true)
                 ) {
                     val epObj = EpisodeLink(href, currentEp, currentQuality)
                     episodeMap.getOrPut(currentEp) { mutableListOf() }.add(epObj)
