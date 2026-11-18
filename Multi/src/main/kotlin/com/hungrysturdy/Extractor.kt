@@ -451,7 +451,7 @@ object KatServerLogic {
                 repeat(5) {
                     kotlinx.coroutines.delay(2000)
                     try {
-                        resp = app.get(currentUrl, headers = katBrowserHeaders, referer = refererUrl, interceptor = katCfKiller, interceptor = katCfKiller)
+                        resp = app.get(currentUrl, headers = katBrowserHeaders, referer = refererUrl, interceptor = katCfKiller)
                         respText = resp.text.trim()
                         if (parseJsonResponse(respText, quality, callback)) return
                     } catch (_: Exception) {}
@@ -559,7 +559,7 @@ object KatServerLogic {
         try {
             val cleaned = cleanUrl(url)
             val responseText = app.get(cleaned, headers = katBrowserHeaders, interceptor = katCfKiller).text
-            val directLink = Regex("""window\.open\(["'](https?://fuckingfast\.net/dl/[^"']+)["']\)""")
+            val directLink = Regex("""window\.open\(["'](https?://fuckingfast\.net/dl/[^"']+)["']""")
                 .find(responseText)?.groupValues?.get(1)
                 ?: Regex("""["'](https?://fuckingfast\.net/dl/[^"']+)["']""")
                     .find(responseText)?.groupValues?.get(1)
