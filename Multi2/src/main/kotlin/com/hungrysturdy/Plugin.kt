@@ -16,6 +16,7 @@ class Plugin : Plugin() {
         registerExtractorAPI(LuluVidExtractor())
         registerExtractorAPI(LuluStreamAltExtractor())
         registerExtractorAPI(LuluVdoExtractor())
+        registerExtractorAPI(KDHindiDubbedExtractor())
 
         // EarnVids Extractors
         registerExtractorAPI(EarnVidsExtractor())
