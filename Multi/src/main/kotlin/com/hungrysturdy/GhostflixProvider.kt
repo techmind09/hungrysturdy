@@ -267,7 +267,7 @@ class GhostflixProvider : MainAPI() {
         }
 
         val candidates = linkedSetOf<String>()
-        val visited = mutableSetOf<String>()
+        val visited = ConcurrentHashMap.newKeySet<String>()
         val streamPattern = Regex("""https?://[^\s"'<>\\]+""", RegexOption.IGNORE_CASE)
         val iframePattern = Regex("""(?:src|data-src|file|source)\s*[:=]\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
 
@@ -371,7 +371,7 @@ class GhostflixProvider : MainAPI() {
             } catch (_: Exception) {}
         }
 
-        return visited.size > candidates.size
+        return true
     }
 
     private fun isSupportedSource(url: String): Boolean {
