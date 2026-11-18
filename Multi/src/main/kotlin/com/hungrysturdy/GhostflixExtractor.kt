@@ -12,7 +12,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 
 open class GhostFlixExtractor : ExtractorApi() {
     override val name: String = "GhostFlixEmbed"
-    override val mainUrl: String = "https://ghostflix.uk"
+    override val mainUrl: String = "https://ghostflix.st"
     override val requiresReferer = true
 
     companion object {
@@ -125,7 +125,6 @@ open class GhostFlixExtractor : ExtractorApi() {
             "Accept" to "*/*"
         )
 
-        // Updated Regex to match /api/playlist/ and /api/orion/ paths along with standard .m3u8/.mp4
         val regex = Regex("""https?://[^\s"'<>\\]+(?:\.(?:m3u8|mp4)|/api/proxy/hls|/api/orion/|/api/playlist/)[^\s"'<>\\]*""")
         val matchedUrls = regex.findAll(unescaped)
             .map { it.value.trimEnd(',', ';', ')', ']') }
@@ -173,6 +172,16 @@ open class GhostFlixExtractor : ExtractorApi() {
                 }
             }
     }
+}
+
+class GhostflixStExtractor : GhostFlixExtractor() {
+    override val name = "Ghostflix"
+    override val mainUrl = "https://ghostflix.st"
+}
+
+class GhostflixUkExtractor : GhostFlixExtractor() {
+    override val name = "Ghostflix"
+    override val mainUrl = "https://ghostflix.uk"
 }
 
 class CineSrcExtractor : GhostFlixExtractor() {
