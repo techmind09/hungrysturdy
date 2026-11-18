@@ -295,7 +295,7 @@ class GhostflixProvider : MainAPI() {
                 }
 
                 iframePattern.findAll(html).forEach {
-                    val raw = ihm@ it.groupValues[1]
+                    val raw = it.groupValues[1]
                     try {
                         val resolved = URI(watchPage).resolve(raw).toString()
                         if (resolved.startsWith("http")) candidates.add(resolved)
@@ -307,7 +307,6 @@ class GhostflixProvider : MainAPI() {
         }
 
         if (candidates.isEmpty()) {
-            // Fallback default embeds if HTML scraping fails
             if (type == "tv") {
                 candidates.add("https://cinesrc.st/embed/tv/$id/$season/$episode")
                 candidates.add("https://embed.vidrift.net/embed/tv/$id/$season/$episode")
@@ -325,8 +324,8 @@ class GhostflixProvider : MainAPI() {
 
         val extractor = GhostFlixExtractor()
 
-        for (sourceUrl in candidates) {
-            if (!visited.add(sourceUrl)) continue
+        candidates.toList().amap { sourceUrl ->
+            if (!visited.add(sourceUrl)) return@amap
             val sourceName = getSourceName(sourceUrl)
 
             try {
@@ -343,7 +342,7 @@ class GhostflixProvider : MainAPI() {
                             )
                         }
                     }
-                    continue
+                    return@amap
                 }
 
                 loadExtractor(sourceUrl, "$mainUrl/", subtitleCallback) { link ->
