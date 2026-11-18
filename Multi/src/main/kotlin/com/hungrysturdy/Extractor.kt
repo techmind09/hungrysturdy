@@ -447,11 +447,11 @@ object KatServerLogic {
 
             if (parseJsonResponse(respText, quality, callback)) return
 
-            if (respText.contains("In Queue") || respText.contains("queue") || respText.contains("false")) {
+            if (respText.contains("In Queue") || respText.contains("queue") || respText.contains("false") || respText.contains("challenge-platform")) {
                 repeat(5) {
                     kotlinx.coroutines.delay(2000)
                     try {
-                        resp = app.get(currentUrl, headers = katBrowserHeaders, referer = refererUrl, interceptor = katCfKiller)
+                        resp = app.get(currentUrl, headers = katBrowserHeaders, referer = refererUrl, interceptor = katCfKiller, interceptor = katCfKiller)
                         respText = resp.text.trim()
                         if (parseJsonResponse(respText, quality, callback)) return
                     } catch (_: Exception) {}
@@ -492,7 +492,7 @@ object KatServerLogic {
                 val quickHref = cleanUrl(a.attr("href"))
                 if (quickHref.startsWith("http") && !quickHref.contains("gdflix/cloud")) {
                     try {
-                        val quickResp = app.get(quickHref, headers = katBrowserHeaders, referer = cloudUrl, allowRedirects = true)
+                        val quickResp = app.get(quickHref, headers = katBrowserHeaders, referer = cloudUrl, allowRedirects = true, interceptor = katCfKiller)
                         val finalQuickUrl = cleanUrl(quickResp.url.ifEmpty { quickHref })
                         if (finalQuickUrl.startsWith("http") && emitted.add(finalQuickUrl)) {
                             callback.invoke(
