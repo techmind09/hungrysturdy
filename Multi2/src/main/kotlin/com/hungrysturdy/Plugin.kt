@@ -10,7 +10,7 @@ class Plugin : Plugin() {
         // Main Providers
         registerMainAPI(SflixProvider())
         registerMainAPI(HindiDramaProvider())
-
+        registerMainAPI(MovieFoxProvider())
         // LuluStream Extractors
         registerExtractorAPI(LuluVidExtractor())
         registerExtractorAPI(LuluStreamAltExtractor())
