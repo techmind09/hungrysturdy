@@ -8,7 +8,10 @@ import org.jsoup.nodes.Document
 import java.util.concurrent.ConcurrentHashMap
 
 class GhostflixProvider : MainAPI() {
+    // Multi-domain support for both .uk and .st
     override var mainUrl = "https://ghostflix.uk"
+    private val altUrl = "https://ghostflix.st"
+    
     override var name = "Ghostflix"
     override val hasMainPage = true
     override var lang = "en"
@@ -90,19 +93,23 @@ class GhostflixProvider : MainAPI() {
             }
         } catch (_: Exception) {}
 
-        try {
-            val html = app.get(mainUrl, headers = cfHeaders).text
-            val document = org.jsoup.Jsoup.parse(html)
-            val trendingItems = extractNextFlightTrending(document)
-            if (trendingItems.isNotEmpty()) {
-                homePageList.add(HomePageList(request.name, trendingItems))
-            }
-        } catch (_: Exception) {}
+        // Try scraping from mainUrl (.uk) or altUrl (.st)
+        for (domain in listOf(mainUrl, altUrl)) {
+            try {
+                val html = app.get(domain, headers = cfHeaders).text
+                val document = org.jsoup.Jsoup.parse(html)
+                val trendingItems = extractNextFlightTrending(document, domain)
+                if (trendingItems.isNotEmpty()) {
+                    homePageList.add(HomePageList(request.name, trendingItems))
+                    break
+                }
+            } catch (_: Exception) {}
+        }
 
         return newHomePageResponse(homePageList, hasNext = false)
     }
 
-    private fun extractNextFlightTrending(document: Document): List<SearchResponse> {
+    private fun extractNextFlightTrending(document: Document, domain: String): List<SearchResponse> {
         val results = mutableListOf<SearchResponse>()
         val scripts = document.select("script").map { it.data() }
         val regex = Regex("""\"initialTrending\"\s*:\s*(\[\{.*?\}\])""")
@@ -119,7 +126,7 @@ class GhostflixProvider : MainAPI() {
                 val mediaId = item.id ?: return@forEach
                 val isTv = item.mediaType.equals("tv", ignoreCase = true)
                 val poster = item.posterPath?.let { "$TMDB_IMAGE_BASE$it" }
-                val targetUrl = if (isTv) "$mainUrl/tv/$mediaId" else "$mainUrl/movie/$mediaId"
+                val targetUrl = if (isTv) "$domain/tv/$mediaId" else "$domain/movie/$mediaId"
 
                 if (isTv) {
                     results.add(newTvSeriesSearchResponse(title, targetUrl, TvType.TvSeries) { this.posterUrl = poster })
@@ -272,51 +279,54 @@ class GhostflixProvider : MainAPI() {
 
         val serverMap = linkedMapOf<String, String>()
 
-        // 1. Ghostflix Watch API Response Parse
-        val watchApiCandidates = if (isTv) {
-            listOf(
-                "$mainUrl/api/watch?type=tv&id=$id&season=$s&episode=$e",
-                "$mainUrl/api/sources?type=tv&id=$id&season=$s&episode=$e",
-                "$mainUrl/watch/tv/$id/$s/$e"
-            )
-        } else {
-            listOf(
-                "$mainUrl/api/watch?type=movie&id=$id",
-                "$mainUrl/api/sources?type=movie&id=$id",
-                "$mainUrl/watch/movie/$id"
-            )
-        }
+        // 1. Fetch from Ghostflix Watch APIs (.uk and .st domains)
+        for (domain in listOf(mainUrl, altUrl)) {
+            val watchApiCandidates = if (isTv) {
+                listOf(
+                    "$domain/api/watch?type=tv&id=$id&season=$s&episode=$e",
+                    "$domain/api/sources?type=tv&id=$id&season=$s&episode=$e",
+                    "$domain/watch/tv/$id/$s/$e"
+                )
+            } else {
+                listOf(
+                    "$domain/api/watch?type=movie&id=$id",
+                    "$domain/api/sources?type=movie&id=$id",
+                    "$domain/watch/movie/$id"
+                )
+            }
 
-        val apiHeaders = cfHeaders.toMutableMap().apply {
-            put("Accept", "application/json, text/plain, */*")
-            put("Referer", "$mainUrl/")
-        }
+            val apiHeaders = cfHeaders.toMutableMap().apply {
+                put("Accept", "application/json, text/plain, */*")
+                put("Referer", "$domain/")
+            }
 
-        for (apiUrl in watchApiCandidates) {
-            try {
-                val resText = app.get(apiUrl, headers = apiHeaders, timeout = 12).text
-                val watchResp = tryParseJson<GhostflixWatchResponse>(resText)
-                val sources = watchResp?.sources ?: emptyList()
-                if (sources.isNotEmpty()) {
-                    sources.forEach { source ->
-                        val label = source.label?.trim()?.takeIf { it.isNotEmpty() }
-                            ?: source.origin?.replaceFirstChar { it.uppercase() }
-                            ?: "Server"
-                        val src = source.src?.trim()?.takeIf { it.isNotEmpty() } ?: return@forEach
-                        serverMap[label] = src
-                    }
-                    watchResp?.subtitles?.forEach { sub ->
-                        val subUrl = sub.url ?: sub.src
-                        if (!subUrl.isNullOrBlank()) {
-                            subtitleCallback.invoke(SubtitleFile(sub.label ?: sub.lang ?: "English", subUrl))
+            for (apiUrl in watchApiCandidates) {
+                try {
+                    val resText = app.get(apiUrl, headers = apiHeaders, timeout = 10).text
+                    val watchResp = tryParseJson<GhostflixWatchResponse>(resText)
+                    val sources = watchResp?.sources ?: emptyList()
+                    if (sources.isNotEmpty()) {
+                        sources.forEach { source ->
+                            val label = source.label?.trim()?.takeIf { it.isNotEmpty() }
+                                ?: source.origin?.replaceFirstChar { it.uppercase() }
+                                ?: "Server"
+                            val src = source.src?.trim()?.takeIf { it.isNotEmpty() } ?: return@forEach
+                            serverMap[label] = src
                         }
+                        watchResp?.subtitles?.forEach { sub ->
+                            val subUrl = sub.url ?: sub.src
+                            if (!subUrl.isNullOrBlank()) {
+                                subtitleCallback.invoke(SubtitleFile(sub.label ?: sub.lang ?: "English", subUrl))
+                            }
+                        }
+                        break
                     }
-                    break
-                }
-            } catch (_: Exception) {}
+                } catch (_: Exception) {}
+            }
+            if (serverMap.isNotEmpty()) break
         }
 
-        // 2. Default Fallback Sources
+        // 2. Comprehensive Default Fallback Sources for All Servers
         val defaultSources = if (isTv) {
             listOf(
                 "CineSrc" to "https://cinesrc.st/embed/tv/$id/$s/$e",
