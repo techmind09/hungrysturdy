@@ -5,9 +5,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
 import org.jsoup.Jsoup
-import java.net.URI
 import java.net.URLEncoder
-import java.util.concurrent.ConcurrentHashMap
 
 class GhostflixProvider : MainAPI() {
 
@@ -27,10 +25,17 @@ class GhostflixProvider : MainAPI() {
     )
 
     companion object {
-        private const val TMDB_API_KEY = "e76d52f346700d0edf06fb2e938f98ad"
-        private const val TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w500"
-        private const val TMDB_BACKDROP_BASE = "https://image.tmdb.org/t/p/original"
-        private const val USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36"
+        private const val TMDB_API_KEY =
+            "e76d52f346700d0edf06fb2e938f98ad"
+
+        private const val TMDB_IMAGE_BASE =
+            "https://image.tmdb.org/t/p/w500"
+
+        private const val TMDB_BACKDROP_BASE =
+            "https://image.tmdb.org/t/p/original"
+
+        private const val USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36"
     }
 
     private val requestHeaders = mapOf(
@@ -64,10 +69,15 @@ class GhostflixProvider : MainAPI() {
     }
 
     private fun imageUrl(path: String?): String? {
-        return path?.takeIf { it.isNotBlank() }?.let { "$TMDB_IMAGE_BASE$it" }
+        return path?.takeIf { it.isNotBlank() }
+            ?.let { "$TMDB_IMAGE_BASE$it" }
     }
 
-    private fun watchUrl(domain: String, id: String, type: String): String {
+    private fun watchUrl(
+        domain: String,
+        id: String,
+        type: String
+    ): String {
         return "$domain/watch/$type/$id"
     }
 
@@ -76,92 +86,220 @@ class GhostflixProvider : MainAPI() {
         domain: String,
         forcedTv: Boolean = false
     ): SearchResponse? {
-        val title = item.title ?: item.name ?: item.originalTitle ?: item.originalName ?: return null
+        val title = item.title
+            ?: item.name
+            ?: item.originalTitle
+            ?: item.originalName
+            ?: return null
+
         val id = item.id ?: return null
-        val isTv = forcedTv || item.mediaType.equals("tv", true) || item.name != null || item.originalName != null
-        val target = watchUrl(domain, id.toString(), if (isTv) "tv" else "movie")
+
+        val isTv = forcedTv ||
+            item.mediaType.equals("tv", true) ||
+            item.name != null ||
+            item.originalName != null
+
+        val target = watchUrl(
+            domain,
+            id.toString(),
+            if (isTv) "tv" else "movie"
+        )
+
         val poster = imageUrl(item.posterPath)
 
         return if (isTv) {
-            newTvSeriesSearchResponse(title, target, TvType.TvSeries) {
+            newTvSeriesSearchResponse(
+                title,
+                target,
+                TvType.TvSeries
+            ) {
                 this.posterUrl = poster
             }
         } else {
-            newMovieSearchResponse(title, target, TvType.Movie) {
+            newMovieSearchResponse(
+                title,
+                target,
+                TvType.Movie
+            ) {
                 this.posterUrl = poster
             }
         }
     }
 
-    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+    override suspend fun getMainPage(
+        page: Int,
+        request: MainPageRequest
+    ): HomePageResponse {
         val lists = mutableListOf<HomePageList>()
 
         try {
             val url = "${tmdbApi(request.data)}&page=$page"
-            val response = app.get(url, headers = requestHeaders).parsedSafe<TmdbPageResponse>()
-            val isTv = request.data.startsWith("tv/") || request.data.contains("discover/tv")
+
+            val response = app.get(
+                url,
+                headers = requestHeaders
+            ).parsedSafe<TmdbPageResponse>()
+
+            val isTv = request.data.startsWith("tv/") ||
+                request.data.contains("discover/tv")
 
             val items = response?.results.orEmpty().mapNotNull {
-                searchResponse(it, mainUrl, forcedTv = isTv)
+                searchResponse(
+                    it,
+                    mainUrl,
+                    forcedTv = isTv
+                )
             }
 
             if (items.isNotEmpty()) {
-                lists.add(HomePageList(request.name, items))
-                return newHomePageResponse(lists, hasNext = response?.results?.isNotEmpty() == true)
-            }
-        } catch (_: Exception) {}
+                lists.add(
+                    HomePageList(
+                        request.name,
+                        items
+                    )
+                )
 
+                return newHomePageResponse(
+                    lists,
+                    hasNext = response?.results?.isNotEmpty() == true
+                )
+            }
+        } catch (_: Exception) {
+        }
+
+        // Website fallback
         for (domain in listOf(mainUrl, altUrl)) {
             try {
-                val html = app.get(domain, headers = requestHeaders).text
+                val html = app.get(
+                    domain,
+                    headers = requestHeaders
+                ).text
+
                 val document = Jsoup.parse(html, domain)
                 val items = extractWebsiteItems(document, domain)
+
                 if (items.isNotEmpty()) {
-                    lists.add(HomePageList(request.name, items))
+                    lists.add(
+                        HomePageList(
+                            request.name,
+                            items
+                        )
+                    )
                     break
                 }
-            } catch (_: Exception) {}
-        }
-
-        return newHomePageResponse(lists, hasNext = false)
-    }
-
-    private fun extractWebsiteItems(document: org.jsoup.nodes.Document, domain: String): List<SearchResponse> {
-        val results = mutableListOf<SearchResponse>()
-        document.select("a[href*='/movie/'], a[href*='/tv/'], a[href*='/watch/']").forEach { element ->
-            val href = element.attr("href")
-            val id = Regex("""/(\d+)(?:[/?#]|$)""").find(href)?.groupValues?.get(1) ?: return@forEach
-            val title = element.selectFirst("[title], h2, h3, .title")?.let {
-                it.attr("title").ifBlank { it.text() }
-            }?.takeIf { it.isNotBlank() } ?: element.attr("title").takeIf { it.isNotBlank() } ?: return@forEach
-
-            val isTv = href.contains("/tv/")
-            val poster = element.selectFirst("img")?.let { it.absUrl("src").ifBlank { it.absUrl("data-src") } }
-            val target = watchUrl(domain, id, if (isTv) "tv" else "movie")
-
-            if (isTv) {
-                results.add(newTvSeriesSearchResponse(title, target, TvType.TvSeries) { posterUrl = poster })
-            } else {
-                results.add(newMovieSearchResponse(title, target, TvType.Movie) { posterUrl = poster })
+            } catch (_: Exception) {
             }
         }
+
+        return newHomePageResponse(
+            lists,
+            hasNext = false
+        )
+    }
+
+    private fun extractWebsiteItems(
+        document: org.jsoup.nodes.Document,
+        domain: String
+    ): List<SearchResponse> {
+        val results = mutableListOf<SearchResponse>()
+
+        document.select(
+            "a[href*='/movie/'], a[href*='/tv/'], a[href*='/watch/']"
+        ).forEach { element ->
+            val href = element.attr("href")
+            val id = Regex("""/(\d+)(?:[/?#]|$)""")
+                .find(href)
+                ?.groupValues
+                ?.get(1)
+                ?: return@forEach
+
+            val title = element.selectFirst(
+                "[title], h2, h3, .title"
+            )?.let {
+                it.attr("title").ifBlank { it.text() }
+            }?.takeIf { it.isNotBlank() }
+                ?: element.attr("title").takeIf { it.isNotBlank() }
+                ?: return@forEach
+
+            val isTv = href.contains("/tv/")
+
+            val poster = element.selectFirst("img")
+                ?.let {
+                    it.absUrl("src").ifBlank {
+                        it.absUrl("data-src")
+                    }
+                }
+
+            val target = watchUrl(
+                domain,
+                id,
+                if (isTv) "tv" else "movie"
+            )
+
+            if (isTv) {
+                results.add(
+                    newTvSeriesSearchResponse(
+                        title,
+                        target,
+                        TvType.TvSeries
+                    ) {
+                        posterUrl = poster
+                    }
+                )
+            } else {
+                results.add(
+                    newMovieSearchResponse(
+                        title,
+                        target,
+                        TvType.Movie
+                    ) {
+                        posterUrl = poster
+                    }
+                )
+            }
+        }
+
         return results.distinctBy { it.url }
     }
 
-    override suspend fun search(query: String): List<SearchResponse> {
-        val encoded = URLEncoder.encode(query, "UTF-8")
+    override suspend fun search(
+        query: String
+    ): List<SearchResponse> {
+        val encoded = URLEncoder.encode(
+            query,
+            "UTF-8"
+        )
+
         try {
-            val response = app.get(tmdbApi("search/multi?query=$encoded&page=1"), headers = requestHeaders).parsedSafe<TmdbPageResponse>()
-            val results = response?.results.orEmpty().filterNot { it.mediaType.equals("person", true) }.mapNotNull {
-                searchResponse(it, mainUrl)
+            val response = app.get(
+                tmdbApi("search/multi?query=$encoded&page=1"),
+                headers = requestHeaders
+            ).parsedSafe<TmdbPageResponse>()
+
+            val results = response?.results.orEmpty()
+                .filterNot {
+                    it.mediaType.equals("person", true)
+                }
+                .mapNotNull {
+                    searchResponse(it, mainUrl)
+                }
+
+            if (results.isNotEmpty()) {
+                return results
             }
-            if (results.isNotEmpty()) return results
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
+
         return emptyList()
     }
 
-    override suspend fun load(url: String): LoadResponse? {
-        val match = Regex("""/(?:watch/)?(movie|tv)/(\d+)""").find(url) ?: return null
+    override suspend fun load(
+        url: String
+    ): LoadResponse? {
+        val match = Regex(
+            """/(?:watch/)?(movie|tv)/(\d+)"""
+        ).find(url) ?: return null
+
         val mediaType = match.groupValues[1]
         val tmdbId = match.groupValues[2]
         val isTv = mediaType == "tv"
@@ -174,20 +312,47 @@ class GhostflixProvider : MainAPI() {
         var seasons: List<TmdbSeason> = emptyList()
 
         try {
-            val details = app.get(tmdbApi("$mediaType/$tmdbId"), headers = requestHeaders).parsedSafe<TmdbDetails>()
+            val details = app.get(
+                tmdbApi("$mediaType/$tmdbId"),
+                headers = requestHeaders
+            ).parsedSafe<TmdbDetails>()
+
             if (details != null) {
-                title = details.title ?: details.name ?: title
+                title = details.title
+                    ?: details.name
+                    ?: title
+
                 description = details.overview.orEmpty()
                 poster = imageUrl(details.posterPath)
-                backdrop = details.backdropPath?.let { "$TMDB_BACKDROP_BASE$it" }
-                year = (details.releaseDate ?: details.firstAirDate)?.take(4)?.toIntOrNull()
+
+                backdrop = details.backdropPath?.let {
+                    "$TMDB_BACKDROP_BASE$it"
+                }
+
+                year = (
+                    details.releaseDate
+                        ?: details.firstAirDate
+                    )?.take(4)?.toIntOrNull()
+
                 seasons = details.seasons.orEmpty()
             }
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
 
         if (!isTv) {
-            val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "movie"))
-            return newMovieLoadResponse(title, url, TvType.Movie, playData) {
+            val playData = mapper.writeValueAsString(
+                LoadData(
+                    id = tmdbId,
+                    type = "movie"
+                )
+            )
+
+            return newMovieLoadResponse(
+                title,
+                url,
+                TvType.Movie,
+                playData
+            ) {
                 this.posterUrl = poster
                 this.backgroundPosterUrl = backdrop ?: poster
                 this.plot = description
@@ -196,34 +361,65 @@ class GhostflixProvider : MainAPI() {
         }
 
         val episodes = mutableListOf<Episode>()
-        val validSeasons = seasons.filter { (it.seasonNumber ?: 0) > 0 }
+
+        val validSeasons = seasons.filter {
+            (it.seasonNumber ?: 0) > 0
+        }
 
         for (season in validSeasons) {
             val seasonNumber = season.seasonNumber ?: continue
+
             try {
-                val seasonResponse = app.get(tmdbApi("tv/$tmdbId/season/$seasonNumber"), headers = requestHeaders).parsedSafe<TmdbSeasonDetails>()
+                val seasonResponse = app.get(
+                    tmdbApi(
+                        "tv/$tmdbId/season/$seasonNumber"
+                    ),
+                    headers = requestHeaders
+                ).parsedSafe<TmdbSeasonDetails>()
+
                 for (ep in seasonResponse?.episodes.orEmpty()) {
-                    val episodeNumber = ep.episodeNumber ?: continue
-                    val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = seasonNumber, episode = episodeNumber))
+                    val episodeNumber =
+                        ep.episodeNumber ?: continue
+
+                    val playData = mapper.writeValueAsString(
+                        LoadData(
+                            id = tmdbId,
+                            type = "tv",
+                            season = seasonNumber,
+                            episode = episodeNumber
+                        )
+                    )
 
                     episodes.add(
                         newEpisode(playData) {
-                            this.name = ep.name ?: "Episode $episodeNumber"
+                            name = ep.name
+                                ?: "Episode $episodeNumber"
+
                             this.season = seasonNumber
                             this.episode = episodeNumber
-                            this.posterUrl = imageUrl(ep.stillPath)
-                            this.description = ep.overview
+
+                            posterUrl = imageUrl(ep.stillPath)
+                            description = ep.overview
                         }
                     )
                 }
             } catch (_: Exception) {
-                val count = (season.episodeCount ?: 0).coerceIn(1, 100)
+                val count = (season.episodeCount ?: 0)
+                    .coerceIn(1, 100)
+
                 for (episodeNumber in 1..count) {
-                    val playData = mapper.writeValueAsString(LoadData(id = tmdbId, type = "tv", season = seasonNumber, episode = episodeNumber))
+                    val playData = mapper.writeValueAsString(
+                        LoadData(
+                            id = tmdbId,
+                            type = "tv",
+                            season = seasonNumber,
+                            episode = episodeNumber
+                        )
+                    )
 
                     episodes.add(
                         newEpisode(playData) {
-                            this.name = "Episode $episodeNumber"
+                            name = "Episode $episodeNumber"
                             this.season = seasonNumber
                             this.episode = episodeNumber
                         }
@@ -232,7 +428,12 @@ class GhostflixProvider : MainAPI() {
             }
         }
 
-        return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
+        return newTvSeriesLoadResponse(
+            title,
+            url,
+            TvType.TvSeries,
+            episodes
+        ) {
             this.posterUrl = poster
             this.backgroundPosterUrl = backdrop ?: poster
             this.plot = description
@@ -247,12 +448,13 @@ class GhostflixProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val loadData = tryParseJson<LoadData>(data) ?: return false
-        val type = loadData.type
+
         val id = loadData.id
+        val isTv = loadData.type == "tv"
         val season = loadData.season ?: 1
         val episode = loadData.episode ?: 1
 
-        val watchPages = if (type == "tv") {
+        val watchPages = if (isTv) {
             listOf(
                 "$mainUrl/watch/tv/$id/$season/$episode",
                 "$mainUrl/watch/tv/$id?season=$season&episode=$episode",
@@ -267,177 +469,251 @@ class GhostflixProvider : MainAPI() {
         }
 
         val candidates = linkedSetOf<String>()
-        val visited = ConcurrentHashMap.newKeySet<String>()
-        val streamPattern = Regex("""https?://[^\s"'<>\\]+""", RegexOption.IGNORE_CASE)
-        val iframePattern = Regex("""(?:src|data-src|file|source)\s*[:=]\s*["']([^"']+)["']""", RegexOption.IGNORE_CASE)
+        val emitted = mutableSetOf<String>()
 
+        val urlRegex = Regex(
+            """https?://[^\s"'<>\\]+""",
+            RegexOption.IGNORE_CASE
+        )
+
+        // 1. Extract actual sources from watch pages
         for (watchPage in watchPages) {
             try {
-                val response = app.get(watchPage, headers = requestHeaders, timeout = 20)
+                val response = app.get(
+                    watchPage,
+                    headers = requestHeaders,
+                    timeout = 20
+                )
+
                 if (response.code != 200) continue
 
-                val html = response.text.replace("\\/", "/").replace("\\u0026", "&").replace("&amp;", "&")
-                val document = Jsoup.parse(html, watchPage)
+                val html = response.text
+                    .replace("\\/", "/")
+                    .replace("\\u0026", "&")
+                    .replace("&amp;", "&")
 
-                document.select("iframe[src], iframe[data-src]").forEach { iframe ->
-                    val src = iframe.absUrl("src").ifBlank { iframe.absUrl("data-src") }
-                    if (src.startsWith("http")) candidates.add(src)
-                }
+                val document = Jsoup.parse(
+                    html,
+                    watchPage
+                )
 
-                document.select("video[src], source[src]").forEach { element ->
+                // iframe sources
+                document.select(
+                    "iframe[src], iframe[data-src]"
+                ).forEach { element ->
                     val src = element.absUrl("src")
-                    if (src.startsWith("http")) candidates.add(src)
+                        .ifBlank { element.absUrl("data-src") }
+
+                    if (src.startsWith("http")) {
+                        candidates.add(src)
+                    }
                 }
 
-                streamPattern.findAll(html).forEach {
-                    val found = it.value.trimEnd(',', ';', ')', ']', '}')
-                    if (isSupportedSource(found)) candidates.add(found)
+                // Video sources
+                document.select(
+                    "video[src], source[src]"
+                ).forEach { element ->
+                    val src = element.absUrl("src")
+
+                    if (src.startsWith("http")) {
+                        candidates.add(src)
+                    }
                 }
 
-                iframePattern.findAll(html).forEach {
-                    val raw = it.groupValues[1]
-                    try {
-                        val resolved = URI(watchPage).resolve(raw).toString()
-                        if (resolved.startsWith("http")) candidates.add(resolved)
-                    } catch (_: Exception) {}
+                // JavaScript / HTML URLs
+                urlRegex.findAll(html).forEach { match ->
+                    val src = match.value
+                        .trimEnd(',', ';', ')', ']', '}')
+
+                    if (isSupportedSource(src)) {
+                        candidates.add(src)
+                    }
                 }
 
                 if (candidates.isNotEmpty()) break
-            } catch (_: Exception) {}
-        }
 
-        if (candidates.isEmpty()) {
-            if (type == "tv") {
-                candidates.add("https://cinesrc.st/embed/tv/$id/$season/$episode")
-                candidates.add("https://embed.vidrift.net/embed/tv/$id/$season/$episode")
-                candidates.add("https://www.vidy.st/tv/$id/$season/$episode")
-                candidates.add("https://vidlink.pro/tv/$id/$season/$episode")
-                candidates.add("https://vidcore.org/embed/tv/$id/$season/$episode")
-            } else {
-                candidates.add("https://cinesrc.st/embed/movie/$id")
-                candidates.add("https://embed.vidrift.net/embed/movie/$id")
-                candidates.add("https://www.vidy.st/movie/$id")
-                candidates.add("https://vidlink.pro/movie/$id")
-                candidates.add("https://vidcore.org/embed/movie/$id")
+            } catch (_: Exception) {
             }
         }
 
+        if (candidates.isEmpty()) return false
+
+        // 2. Extract each discovered server
         val extractor = GhostFlixExtractor()
 
-        candidates.toList().amap { sourceUrl ->
-            if (!visited.add(sourceUrl)) return@amap
-            val sourceName = getSourceName(sourceUrl)
+        for (sourceUrl in candidates) {
+            val serverName = when {
+                sourceUrl.contains("cinesrc.st", true) -> "CineSrc"
+                sourceUrl.contains("vidrift.net", true) -> "Vidrift"
+                sourceUrl.contains("goldenkite.top", true) -> "GreenKite"
+                sourceUrl.contains("vidy.st", true) -> "Vidy"
+                sourceUrl.contains("vidcore.org", true) -> "Vidcore"
+                sourceUrl.contains("vidlink.pro", true) -> "VidLink"
+                sourceUrl.contains("vidsrc", true) -> "VidSrc"
+                sourceUrl.contains("embed.su", true) -> "EmbedSu"
+                else -> "Ghostflix Server"
+            }
+
+            val collectedLinks = mutableListOf<ExtractorLink>()
 
             try {
                 if (isDirectStream(sourceUrl)) {
-                    extractor.getUrl(sourceUrl, "$mainUrl/", subtitleCallback) { link ->
-                        val key = link.url
-                        if (visited.add(key)) {
-                            callback(
-                                newExtractorLink(source = name, name = "$sourceName - ${link.name}", url = link.url, type = link.type) {
-                                    referer = link.referer
-                                    quality = link.quality
-                                    headers = link.headers
-                                }
-                            )
-                        }
+                    extractor.getUrl(
+                        sourceUrl,
+                        "$mainUrl/",
+                        subtitleCallback
+                    ) { link ->
+                        collectedLinks.add(link)
                     }
-                    return@amap
+                } else {
+                    // Embed extraction
+                    loadExtractor(
+                        sourceUrl,
+                        "$mainUrl/",
+                        subtitleCallback
+                    ) { link ->
+                        collectedLinks.add(link)
+                    }
+
+                    // Custom extraction
+                    extractor.getUrl(
+                        sourceUrl,
+                        "$mainUrl/",
+                        subtitleCallback
+                    ) { link ->
+                        collectedLinks.add(link)
+                    }
                 }
 
-                loadExtractor(sourceUrl, "$mainUrl/", subtitleCallback) { link ->
-                    if (visited.add(link.url)) {
+                for (link in collectedLinks) {
+                    if (emitted.add(link.url)) {
                         callback(
-                            newExtractorLink(source = name, name = "$sourceName - ${link.name}", url = link.url, type = link.type) {
-                                referer = link.referer
-                                quality = link.quality
-                                headers = link.headers
+                            newExtractorLink(
+                                source = name,
+                                name = "$serverName - ${link.name}",
+                                url = link.url,
+                                type = link.type
+                            ) {
+                                this.referer = link.referer
+                                this.quality = link.quality
+                                this.headers = link.headers
                             }
                         )
                     }
                 }
 
-                extractor.getUrl(sourceUrl, "$mainUrl/", subtitleCallback) { link ->
-                    if (visited.add(link.url)) {
-                        callback(
-                            newExtractorLink(source = name, name = "$sourceName - ${link.name}", url = link.url, type = link.type) {
-                                referer = link.referer
-                                quality = link.quality
-                                headers = link.headers
-                            }
-                        )
-                    }
-                }
-            } catch (_: Exception) {}
+            } catch (_: Exception) {
+            }
         }
 
-        return true
+        return emitted.isNotEmpty()
     }
 
     private fun isSupportedSource(url: String): Boolean {
         val value = url.lowercase()
-        return value.contains(".m3u8") || value.contains(".mp4") || value.contains("/api/orion/") || value.contains("/api/playlist/")
+
+        return value.contains(".m3u8") ||
+            value.contains(".mp4") ||
+            value.contains("/api/orion/") ||
+            value.contains("/api/playlist/")
     }
 
     private fun isDirectStream(url: String): Boolean {
-        val value = url.lowercase()
-        return value.contains(".m3u8") || value.contains(".mp4") || value.contains("/api/orion/") || value.contains("/api/playlist/")
-    }
-
-    private fun getSourceName(url: String): String {
-        val host = try { URI(url).host.orEmpty().lowercase() } catch (_: Exception) { "" }
-        return when {
-            host.contains("cinesrc.st") -> "CineSrc"
-            host.contains("vidrift.net") -> "Vidrift"
-            host.contains("goldenkite.top") -> "GreenKite"
-            host.contains("vidy.st") -> "Vidy"
-            host.contains("vidcore.org") -> "Vidcore"
-            host.contains("vidlink.pro") -> "VidLink"
-            host.contains("vidsrc") -> "VidSrc"
-            host.contains("embed.su") -> "EmbedSu"
-            else -> host.ifBlank { "Ghostflix Server" }
-        }
+        return isSupportedSource(url)
     }
 
     data class LoadData(
-        @JsonProperty("id") val id: String,
-        @JsonProperty("type") val type: String,
-        @JsonProperty("season") val season: Int? = null,
-        @JsonProperty("episode") val episode: Int? = null
+        @JsonProperty("id")
+        val id: String,
+
+        @JsonProperty("type")
+        val type: String,
+
+        @JsonProperty("season")
+        val season: Int? = null,
+
+        @JsonProperty("episode")
+        val episode: Int? = null
     )
 
-    data class TmdbPageResponse(@JsonProperty("results") val results: List<TrendingItem>? = null)
+    data class TmdbPageResponse(
+        @JsonProperty("results")
+        val results: List<TrendingItem>? = null
+    )
+
     data class TrendingItem(
-        @JsonProperty("id") val id: Int? = null,
-        @JsonProperty("title") val title: String? = null,
-        @JsonProperty("name") val name: String? = null,
-        @JsonProperty("original_title") val originalTitle: String? = null,
-        @JsonProperty("original_name") val originalName: String? = null,
-        @JsonProperty("poster_path") val posterPath: String? = null,
-        @JsonProperty("media_type") val mediaType: String? = null
+        @JsonProperty("id")
+        val id: Int? = null,
+
+        @JsonProperty("title")
+        val title: String? = null,
+
+        @JsonProperty("name")
+        val name: String? = null,
+
+        @JsonProperty("original_title")
+        val originalTitle: String? = null,
+
+        @JsonProperty("original_name")
+        val originalName: String? = null,
+
+        @JsonProperty("poster_path")
+        val posterPath: String? = null,
+
+        @JsonProperty("media_type")
+        val mediaType: String? = null
     )
 
     data class TmdbDetails(
-        @JsonProperty("title") val title: String? = null,
-        @JsonProperty("name") val name: String? = null,
-        @JsonProperty("overview") val overview: String? = null,
-        @JsonProperty("poster_path") val posterPath: String? = null,
-        @JsonProperty("backdrop_path") val backdropPath: String? = null,
-        @JsonProperty("release_date") val releaseDate: String? = null,
-        @JsonProperty("first_air_date") val firstAirDate: String? = null,
-        @JsonProperty("seasons") val seasons: List<TmdbSeason>? = null
+        @JsonProperty("title")
+        val title: String? = null,
+
+        @JsonProperty("name")
+        val name: String? = null,
+
+        @JsonProperty("overview")
+        val overview: String? = null,
+
+        @JsonProperty("poster_path")
+        val posterPath: String? = null,
+
+        @JsonProperty("backdrop_path")
+        val backdropPath: String? = null,
+
+        @JsonProperty("release_date")
+        val releaseDate: String? = null,
+
+        @JsonProperty("first_air_date")
+        val firstAirDate: String? = null,
+
+        @JsonProperty("seasons")
+        val seasons: List<TmdbSeason>? = null
     )
 
     data class TmdbSeason(
-        @JsonProperty("season_number") val seasonNumber: Int? = null,
-        @JsonProperty("episode_count") val episodeCount: Int? = null
+        @JsonProperty("season_number")
+        val seasonNumber: Int? = null,
+
+        @JsonProperty("episode_count")
+        val episodeCount: Int? = null
     )
 
-    data class TmdbSeasonDetails(@JsonProperty("episodes") val episodes: List<TmdbEpisode>? = null)
+    data class TmdbSeasonDetails(
+        @JsonProperty("episodes")
+        val episodes: List<TmdbEpisode>? = null
+    )
+
     data class TmdbEpisode(
-        @JsonProperty("episode_number") val episodeNumber: Int? = null,
-        @JsonProperty("name") val name: String? = null,
-        @JsonProperty("overview") val overview: String? = null,
-        @JsonProperty("still_path") val stillPath: String? = null
+        @JsonProperty("episode_number")
+        val episodeNumber: Int? = null,
+
+        @JsonProperty("name")
+        val name: String? = null,
+
+        @JsonProperty("overview")
+        val overview: String? = null,
+
+        @JsonProperty("still_path")
+        val stillPath: String? = null
     )
 }
