@@ -11,7 +11,6 @@ class Plugin : Plugin() {
         registerMainAPI(PrmoviesProvider())
         registerMainAPI(KatDramaProvider())
         registerMainAPI(DramaVerseProvider())
-        registerMainAPI(GhostflixProvider())
         registerMainAPI(GokuHDProvider())
         registerMainAPI(ToonPlayProvider())
 
