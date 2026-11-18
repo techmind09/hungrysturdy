@@ -25,7 +25,8 @@ open class GhostFlixExtractor : ExtractorApi() {
         @JsonProperty("file") val file: String? = null,
         @JsonProperty("source") val source: String? = null,
         @JsonProperty("stream") val stream: String? = null,
-        @JsonProperty("hls") val hls: String? = null
+        @JsonProperty("hls") val hls: String? = null,
+        @JsonProperty("playlist") val playlist: String? = null
     )
 
     override suspend fun getUrl(
@@ -40,7 +41,7 @@ open class GhostFlixExtractor : ExtractorApi() {
             "User-Agent" to USER_AGENT,
             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Referer" to effectiveReferer,
-            "Origin" to mainUrl
+            "Origin" to origin
         )
 
         try {
@@ -52,6 +53,7 @@ open class GhostFlixExtractor : ExtractorApi() {
                     ?: parsedJson?.source
                     ?: parsedJson?.stream
                     ?: parsedJson?.hls
+                    ?: parsedJson?.playlist
 
                 if (!jsonStreamUrl.isNullOrBlank()) {
                     extractLinks(jsonStreamUrl, url, origin, subtitleCallback, callback)
@@ -72,13 +74,13 @@ open class GhostFlixExtractor : ExtractorApi() {
                 listOf(
                     "$origin/api/resolve?type=tv&id=$tmdbId&season=$season&episode=$episode",
                     "$origin/api/source/tv/$tmdbId/$season/$episode",
-                    "$origin/api/tv/$tmdbId/$season/$episode"
+                    "$origin/api/playlist/tv/$tmdbId/$season/$episode"
                 )
             } else {
                 listOf(
                     "$origin/api/resolve?type=movie&id=$tmdbId",
                     "$origin/api/source/movie/$tmdbId",
-                    "$origin/api/movie/$tmdbId"
+                    "$origin/api/playlist/movie/$tmdbId"
                 )
             }
 
@@ -92,7 +94,7 @@ open class GhostFlixExtractor : ExtractorApi() {
             for (apiUrl in apiEndpoints) {
                 try {
                     val apiResp = app.get(apiUrl, headers = apiHeaders, timeout = 10).text
-                    if (apiResp.contains(".m3u8") || apiResp.contains(".mp4") || apiResp.contains("/api/proxy/hls")) {
+                    if (apiResp.contains(".m3u8") || apiResp.contains(".mp4") || apiResp.contains("/api/proxy/hls") || apiResp.contains("/api/playlist/")) {
                         extractLinks(apiResp, url, origin, subtitleCallback, callback)
                         break
                     }
@@ -123,7 +125,8 @@ open class GhostFlixExtractor : ExtractorApi() {
             "Accept" to "*/*"
         )
 
-        val regex = Regex("""https?://[^\s"'<>\\]+(?:\.(?:m3u8|mp4)|/api/proxy/hls)[^\s"'<>\\]*""")
+        // Updated Regex to match /api/playlist/ and /api/orion/ paths along with standard .m3u8/.mp4
+        val regex = Regex("""https?://[^\s"'<>\\]+(?:\.(?:m3u8|mp4)|/api/proxy/hls|/api/orion/|/api/playlist/)[^\s"'<>\\]*""")
         val matchedUrls = regex.findAll(unescaped)
             .map { it.value.trimEnd(',', ';', ')', ']') }
             .distinct()
@@ -133,7 +136,9 @@ open class GhostFlixExtractor : ExtractorApi() {
             if (streamUrl.contains("track_") && !streamUrl.contains("video")) continue
 
             val isM3u8 = streamUrl.contains("m3u8", ignoreCase = true) ||
-                streamUrl.contains("/hls", ignoreCase = true)
+                streamUrl.contains("/hls", ignoreCase = true) ||
+                streamUrl.contains("/playlist/", ignoreCase = true) ||
+                streamUrl.contains("/orion/", ignoreCase = true)
 
             val quality = when {
                 streamUrl.contains("2160") || streamUrl.contains("4k", ignoreCase = true) -> Qualities.P2160.value
@@ -168,4 +173,24 @@ open class GhostFlixExtractor : ExtractorApi() {
                 }
             }
     }
+}
+
+class CineSrcExtractor : GhostFlixExtractor() {
+    override val name = "CineSrc"
+    override val mainUrl = "https://cinesrc.st"
+}
+
+class VidriftExtractor : GhostFlixExtractor() {
+    override val name = "Vidrift"
+    override val mainUrl = "https://embed.vidrift.net"
+}
+
+class VidyExtractor : GhostFlixExtractor() {
+    override val name = "Vidy"
+    override val mainUrl = "https://www.vidy.st"
+}
+
+class VidcoreExtractor : GhostFlixExtractor() {
+    override val name = "Vidcore"
+    override val mainUrl = "https://vidcore.org"
 }
