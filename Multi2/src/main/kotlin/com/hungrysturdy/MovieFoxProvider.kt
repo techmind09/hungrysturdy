@@ -47,7 +47,8 @@ class MovieFoxProvider : MainAPI() {
             }
         }
 
-        return HomePageResponse(home)
+        // FIX: HomePageResponse ki jagah newHomePageResponse method use kiya gaya hai
+        return newHomePageResponse(home)
     }
 
     private fun toSearchResult(element: Element): SearchResponse? {
@@ -94,12 +95,18 @@ class MovieFoxProvider : MainAPI() {
         val isTv = url.contains("/tv/") || url.contains("/dramas/")
 
         return if (isTv) {
-            // Agar TV show ya series hai toh episodes handle karein
             val episodes = mutableListOf<Episode>()
             document.select(".episode-item, .seasons-list a").forEachIndexed { index, element ->
                 val epUrl = element.attr("href")
                 val epName = element.select(".ep-title").text().ifEmpty { "Episode ${index + 1}" }
-                episodes.add(Episode(data = if (epUrl.startsWith("http")) epUrl else "$mainUrl$epUrl", name = epName))
+                
+                // FIX: Episode constructor ki jagah newEpisode helper use kiya gaya hai
+                episodes.add(
+                    newEpisode(if (epUrl.startsWith("http")) epUrl else "$mainUrl$epUrl") {
+                        this.name = epName
+                        this.episode = index + 1
+                    }
+                )
             }
 
             newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
@@ -138,7 +145,6 @@ class MovieFoxProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        // Movie ID extract karna URL se
         val matchId = Regex("-(?:movie|tv|dramas)-(\\d+)").find(data)?.groupValues?.get(1) ?: "1368337"
         val apiUrl = "$mainUrl/api/stream/debrid?type=movie&id=$matchId"
 
@@ -149,7 +155,6 @@ class MovieFoxProvider : MainAPI() {
             parsedJson.streams.forEach { stream ->
                 val streamUrl = if (stream.url.startsWith("http")) stream.url else "$mainUrl${stream.url}"
                 
-                // Subtitles callback mein bhejna
                 stream.subtitles?.forEach { sub ->
                     val subUrl = if (sub.url.startsWith("http")) sub.url else "$mainUrl${sub.url}"
                     subtitleCallback(
@@ -160,11 +165,11 @@ class MovieFoxProvider : MainAPI() {
                     )
                 }
 
-                // Video stream link ko callback mein pass karna
+                // FIX: ExtractorLink ko sahi parameters ke sath configure kiya gaya hai
                 callback(
                     ExtractorLink(
-                        name = "MovieFox (${stream.quality ?: "HD"})",
                         source = name,
+                        name = "MovieFox (${stream.quality ?: "HD"})",
                         url = streamUrl,
                         referer = "$mainUrl/",
                         quality = Qualities.HD.value,
