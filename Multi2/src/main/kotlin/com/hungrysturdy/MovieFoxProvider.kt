@@ -119,15 +119,26 @@ class MovieFoxProvider : MainAPI() {
 
             document.select("a[href*='/watch/'], a[href*='/season/'], .episode-item").forEachIndexed { index, element ->
                 val epUrl = element.attr("href")
-                val epName = element.select(".ep-title, span").text().ifEmpty { element.text() }.ifEmpty { "Episode ${index + 1}" }
-                
+                val epName = element.select(".ep-title, span").text()
+                    .ifEmpty { element.text() }
+                    .ifEmpty { "Episode ${index + 1}" }
+
                 val fixedEpUrl = if (epUrl.startsWith("http")) epUrl else "$mainUrl/${epUrl.trimStart('/')}"
 
-                val seasonMatch = Regex("s(?:eason)?[-/]?(\\d+)", RegexOption.IGNORE_CASE).find(epUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 1
-                val epMatch = Regex("e(?:pisode)?[-/]?(\\d+)", RegexOption.IGNORE_CASE).find(epUrl)?.groupValues?.get(1)?.toIntOrNull() ?: (index + 1)
+                val seasonMatch = Regex("s(?:eason)?[-/]?(\\d+)", RegexOption.IGNORE_CASE)
+                    .find(epUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+                val epMatch = Regex("e(?:pisode)?[-/]?(\\d+)", RegexOption.IGNORE_CASE)
+                    .find(epUrl)?.groupValues?.get(1)?.toIntOrNull() ?: (index + 1)
+
+                val sep = if (fixedEpUrl.contains("?")) "&" else "?"
+                val finalEpUrl = if (fixedEpUrl.contains("season=", true) || fixedEpUrl.contains("episode=", true)) {
+                    fixedEpUrl
+                } else {
+                    "$fixedEpUrl${sep}season=$seasonMatch&episode=$epMatch"
+                }
 
                 episodes.add(
-                    newEpisode(fixedEpUrl) {
+                    newEpisode(finalEpUrl) {
                         this.name = epName
                         this.season = seasonMatch
                         this.episode = epMatch
@@ -136,11 +147,12 @@ class MovieFoxProvider : MainAPI() {
             }
 
             if (episodes.isEmpty()) {
+                val sep = if (url.contains("?")) "&" else "?"
                 for (s in 1..3) {
                     val totalEps = 8
                     for (e in 1..totalEps) {
                         episodes.add(
-                            newEpisode(url) {
+                            newEpisode("$url${sep}season=$s&episode=$e") {
                                 this.name = "Season $s Episode $e"
                                 this.season = s
                                 this.episode = e
@@ -167,17 +179,20 @@ class MovieFoxProvider : MainAPI() {
     )
 
     data class StreamItem(
-        val url: String,
+        val url: String = "",
         val type: String = "",
-        val quality: String? = null,
+        val id: String? = null,
         val provider: String? = null,
+        val label: String? = null,
+        val quality: String? = null,
+        val expiresAt: Long? = null,
         val subtitles: List<SubtitleItem>? = null
     )
 
     data class SubtitleItem(
         val language: String = "",
         val label: String = "",
-        val url: String
+        val url: String = ""
     )
 
     private fun getQuality(value: String?): Int {
@@ -200,83 +215,93 @@ class MovieFoxProvider : MainAPI() {
         return try {
             val doc = app.get(data).document
             val pageHtml = doc.html()
-            
+
             val matchId = Regex("-(?:movie|tv|dramas|anime)-(\\d+)").find(data)?.groupValues?.get(1)
+                ?: Regex("[?&]id=(\\d+)").find(data)?.groupValues?.get(1)
                 ?: Regex("(\\d+)(?:\\D*)$").find(data)?.groupValues?.get(1)
                 ?: return false
 
-            val imdbId = Regex("tt\\d+").find(pageHtml)?.value ?: ""
-            val isTv = data.contains("/tv/") || data.contains("/dramas/") || data.contains("/anime/") || data.contains("season")
+            val imdbId = Regex("tt\\d+").find(pageHtml)?.value.orEmpty()
+            val isTv = data.contains("/tv/") ||
+                data.contains("/dramas/") ||
+                data.contains("/anime/") ||
+                data.contains("season", true)
             val contentType = if (isTv) "tv" else "movie"
 
-            val season = Regex("s(?:eason)?[-/]?(\\d+)", RegexOption.IGNORE_CASE).find(data)?.groupValues?.get(1) ?: "1"
-            val episode = Regex("e(?:pisode)?[-/]?(\\d+)", RegexOption.IGNORE_CASE).find(data)?.groupValues?.get(1) ?: "1"
+            val season = Regex("[?&]season=(\\d+)", RegexOption.IGNORE_CASE).find(data)?.groupValues?.get(1)
+                ?: Regex("s(?:eason)?[-/]?(\\d+)", RegexOption.IGNORE_CASE).find(data)?.groupValues?.get(1)
+                ?: "1"
+            val episode = Regex("[?&]episode=(\\d+)", RegexOption.IGNORE_CASE).find(data)?.groupValues?.get(1)
+                ?: Regex("e(?:pisode)?[-/]?(\\d+)", RegexOption.IGNORE_CASE).find(data)?.groupValues?.get(1)
+                ?: "1"
 
-            val apiUrl = buildString {
-                append("$mainUrl/api/stream/debrid?type=$contentType&id=$matchId")
-                if (isTv) {
-                    append("&season=$season&episode=$episode")
-                }
-                if (imdbId.isNotBlank()) {
-                    append("&imdbId=$imdbId")
-                }
-            }
+            val tvQuery = if (isTv) "&season=$season&episode=$episode" else ""
+            val imdbQuery = if (imdbId.isNotBlank()) "&imdbId=$imdbId" else ""
+
+            val endpoints = listOf(
+                "castle" to "$mainUrl/api/stream/castle?type=$contentType&id=$matchId$tvQuery",
+                "direct" to "$mainUrl/api/stream/direct?type=$contentType&id=$matchId$tvQuery",
+                "debrid" to "$mainUrl/api/stream/debrid?type=$contentType&id=$matchId$imdbQuery$tvQuery",
+                "purstream" to "$mainUrl/api/stream/purstream?type=$contentType&id=$matchId$tvQuery"
+            )
 
             val headers = mapOf(
                 "Referer" to data,
                 "User-Agent" to USER_AGENT
             )
 
-            val response = app.get(apiUrl, headers = headers).text
-            val parsedJson = parseJson<StreamResponse>(response)
-
-            if (parsedJson.streams.isEmpty()) {
-                return false
-            }
-
             var found = false
 
-            parsedJson.streams.forEach { stream ->
-                var streamUrl = stream.url
-                if (streamUrl.isNotBlank() && !streamUrl.startsWith("http")) {
-                    streamUrl = "$mainUrl/${streamUrl.trimStart('/')}"
-                }
+            for ((endpointName, apiUrl) in endpoints) {
+                val rawText = runCatching { app.get(apiUrl, headers = headers).text }.getOrNull().orEmpty()
+                if (rawText.isBlank()) continue
 
-                if (streamUrl.isBlank()) return@forEach
+                val parsed = runCatching { parseJson<StreamResponse>(rawText) }.getOrNull()
+                if (parsed != null && parsed.streams.isNotEmpty()) {
+                    parsed.streams.forEach { stream ->
+                        var streamUrl = stream.url.trim()
+                        if (streamUrl.isBlank()) return@forEach
+                        if (!streamUrl.startsWith("http")) {
+                            streamUrl = "$mainUrl/${streamUrl.trimStart('/')}"
+                        }
 
-                stream.subtitles?.forEach { sub ->
-                    var subUrl = sub.url
-                    if (subUrl.isNotBlank() && !subUrl.startsWith("http")) {
-                        subUrl = "$mainUrl/${subUrl.trimStart('/')}"
-                    }
+                        stream.subtitles?.forEach { sub ->
+                            var subUrl = sub.url.trim()
+                            if (subUrl.isNotBlank() && !subUrl.startsWith("http")) {
+                                subUrl = "$mainUrl/${subUrl.trimStart('/')}"
+                            }
+                            if (subUrl.isNotBlank()) {
+                                subtitleCallback(
+                                    SubtitleFile(
+                                        lang = sub.label.ifBlank { sub.language.ifBlank { "English" } },
+                                        url = subUrl
+                                    )
+                                )
+                            }
+                        }
 
-                    if (subUrl.isNotBlank()) {
-                        subtitleCallback(
-                            SubtitleFile(
-                                lang = sub.label.ifBlank { sub.language.ifBlank { "English" } },
-                                url = subUrl
-                            )
+                        val isHls = stream.type.equals("hls", true) ||
+                            streamUrl.contains(".m3u8", true) ||
+                            streamUrl.contains("/media?ticket=", true)
+
+                        val sourceLabel = stream.provider?.takeIf { it.isNotBlank() } ?: endpointName
+                        val displayName = stream.label?.takeIf { it.isNotBlank() }
+                            ?: "MovieFox ($sourceLabel) - ${stream.quality ?: "HD"}"
+
+                        callback(
+                            newExtractorLink(
+                                source = sourceLabel,
+                                name = displayName,
+                                url = streamUrl,
+                                type = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = mainUrl
+                                this.quality = getQuality(stream.quality)
+                            }
                         )
+                        found = true
                     }
                 }
-
-                val isHls = stream.type.equals("hls", true) ||
-                    streamUrl.contains(".m3u8", true) ||
-                    streamUrl.contains("nestflix.stream", true)
-
-                callback(
-                    newExtractorLink(
-                        source = stream.provider ?: name,
-                        name = "MovieFox (${stream.provider ?: "Direct"}) - ${stream.quality ?: "HD"}",
-                        url = streamUrl,
-                        type = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = "https://nestflix.stream/"
-                        this.quality = getQuality(stream.quality)
-                    }
-                )
-
-                found = true
             }
 
             found
