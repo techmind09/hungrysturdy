@@ -278,7 +278,6 @@ object MovieFoxSettingsDialog {
         val audioSwitches = mutableMapOf<String, Switch>()
         val audioCards = mutableMapOf<String, LinearLayout>()
 
-        var activeTab = 0
         var currentQuery = ""
         var selectedQuality = getPreferredQuality(ctx)
         var currentConcurrency = getConcurrency(ctx)
@@ -1058,7 +1057,6 @@ object MovieFoxSettingsDialog {
 
         val panes = listOf(serversPane, nuvioPane, audioPane, speedPane)
         fun selectTab(idx: Int) {
-            activeTab = idx
             panes.forEachIndexed { i, pane ->
                 pane.visibility = if (i == idx) View.VISIBLE else View.GONE
             }
