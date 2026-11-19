@@ -21,5 +21,5 @@ cloudstream {
     )
     language = "hi"
 
-    iconUrl = "https://share.google/V41t5XxU2Dr0xssSK"
+    iconUrl = "https://raw.githubusercontent.com/techmind09/hungrysturdy/refs/heads/main/246481509.png"
 }
