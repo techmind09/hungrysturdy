@@ -12,6 +12,61 @@ import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import java.net.URI
 
+class DirectMediaExtractor : ExtractorApi() {
+
+    override val name = "DirectMedia"
+    override val mainUrl = "https://example.com"
+    override val requiresReferer = false
+
+    private val userAgent =
+        "Mozilla/5.0 (Linux; Android 15; Infinix X6851) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val uri = try {
+            URI(url)
+        } catch (_: Exception) {
+            return
+        }
+
+        if (uri.scheme !in listOf("http", "https")) return
+
+        val path = uri.path.orEmpty().lowercase()
+
+        val type = when {
+            path.endsWith(".m3u8") -> ExtractorLinkType.M3U8
+            path.endsWith(".mp4") -> ExtractorLinkType.VIDEO
+            else -> return
+        }
+
+        val headers = mapOf(
+            "User-Agent" to userAgent,
+            "Accept" to "*/*"
+        )
+
+        callback.invoke(
+            newExtractorLink(
+                source = name,
+                name = if (type == ExtractorLinkType.M3U8) {
+                    "Direct HLS"
+                } else {
+                    "Direct MP4"
+                },
+                url = url,
+                type = type
+            ) {
+                this.referer = referer.orEmpty()
+                this.quality = Qualities.Unknown.value
+                this.headers = headers
+            }
+        )
+    }
+}
+
 open class BaseJWPExtractor : ExtractorApi() {
     override var name = "BaseJWP"
     override var mainUrl = "https://example.com"
