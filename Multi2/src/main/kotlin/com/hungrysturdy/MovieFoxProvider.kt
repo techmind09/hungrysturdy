@@ -1,6 +1,7 @@
 package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import org.jsoup.nodes.Element
@@ -12,6 +13,8 @@ class MovieFoxProvider : MainAPI() {
     override var lang = "en"
     override val hasMainPage = true
 
+    private val cfKiller by lazy { CloudflareKiller() }
+
     override val supportedTypes = setOf(
         TvType.Movie,
         TvType.TvSeries,
@@ -20,56 +23,126 @@ class MovieFoxProvider : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl/" to "Trending Now",
-        "$mainUrl/movies" to "Movies",
-        "$mainUrl/tv" to "TV Shows",
-        "$mainUrl/anime" to "Anime",
-        "$mainUrl/dramas" to "Dramas"
+        "$mainUrl/" to "Top 10 Movies This Week",
+        "$mainUrl/" to "Trending Series",
+        "$mainUrl/" to "In Theaters Now",
+        "$mainUrl/" to "Superhero",
+        "$mainUrl/" to "Mind-Bending",
+        "$mainUrl/" to "Popular Movies",
+        "$mainUrl/" to "K-Drama",
+        "$mainUrl/" to "Indian Movies",
+        "$mainUrl/" to "Sci-Fi",
+        "$mainUrl/" to "Horror",
+        "$mainUrl/" to "Crime",
+        "$mainUrl/" to "Punjabi Movies",
+        "$mainUrl/" to "Pakistani Movies",
+        "$mainUrl/" to "Islamic History Epics - Urdu",
+        "$mainUrl/" to "Pakistani Dramas",
+        "$mainUrl/" to "Popular TV Shows",
+        "$mainUrl/" to "Anime Spotlight",
+        "$mainUrl/" to "Animated Feature Films",
+        "$mainUrl/movies?list=top_rated" to "Top Rated",
+        "$mainUrl/" to "Recommended For You",
+        "$mainUrl/universes" to "Universes",
+        "$mainUrl/dramas" to "Dramas",
+        "$mainUrl/dramas?category=classics" to "Classic Dramas"
     )
+
+    private fun cleanHeading(text: String): String {
+        return text
+            .replace(Regex("View\\s*all.*", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("[›»>]+$"), "")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+    }
 
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
-        val document = app.get(request.data).document
+        val targetUrl = if (page > 1) {
+            val sep = if (request.data.contains("?")) "&" else "?"
+            "${request.data}${sep}page=$page"
+        } else {
+            request.data
+        }
+
+        val document = app.get(targetUrl, interceptor = cfKiller).document
         val home = mutableListOf<HomePageList>()
 
-        document.select("section").forEach { row ->
-            val title = row.select("h2").text().ifEmpty { return@forEach }
-            val items = row.select(
-                "a[href*=/movie/], a[href*=/tv/], a[href*=/dramas/], a[href*=/anime/]"
-            ).mapNotNull { element ->
-                toSearchResult(element)
-            }.distinctBy { it.url }
+        val linkSelector =
+            "a[href*=/movie/], a[href*=/tv/], a[href*=/dramas/], a[href*=/anime/], a[href*=/series/], a[href*=/universes/], a[href*=/universe/], a[href*=/channel/]"
+
+        val sections = document.select("section")
+            .ifEmpty { document.select("main > div, div:has(h2):has(a[href])") }
+
+        val targetName = request.name.trim()
+        var matchedSection = false
+
+        sections.forEach { row ->
+            val rawHeading = row.selectFirst("h2, h3")?.text().orEmpty()
+            val title = cleanHeading(rawHeading)
+            if (title.isEmpty()) return@forEach
+
+            val isTarget = title.equals(targetName, ignoreCase = true) ||
+                title.contains(targetName, ignoreCase = true) ||
+                targetName.contains(title, ignoreCase = true)
+
+            if (!isTarget) return@forEach
+
+            val items = row.select(linkSelector)
+                .mapNotNull { element -> toSearchResult(element) }
+                .distinctBy { it.url }
 
             if (items.isNotEmpty()) {
-                home.add(HomePageList(title, items))
+                home.add(HomePageList(targetName, items))
+                matchedSection = true
             }
         }
 
-        return newHomePageResponse(home)
+        // Dedicated pages like /universes, /dramas, /dramas?category=classics, or /movies?list=top_rated
+        if (!matchedSection) {
+            val gridItems = document.select(linkSelector)
+                .mapNotNull { element -> toSearchResult(element) }
+                .distinctBy { it.url }
+
+            if (gridItems.isNotEmpty()) {
+                home.add(HomePageList(targetName, gridItems))
+            }
+        }
+
+        val isPaginatedCategory = request.data.contains("?")
+        return newHomePageResponse(home, hasNext = isPaginatedCategory && home.isNotEmpty())
     }
 
     private fun toSearchResult(element: Element): SearchResponse? {
-        val href = element.attr("href")
-        val title = element.attr("aria-label")
+        val href = element.attr("href").trim()
+        if (href.isBlank()) return null
+
+        val ariaTitle = element.attr("aria-label")
             .replace(Regex("^Number \\d+:\\s*"), "")
             .substringBefore(" (20")
-            .ifEmpty { element.select("img").attr("alt") }
-            .ifEmpty { element.text() }
+            .trim()
 
-        val poster = element.select("img").let {
-            it.attr("src").ifEmpty { it.attr("data-src") }
+        val imgAlt = element.selectFirst("img")?.attr("alt")?.trim().orEmpty()
+        val textTitle = element.selectFirst("h3, h4, .title")?.text()?.trim()
+            ?: element.text().trim()
+
+        val title = ariaTitle.ifEmpty { imgAlt }.ifEmpty { textTitle }
+        if (title.isBlank()) return null
+
+        val poster = element.selectFirst("img")?.let { img ->
+            img.attr("src")
+                .ifEmpty { img.attr("data-src") }
+                .ifEmpty { img.attr("srcset").substringBefore(" ") }
         }
-
-        if (href.isBlank() || title.isBlank()) return null
 
         val fixedUrl = if (href.startsWith("http")) href else "$mainUrl/${href.trimStart('/')}"
 
         val type = when {
-            href.contains("/anime/") -> TvType.Anime
-            href.contains("/dramas/") -> TvType.AsianDrama
-            href.contains("/tv/") -> TvType.TvSeries
+            fixedUrl.contains("/anime/") -> TvType.Anime
+            fixedUrl.contains("/dramas/") || fixedUrl.contains("/channel/") -> TvType.AsianDrama
+            fixedUrl.contains("/tv/") || fixedUrl.contains("/series/") || fixedUrl.contains("/universe") -> TvType.TvSeries
             else -> TvType.Movie
         }
 
@@ -85,30 +158,31 @@ class MovieFoxProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
-        val document = app.get("$mainUrl/search?q=$query").document
+        val document = app.get("$mainUrl/search?q=$query", interceptor = cfKiller).document
         return document.select(
-            "a[href*=/movie/], a[href*=/tv/], a[href*=/dramas/], a[href*=/anime/]"
+            "a[href*=/movie/], a[href*=/tv/], a[href*=/dramas/], a[href*=/anime/], a[href*=/series/], a[href*=/universes/], a[href*=/universe/], a[href*=/channel/]"
         ).mapNotNull { element ->
             toSearchResult(element)
         }.distinctBy { it.url }
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url).document
+        val document = app.get(url, interceptor = cfKiller).document
 
-        val title = document.select("h1").text()
-            .ifEmpty { document.select("title").text().substringBefore("—") }
+        val title = document.selectFirst("h1")?.text()?.trim()
+            .orEmpty()
+            .ifEmpty { document.select("title").text().substringBefore("—").trim() }
 
-        val poster = document.select("img.object-cover, img[data-nimg='fill']").firstOrNull()?.let {
+        val poster = document.select("img.object-cover, img[data-nimg='fill'], img").firstOrNull()?.let {
             it.attr("src").ifEmpty { it.attr("data-src") }
         }
 
-        val description = document.select("p.text-muted, .text-fg\\/80").text()
+        val description = document.select("p.text-muted, .text-fg\\/80, p").text().trim()
 
         val type = when {
             url.contains("/anime/") -> TvType.Anime
-            url.contains("/dramas/") -> TvType.AsianDrama
-            url.contains("/tv/") -> TvType.TvSeries
+            url.contains("/dramas/") || url.contains("/channel/") -> TvType.AsianDrama
+            url.contains("/tv/") || url.contains("/series/") || url.contains("/universe") -> TvType.TvSeries
             else -> TvType.Movie
         }
 
@@ -117,34 +191,37 @@ class MovieFoxProvider : MainAPI() {
         return if (isTv) {
             val episodes = mutableListOf<Episode>()
 
-            document.select("a[href*='/watch/'], a[href*='/season/'], .episode-item").forEachIndexed { index, element ->
-                val epUrl = element.attr("href")
-                val epName = element.select(".ep-title, span").text()
-                    .ifEmpty { element.text() }
-                    .ifEmpty { "Episode ${index + 1}" }
+            document.select("a[href*='/watch/'], a[href*='/season/'], a[href*=/movie/], a[href*=/tv/], a[href*=/dramas/], .episode-item")
+                .forEachIndexed { index, element ->
+                    val epUrl = element.attr("href")
+                    val epName = element.select(".ep-title, span").text()
+                        .ifEmpty { element.text() }
+                        .ifEmpty { "Episode ${index + 1}" }
 
-                val fixedEpUrl = if (epUrl.startsWith("http")) epUrl else "$mainUrl/${epUrl.trimStart('/')}"
+                    val fixedEpUrl =
+                        if (epUrl.startsWith("http")) epUrl else "$mainUrl/${epUrl.trimStart('/')}"
 
-                val seasonMatch = Regex("s(?:eason)?[-/]?(\\d+)", RegexOption.IGNORE_CASE)
-                    .find(epUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 1
-                val epMatch = Regex("e(?:pisode)?[-/]?(\\d+)", RegexOption.IGNORE_CASE)
-                    .find(epUrl)?.groupValues?.get(1)?.toIntOrNull() ?: (index + 1)
+                    val seasonMatch = Regex("s(?:eason)?[-/]?(\\d+)", RegexOption.IGNORE_CASE)
+                        .find(epUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 1
+                    val epMatch = Regex("e(?:pisode)?[-/]?(\\d+)", RegexOption.IGNORE_CASE)
+                        .find(epUrl)?.groupValues?.get(1)?.toIntOrNull() ?: (index + 1)
 
-                val sep = if (fixedEpUrl.contains("?")) "&" else "?"
-                val finalEpUrl = if (fixedEpUrl.contains("season=", true) || fixedEpUrl.contains("episode=", true)) {
-                    fixedEpUrl
-                } else {
-                    "$fixedEpUrl${sep}season=$seasonMatch&episode=$epMatch"
+                    val sep = if (fixedEpUrl.contains("?")) "&" else "?"
+                    val finalEpUrl =
+                        if (fixedEpUrl.contains("season=", true) || fixedEpUrl.contains("episode=", true)) {
+                            fixedEpUrl
+                        } else {
+                            "$fixedEpUrl${sep}season=$seasonMatch&episode=$epMatch"
+                        }
+
+                    episodes.add(
+                        newEpisode(finalEpUrl) {
+                            this.name = epName
+                            this.season = seasonMatch
+                            this.episode = epMatch
+                        }
+                    )
                 }
-
-                episodes.add(
-                    newEpisode(finalEpUrl) {
-                        this.name = epName
-                        this.season = seasonMatch
-                        this.episode = epMatch
-                    }
-                )
-            }
 
             if (episodes.isEmpty()) {
                 val sep = if (url.contains("?")) "&" else "?"
@@ -213,10 +290,10 @@ class MovieFoxProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
-            val doc = app.get(data).document
+            val doc = app.get(data, interceptor = cfKiller).document
             val pageHtml = doc.html()
 
-            val matchId = Regex("-(?:movie|tv|dramas|anime)-(\\d+)").find(data)?.groupValues?.get(1)
+            val matchId = Regex("-(?:movie|tv|dramas|anime|series)-(\\d+)").find(data)?.groupValues?.get(1)
                 ?: Regex("[?&]id=(\\d+)").find(data)?.groupValues?.get(1)
                 ?: Regex("(\\d+)(?:\\D*)$").find(data)?.groupValues?.get(1)
                 ?: return false
@@ -225,6 +302,7 @@ class MovieFoxProvider : MainAPI() {
             val isTv = data.contains("/tv/") ||
                 data.contains("/dramas/") ||
                 data.contains("/anime/") ||
+                data.contains("/series/") ||
                 data.contains("season", true)
             val contentType = if (isTv) "tv" else "movie"
 
@@ -239,68 +317,73 @@ class MovieFoxProvider : MainAPI() {
             val imdbQuery = if (imdbId.isNotBlank()) "&imdbId=$imdbId" else ""
 
             val endpoints = listOf(
+                "purstream" to "$mainUrl/api/stream/purstream?type=$contentType&id=$matchId$tvQuery",
                 "castle" to "$mainUrl/api/stream/castle?type=$contentType&id=$matchId$tvQuery",
                 "direct" to "$mainUrl/api/stream/direct?type=$contentType&id=$matchId$tvQuery",
-                "debrid" to "$mainUrl/api/stream/debrid?type=$contentType&id=$matchId$imdbQuery$tvQuery",
-                "purstream" to "$mainUrl/api/stream/purstream?type=$contentType&id=$matchId$tvQuery"
+                "debrid" to "$mainUrl/api/stream/debrid?type=$contentType&id=$matchId$imdbQuery$tvQuery"
             )
 
             val headers = mapOf(
                 "Referer" to data,
+                "Origin" to mainUrl,
                 "User-Agent" to USER_AGENT
             )
 
+            val seenUrls = mutableSetOf<String>()
             var found = false
 
             for ((endpointName, apiUrl) in endpoints) {
-                val rawText = runCatching { app.get(apiUrl, headers = headers).text }.getOrNull().orEmpty()
+                val rawText = runCatching {
+                    app.get(apiUrl, headers = headers, interceptor = cfKiller).text
+                }.getOrNull().orEmpty()
                 if (rawText.isBlank()) continue
 
-                val parsed = runCatching { parseJson<StreamResponse>(rawText) }.getOrNull()
-                if (parsed != null && parsed.streams.isNotEmpty()) {
-                    parsed.streams.forEach { stream ->
-                        var streamUrl = stream.url.trim()
-                        if (streamUrl.isBlank()) return@forEach
-                        if (!streamUrl.startsWith("http")) {
-                            streamUrl = "$mainUrl/${streamUrl.trimStart('/')}"
-                        }
+                val parsed = runCatching { parseJson<StreamResponse>(rawText) }.getOrNull() ?: continue
+                if (parsed.streams.isEmpty()) continue
 
-                        stream.subtitles?.forEach { sub ->
-                            var subUrl = sub.url.trim()
-                            if (subUrl.isNotBlank() && !subUrl.startsWith("http")) {
-                                subUrl = "$mainUrl/${subUrl.trimStart('/')}"
-                            }
-                            if (subUrl.isNotBlank()) {
-                                subtitleCallback(
-                                    SubtitleFile(
-                                        lang = sub.label.ifBlank { sub.language.ifBlank { "English" } },
-                                        url = subUrl
-                                    )
-                                )
-                            }
-                        }
-
-                        val isHls = stream.type.equals("hls", true) ||
-                            streamUrl.contains(".m3u8", true) ||
-                            streamUrl.contains("/media?ticket=", true)
-
-                        val sourceLabel = stream.provider?.takeIf { it.isNotBlank() } ?: endpointName
-                        val displayName = stream.label?.takeIf { it.isNotBlank() }
-                            ?: "MovieFox ($sourceLabel) - ${stream.quality ?: "HD"}"
-
-                        callback(
-                            newExtractorLink(
-                                source = sourceLabel,
-                                name = displayName,
-                                url = streamUrl,
-                                type = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = mainUrl
-                                this.quality = getQuality(stream.quality)
-                            }
-                        )
-                        found = true
+                parsed.streams.forEach { stream ->
+                    var streamUrl = stream.url.trim()
+                    if (streamUrl.isBlank()) return@forEach
+                    if (!streamUrl.startsWith("http")) {
+                        streamUrl = "$mainUrl/${streamUrl.trimStart('/')}"
                     }
+                    if (!seenUrls.add(streamUrl)) return@forEach
+
+                    stream.subtitles?.forEach { sub ->
+                        var subUrl = sub.url.trim()
+                        if (subUrl.isNotBlank() && !subUrl.startsWith("http")) {
+                            subUrl = "$mainUrl/${subUrl.trimStart('/')}"
+                        }
+                        if (subUrl.isNotBlank()) {
+                            subtitleCallback(
+                                SubtitleFile(
+                                    lang = sub.label.ifBlank { sub.language.ifBlank { "English" } },
+                                    url = subUrl
+                                )
+                            )
+                        }
+                    }
+
+                    val isHls = stream.type.equals("hls", true) ||
+                        streamUrl.contains(".m3u8", true) ||
+                        streamUrl.contains("/media?ticket=", true)
+
+                    val sourceLabel = stream.provider?.takeIf { it.isNotBlank() } ?: endpointName
+                    val displayName = stream.label?.takeIf { it.isNotBlank() }
+                        ?: "MovieFox ($sourceLabel) - ${stream.quality ?: "HD"}"
+
+                    callback(
+                        newExtractorLink(
+                            source = sourceLabel,
+                            name = displayName,
+                            url = streamUrl,
+                            type = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = mainUrl
+                            this.quality = getQuality(stream.quality)
+                        }
+                    )
+                    found = true
                 }
             }
 
