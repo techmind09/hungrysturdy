@@ -69,6 +69,13 @@ object MovieFoxSettingsDialog {
         var enabled: Boolean = true
     )
 
+    data class CustomExternalSite(
+        val id: String,
+        val name: String,
+        val baseUrl: String,
+        var enabled: Boolean = true
+    )
+
     val SERVERS = listOf(
         ServerItem("purstream", "Purstream", "API", "https://moviefox.pro/api/stream/purstream", "#38BDF8"),
         ServerItem("castle", "Castle", "API", "https://moviefox.pro/api/stream/castle", "#818CF8"),
@@ -160,6 +167,17 @@ object MovieFoxSettingsDialog {
         prefs(ctx).edit().putString(KEY_NUVIO_MANIFESTS, arr.toString()).apply()
     }
 
+    fun getCustomSites(ctx: Context): List<CustomExternalSite> {
+        return getNuvioManifests(ctx).map { m ->
+            CustomExternalSite(
+                id = m.id,
+                name = m.label,
+                baseUrl = m.manifestUrl,
+                enabled = m.enabled
+            )
+        }
+    }
+
     fun deriveManifestLabel(rawUrl: String): String {
         return try {
             val normalized = if (rawUrl.startsWith("http")) rawUrl else "https://$rawUrl"
@@ -190,6 +208,10 @@ object MovieFoxSettingsDialog {
     fun setFastFetchMode(ctx: Context, enabled: Boolean) {
         prefs(ctx).edit().putBoolean(KEY_FAST_FETCH, enabled).apply()
     }
+
+    fun isStreamOnly(ctx: Context): Boolean = isLowBufferMode(ctx)
+    fun isDownloadOnly(ctx: Context): Boolean = false
+    fun getParallelServers(ctx: Context): Int = getConcurrency(ctx)
 
     fun getConcurrency(ctx: Context): Int =
         prefs(ctx).getInt(KEY_CONCURRENCY, 12)
@@ -267,7 +289,6 @@ object MovieFoxSettingsDialog {
             setPadding(dp(ctx, 15), dp(ctx, 15), dp(ctx, 15), dp(ctx, 15))
         }
 
-        // Hero Header
         val header = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable(
@@ -368,7 +389,6 @@ object MovieFoxSettingsDialog {
         }
         refreshStats()
 
-        // 4-Tab Bar
         val tabScroll = HorizontalScrollView(ctx).apply {
             isHorizontalScrollBarEnabled = false
             layoutParams = LinearLayout.LayoutParams(
@@ -397,7 +417,6 @@ object MovieFoxSettingsDialog {
         tabScroll.addView(tabBar)
         root.addView(tabScroll)
 
-        // Search + Test All Row
         val searchRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -444,9 +463,6 @@ object MovieFoxSettingsDialog {
         val audioPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val speedPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
 
-        // ==========================================
-        // PANE 1: SERVERS + TEST WORKING / NOT WORKING
-        // ==========================================
         SERVERS.forEach { srv ->
             val card = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -579,9 +595,6 @@ object MovieFoxSettingsDialog {
             }
         }
 
-        // ==========================================
-        // PANE 2: NUVIO MANIFEST MANAGER
-        // ==========================================
         val nuvioAddBox = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = cardBg("#131826", "#314161", 24f)
@@ -785,9 +798,6 @@ object MovieFoxSettingsDialog {
         nuvioPane.addView(nuvioListHolder)
         renderNuvioList()
 
-        // ==========================================
-        // PANE 3: AUDIO & QUALITY
-        // ==========================================
         val qualityCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = cardBg("#121621", "#253046", 22f)
@@ -895,9 +905,6 @@ object MovieFoxSettingsDialog {
             audioPane.addView(card)
         }
 
-        // ==========================================
-        // PANE 4: BUFFER & FAST FETCH
-        // ==========================================
         val lowBufferSw = Switch(ctx).apply {
             isChecked = isLowBufferMode(ctx)
             setOnCheckedChangeListener { _, v -> setLowBufferMode(ctx, v) }
