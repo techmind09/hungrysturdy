@@ -507,7 +507,6 @@ class MovieFoxProvider : MainAPI() {
             val tvQuery = if (isTv) "&season=$season&episode=$episode" else ""
             val imdbQuery = if (imdbId.isNotBlank()) "&imdbId=$imdbId" else ""
 
-            // Sabhi servers (FSL, FSL2, GDrive sahit) — Aage naye servers bas yahan add karein
             val allEndpoints = listOf(
                 "purstream" to "$mainUrl/api/stream/purstream?type=$contentType&id=$matchId$tvQuery",
                 "castle" to "$mainUrl/api/stream/castle?type=$contentType&id=$matchId$tvQuery",
@@ -521,7 +520,6 @@ class MovieFoxProvider : MainAPI() {
                 "gdrive" to "$mainUrl/api/stream/gdrive?type=$contentType&id=$matchId$imdbQuery$tvQuery"
             )
 
-            // Plugin Settings mein jo servers enabled hain sirf unhi ko filter karein
             val activeEndpoints = allEndpoints.filter { (key, _) ->
                 Plugin.isServerEnabled(key)
             }
@@ -536,7 +534,6 @@ class MovieFoxProvider : MainAPI() {
             val seenUrls = mutableSetOf<String>()
             var found = false
 
-            // 1. Active API Endpoints (Purstream, Castle, Direct, Debrid, FSL, FSL2, GDrive, etc.)
             for ((endpointName, apiUrl) in activeEndpoints) {
                 val response = runCatching {
                     app.get(apiUrl, headers = baseHeaders, interceptor = cfKiller)
@@ -605,7 +602,6 @@ class MovieFoxProvider : MainAPI() {
                         }
                     }
 
-                    // Check if stream URL is a known embed host (Voe, StreamTape, Vidara, Lulu, Pixeldrain, GDrive, etc.)
                     val isKnownHost = listOf(
                         "voe.", "pixeldrain.", "streamtape.", "shavetape.", "strcloud.",
                         "strtape.", "stape.fun", "luluvid.", "lulustream.", "luluvdo.",
@@ -656,7 +652,6 @@ class MovieFoxProvider : MainAPI() {
                 }
             }
 
-            // 2. Embed Servers from `/watch/{type}-{id}` page (Agar "embeds" setting ON hai)
             if (Plugin.isServerEnabled("embeds")) {
                 val watchUrl = if (isTv) {
                     "$mainUrl/watch/tv-$matchId?s=$season&e=$episode"
