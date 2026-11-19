@@ -23,7 +23,7 @@ import android.widget.TextView
 import android.widget.Toast
 import java.net.URLEncoder
 
-object PluginDonation {
+object Multi2Donation {
 
     const val DEFAULT_UPI_ID = "7409811853@nyes"
     const val DEFAULT_PAYEE_NAME = "Hungrysturdy"
