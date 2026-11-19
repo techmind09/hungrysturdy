@@ -1,10 +1,10 @@
 package com.hungrysturdy
 
+import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.content.res.ColorStateList
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -12,19 +12,18 @@ import android.net.Uri
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
+import android.view.Gravity
+import android.view.View
+import android.widget.Button
+import android.widget.EditText
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
-import com.google.android.material.button.MaterialButton
-import com.google.android.material.chip.Chip
-import com.google.android.material.chip.ChipGroup
-import com.google.android.material.textfield.TextInputEditText
-import com.google.android.material.textfield.TextInputLayout
 import java.net.URLEncoder
 
-object Multi2Donation {
+object PluginDonation {
 
     const val DEFAULT_UPI_ID = "7409811853@nyes"
     const val DEFAULT_PAYEE_NAME = "Hungrysturdy"
@@ -53,7 +52,10 @@ object Multi2Donation {
             "Agar yeh plugin aapka time bachata hai, toh ek chhoti si support se agle builds ko boost mil sakta hai."
         }
 
-        val dp = { value: Int -> (value * context.resources.displayMetrics.density).toInt() }
+        val dp: (Int) -> Int = { value ->
+            (value * context.resources.displayMetrics.density).toInt()
+        }
+
         var selectedAmount: Int? = defaultAmount.takeIf { it > 0 }
         var isSyncingFromChip = false
 
@@ -67,22 +69,28 @@ object Multi2Donation {
             setPadding(dp(20), dp(18), dp(20), dp(20))
         }
 
-        root.addView(TextView(context).apply {
+        // Title
+        val tvTitle = TextView(context).apply {
             text = "$payeeName ko Support Karein"
             textSize = 19f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.parseColor("#F8FAFC"))
-        })
+        }
+        root.addView(tvTitle)
 
-        root.addView(TextView(context).apply {
+        // Tagline
+        val tvSub = TextView(context).apply {
             text = tagLine
             textSize = 13f
             setTextColor(Color.parseColor("#94A3B8"))
             setPadding(0, dp(6), 0, dp(14))
-        })
+        }
+        root.addView(tvSub)
 
+        // UPI ID Card
         val upiCard = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12), dp(10), dp(10), dp(10))
             background = GradientDrawable().apply {
                 cornerRadius = dp(12).toFloat()
@@ -95,26 +103,35 @@ object Multi2Donation {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
-        upiCol.addView(TextView(context).apply {
+
+        val tvUpiLabel = TextView(context).apply {
             text = "UPI ID"
             textSize = 10f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.parseColor("#64748B"))
-        })
-        upiCol.addView(TextView(context).apply {
+        }
+
+        val tvUpiVal = TextView(context).apply {
             text = upiId
             textSize = 14.5f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.parseColor("#E2E8F0"))
             setPadding(0, dp(2), 0, 0)
-        })
+        }
 
-        val btnCopy = MaterialButton(context).apply {
+        upiCol.addView(tvUpiLabel)
+        upiCol.addView(tvUpiVal)
+
+        val btnCopy = Button(context).apply {
             text = "Copy"
-            textAllCaps = false
-            backgroundTintList = ColorStateList.valueOf(Color.parseColor("#283044"))
+            isAllCaps = false
+            textSize = 13f
             setTextColor(Color.parseColor("#E2E8F0"))
-            cornerRadius = dp(10)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(10).toFloat()
+                setColor(Color.parseColor("#283044"))
+            }
+            setPadding(dp(14), dp(6), dp(14), dp(6))
             setOnClickListener {
                 copyText(context, "UPI ID", upiId)
             }
@@ -124,16 +141,41 @@ object Multi2Donation {
         upiCard.addView(btnCopy)
         root.addView(upiCard)
 
-        root.addView(TextView(context).apply {
+        // Preset Label
+        val tvPresetLabel = TextView(context).apply {
             text = "Amount Chunein"
             textSize = 13.5f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.parseColor("#E2E8F0"))
             setPadding(0, dp(16), 0, dp(8))
-        })
+        }
+        root.addView(tvPresetLabel)
 
-        var etCustomAmount: TextInputEditText? = null
-        var btnDonate: MaterialButton? = null
+        val chipButtons = mutableListOf<Pair<Int, Button>>()
+        var etCustomAmount: EditText? = null
+        var btnDonate: Button? = null
+
+        fun styleChip(button: Button, checked: Boolean) {
+            button.background = GradientDrawable().apply {
+                cornerRadius = dp(20).toFloat()
+                setColor(
+                    if (checked) Color.parseColor("#2563EB")
+                    else Color.parseColor("#1E222D")
+                )
+                setStroke(
+                    dp(1),
+                    if (checked) Color.parseColor("#3B82F6")
+                    else Color.parseColor("#334155")
+                )
+            }
+            button.setTextColor(Color.WHITE)
+        }
+
+        fun refreshChips() {
+            chipButtons.forEach { (amt, btn) ->
+                styleChip(btn, amt == selectedAmount)
+            }
+        }
 
         fun refreshDonateLabel() {
             val amt = selectedAmount
@@ -144,51 +186,65 @@ object Multi2Donation {
             }
         }
 
-        val chipGroup = ChipGroup(context).apply {
-            isSingleSelection = true
-            chipSpacingHorizontal = dp(8)
-            chipSpacingVertical = dp(6)
+        val chipScroll = HorizontalScrollView(context).apply {
+            isHorizontalScrollBarEnabled = false
+        }
+        val chipRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
         }
 
-        presets.forEach { amt ->
-            val chip = Chip(context).apply {
+        presets.forEachIndexed { idx, amt ->
+            val chipBtn = Button(context).apply {
                 text = "₹$amt"
-                isCheckable = true
-                isChecked = (amt == selectedAmount)
-                chipBackgroundColor = ColorStateList(
-                    arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
-                    intArrayOf(Color.parseColor("#2563EB"), Color.parseColor("#1E222D"))
+                isAllCaps = false
+                textSize = 13f
+                setTypeface(typeface, Typeface.BOLD)
+                val lp = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    dp(38)
                 )
-                setTextColor(Color.WHITE)
+                if (idx > 0) lp.leftMargin = dp(8)
+                layoutParams = lp
+                setPadding(dp(14), 0, dp(14), 0)
+                styleChip(this, amt == selectedAmount)
                 setOnClickListener {
                     isSyncingFromChip = true
                     selectedAmount = amt
                     etCustomAmount?.setText(amt.toString())
                     etCustomAmount?.setSelection(etCustomAmount?.text?.length ?: 0)
                     isSyncingFromChip = false
+                    refreshChips()
                     refreshDonateLabel()
                 }
             }
-            chipGroup.addView(chip)
-        }
-        root.addView(chipGroup)
-
-        val til = TextInputLayout(context).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = dp(12)
-            }
-            hint = "Custom Amount (₹)"
-            boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
-            setBoxCornerRadii(dp(12).toFloat(), dp(12).toFloat(), dp(12).toFloat(), dp(12).toFloat())
-            hintTextColor = ColorStateList.valueOf(Color.parseColor("#94A3B8"))
+            chipButtons.add(amt to chipBtn)
+            chipRow.addView(chipBtn)
         }
 
-        val editText = TextInputEditText(til.context).apply {
+        chipScroll.addView(chipRow)
+        root.addView(chipScroll)
+
+        // Custom Amount Input
+        val tvCustomLabel = TextView(context).apply {
+            text = "Custom Amount (₹)"
+            textSize = 12f
+            setTextColor(Color.parseColor("#94A3B8"))
+            setPadding(0, dp(14), 0, dp(6))
+        }
+        root.addView(tvCustomLabel)
+
+        val editText = EditText(context).apply {
+            hint = "Jaise 150"
             inputType = InputType.TYPE_CLASS_NUMBER
+            textSize = 15f
             setTextColor(Color.WHITE)
+            setHintTextColor(Color.parseColor("#64748B"))
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(Color.parseColor("#1E222D"))
+                setStroke(dp(1), Color.parseColor("#334155"))
+            }
             selectedAmount?.let { setText(it.toString()) }
             addTextChangedListener(object : TextWatcher {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
@@ -197,45 +253,40 @@ object Multi2Donation {
                     val parsed = s?.toString()?.trim()?.toIntOrNull()
                     selectedAmount = if (parsed != null && parsed > 0) parsed else null
                     if (!isSyncingFromChip) {
-                        for (i in 0 until chipGroup.childCount) {
-                            val chip = chipGroup.getChildAt(i) as? Chip ?: continue
-                            val chipVal = chip.text.toString().removePrefix("₹").trim().toIntOrNull()
-                            chip.isChecked = (chipVal != null && chipVal == selectedAmount)
-                        }
+                        refreshChips()
                     }
                     refreshDonateLabel()
                 }
             })
         }
         etCustomAmount = editText
-        til.addView(editText)
-        root.addView(til)
+        root.addView(editText)
 
+        // Status Hint
         val tvStatus = TextView(context).apply {
             textSize = 12f
             setTextColor(Color.parseColor("#60A5FA"))
             setPadding(0, dp(8), 0, 0)
-            visibility = android.view.View.GONE
+            visibility = View.GONE
         }
         root.addView(tvStatus)
 
-        val dialog = AlertDialog.Builder(context)
-            .setView(scrollView)
-            .create()
-
-        val donateButton = MaterialButton(context).apply {
+        // Donate Button
+        val donateButton = Button(context).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(50)
+                dp(48)
             ).apply {
                 topMargin = dp(16)
             }
-            textAllCaps = false
-            textSize = 15f
+            isAllCaps = false
+            textSize = 14.5f
             setTypeface(typeface, Typeface.BOLD)
-            cornerRadius = dp(12)
-            backgroundTintList = ColorStateList.valueOf(Color.parseColor("#2563EB"))
             setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                cornerRadius = dp(12).toFloat()
+                setColor(Color.parseColor("#2563EB"))
+            }
             setOnClickListener {
                 val uri = buildUpiUri(upiId, payeeName, finalNote, selectedAmount)
                 val intent = Intent(Intent.ACTION_VIEW, uri).apply {
@@ -246,11 +297,11 @@ object Multi2Donation {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     })
                     tvStatus.text = "UPI app open ho raha hai..."
-                    tvStatus.visibility = android.view.View.VISIBLE
+                    tvStatus.visibility = View.VISIBLE
                 } catch (_: Exception) {
                     copyText(context, "UPI ID", upiId, "Koi UPI app nahi mila. UPI ID copy ho gayi hai.")
                     tvStatus.text = "UPI ID clipboard mein copy ho gayi hai."
-                    tvStatus.visibility = android.view.View.VISIBLE
+                    tvStatus.visibility = View.VISIBLE
                 }
             }
         }
@@ -259,7 +310,10 @@ object Multi2Donation {
 
         refreshDonateLabel()
         scrollView.addView(root)
-        dialog.show()
+
+        AlertDialog.Builder(context)
+            .setView(scrollView)
+            .show()
     }
 
     fun buildUpiUri(upiId: String, payeeName: String, note: String, amount: Int?): Uri {
