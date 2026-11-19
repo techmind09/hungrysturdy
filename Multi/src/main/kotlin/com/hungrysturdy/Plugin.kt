@@ -1,8 +1,8 @@
 package com.hungrysturdy
 
+import android.content.Context
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
-import android.content.Context
 
 @CloudstreamPlugin
 class Plugin : Plugin() {
@@ -36,5 +36,13 @@ class Plugin : Plugin() {
         registerExtractorAPI(FlixCloudExtractor())
         registerExtractorAPI(AbyssPlayerExtractor())
         registerExtractorAPI(RavokExtractor())
+
+        // Ek hi jagah se poore plugin ke liye Donation Dialog
+        openSettings = { ctx ->
+            PluginDonation.open(
+                context = ctx,
+                pluginName = "Hungrysturdy All-in-One"
+            )
+        }
     }
 }
