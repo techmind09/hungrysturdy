@@ -68,7 +68,9 @@ object MovieFoxSettingsDialog {
         ServerConfig("gdrive", "GDrive Server", "Cloud", "#8B5CF6", "Google Drive media source"),
         ServerConfig("embeds", "Embed Hosts", "Extractors", "#EC4899", "Registered host extractors"),
         ServerConfig("sflix", "Sflix Servers", "API", "#F97316", "Sflix / wefeed-h5api-bff DASH, HLS & MP4"),
-        ServerConfig("prmovies", "Prmovies", "Embed", "#14B8A6", "Prmovies mirrors, Speedostream & VidSrc")
+        ServerConfig("prmovies", "Prmovies", "Embed", "#14B8A6", "Prmovies mirrors, Speedostream & VidSrc"),
+        ServerConfig("hindmoviez", "HindMoviez", "Direct", "#EAB308", "HindMoviez maxbutton share & gdshine links"),
+        ServerConfig("vegamovies", "VegaMovies", "Direct", "#A855F7", "VegaMovies / RogMovies V-Cloud, HubCloud, GoFile & FSL")
     )
 
     private fun prefs(ctx: Context): SharedPreferences {
