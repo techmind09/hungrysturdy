@@ -1,17 +1,27 @@
 package com.hungrysturdy
 
 import android.net.Uri
+import android.util.Base64
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.nicehttp.NiceResponse
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import java.net.URI
+import java.net.URLDecoder
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 
@@ -41,6 +51,26 @@ class MovieFoxProvider : MainAPI() {
     )
     private val prmoviesMutexMap = ConcurrentHashMap<String, Mutex>()
     private val prmoviesCfMap = ConcurrentHashMap<String, CloudflareKiller>()
+
+    // HindMoviez & VegaMovies State
+    private val hindmoviezDomains = listOf("https://v3.hindmovie.im")
+    private val vegamoviesDomains = listOf(
+        "https://vegamovies.lease",
+        "https://rogmovies.autos",
+        "https://rogmovies.im"
+    )
+    private val vegaDriveCache = ConcurrentHashMap<String, VegaDrivePage>()
+
+    private val vegaDeadHosts = Regex("""(?i)megaup|viking|vik1ng|telegram|t\.me""")
+    private val vegaJunk = Regex(
+        """(?i)vglist|t\.me|telegram|imdb\.com|google\.com/search|whatsapp|share|facebook|""" +
+            """twitter|pinterest|report|hubcloud\.(foo|cx)|/admin|login|signup|\bidm\b|\bida\b|""" +
+            """category|/tag/|/author/|/page/"""
+    )
+    private val vegaButtonHosts = Regex(
+        """(?i)nexdrive|vcloud|vegadrive|fastdl|filebee|filepress|fpgo|gofile|hubcloud|""" +
+            """pixeldrain|gpdl|\.r2\.dev|\.r2\.cloudflarestorage\.com|buzzserver|10gbps"""
+    )
 
     override val supportedTypes = setOf(
         TvType.Movie,
@@ -682,6 +712,701 @@ class MovieFoxProvider : MainAPI() {
             }
         }
         return foundLink
+    }
+
+    // HindMoviez & VegaMovies Shared Helpers
+    private fun normalizeTitleKey(raw: String?): String {
+        if (raw.isNullOrBlank()) return ""
+        return raw.lowercase()
+            .replace(Regex("""\b(19|20)\d{2}\b"""), " ")
+            .replace(Regex("""(?i)\b(season|part|s)\s*\d+\b"""), " ")
+            .replace(Regex("""(?i)\b(480p|720p|1080p|2160p|4k|web-?dl|webrip|bluray|hdrip|hevc|x264|x265|hindi|dubbed|dual\s*audio)\b"""), " ")
+            .replace(Regex("""[^a-z0-9]+"""), " ")
+            .trim()
+    }
+
+    private fun titleMatchesCandidate(candidateTitle: String?, targetTitle: String): Boolean {
+        val cNorm = normalizeTitleKey(candidateTitle)
+        val tNorm = normalizeTitleKey(targetTitle)
+        if (cNorm.isBlank() || tNorm.isBlank()) return false
+        if (cNorm == tNorm || cNorm.contains(tNorm) || tNorm.contains(cNorm)) return true
+        val tWords = tNorm.split(" ").filter { it.length > 1 }.toSet()
+        val cWords = cNorm.split(" ").filter { it.length > 1 }.toSet()
+        if (tWords.isEmpty() || cWords.isEmpty()) return false
+        val overlap = tWords.intersect(cWords).size.toDouble() / tWords.size.toDouble()
+        return overlap >= 0.75
+    }
+
+    private fun seasonsInText(text: String): Set<Int>? {
+        val found = mutableSetOf<Int>()
+        Regex("""(?i)\bseason\s*(\d+)\b""").findAll(text).forEach {
+            it.groupValues[1].toIntOrNull()?.let { n -> found.add(n) }
+        }
+        Regex("""(?i)\bs(\d{1,2})(?=e\d|\b|\s|$)""").findAll(text).forEach {
+            it.groupValues[1].toIntOrNull()?.let { n -> found.add(n) }
+        }
+        return found.takeIf { it.isNotEmpty() }
+    }
+
+    private fun baseHostOf(url: String): String {
+        return try {
+            val u = URI(url)
+            val portPart = if (u.port in 1..65535) ":${u.port}" else ""
+            "${u.scheme}://${u.host}$portPart"
+        } catch (_: Exception) {
+            url.substringBefore("/", url)
+        }
+    }
+
+    private fun hostLower(url: String): String {
+        return try {
+            URI(url).host?.lowercase() ?: ""
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    private fun b64DecodeSafe(value: String): String {
+        var s = value.replace("-", "+").replace("_", "/")
+        val rem = s.length % 4
+        if (rem != 0) s += "=".repeat(4 - rem)
+        return try {
+            String(Base64.decode(s, Base64.DEFAULT), Charsets.UTF_8).trim()
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    private fun parseIndexQuality(info: String): Int {
+        val low = info.lowercase()
+        return when {
+            low.contains("2160p") || low.contains("4k") -> Qualities.P2160.value
+            low.contains("1080p") -> Qualities.P1080.value
+            low.contains("720p") -> Qualities.P720.value
+            low.contains("480p") -> Qualities.P480.value
+            else -> Qualities.P1080.value
+        }
+    }
+
+    private fun buildSourceLabel(siteTag: String, server: String, info: String): String {
+        val cleanInfo = info.replace(Regex("""\s+"""), " ").trim()
+        return when {
+            server.isNotBlank() && cleanInfo.isNotBlank() -> "$siteTag • $server ($cleanInfo)"
+            server.isNotBlank() -> "$siteTag • $server"
+            cleanInfo.isNotBlank() -> "$siteTag ($cleanInfo)"
+            else -> siteTag
+        }.take(60)
+    }
+
+    // HindMoviez Helpers
+    private fun hindmoviezHpageTarget(href: String): String? {
+        val outer = href.substringAfter("url=", "").substringBefore("&")
+        if (outer.isBlank()) return null
+        val layer1 = b64DecodeSafe(outer)
+        val inner = layer1.substringAfter("url=", "").substringBefore("&")
+        if (inner.isBlank()) return null
+        val target = b64DecodeSafe(inner)
+        return target.takeIf { it.startsWith("http") }
+    }
+
+    private suspend fun hindmoviezGdshineTarget(shortId: String): String? {
+        if (shortId.isBlank()) return null
+        val fileId = runCatching {
+            val text = app.get(
+                "https://gdshine.org/api/files/s/$shortId",
+                headers = mapOf("Referer" to "https://gdshine.org/", "User-Agent" to USER_AGENT),
+                timeout = 15L
+            ).text
+            JSONObject(text).optJSONObject("data")?.optString("id")
+        }.getOrNull() ?: return null
+
+        return runCatching {
+            val text = app.get(
+                "https://gdshine.org/api/gp/mirror/$fileId",
+                headers = mapOf("Referer" to "https://gdshine.org/", "User-Agent" to USER_AGENT),
+                timeout = 15L
+            ).text
+            JSONObject(text).optJSONObject("data")?.optString("url")
+        }.getOrNull()?.takeIf { it.startsWith("http") }
+    }
+
+    private suspend fun emitHindmoviezLink(
+        url: String,
+        info: String,
+        quality: Int,
+        seenUrls: MutableSet<String>,
+        downloadOnly: Boolean,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val cleanUrl = normalizeUrl(url)
+        if (cleanUrl.isBlank() || isAdUrl(cleanUrl) || !seenUrls.add(cleanUrl)) return false
+        val isHls = cleanUrl.contains(".m3u8", true)
+        if (downloadOnly && isHls) return false
+
+        callback(
+            newExtractorLink(
+                source = "HindMoviez",
+                name = buildSourceLabel("HindMoviez", "", info),
+                url = cleanUrl,
+                type = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+            ) {
+                this.quality = quality
+                this.headers = mapOf("User-Agent" to USER_AGENT)
+            }
+        )
+        return true
+    }
+
+    private suspend fun emitHindmoviezShare(
+        shareHref: String,
+        seenUrls: MutableSet<String>,
+        downloadOnly: Boolean,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        if (!shareHref.contains("?id=")) return false
+        val doc = runCatching {
+            app.get(shareHref, headers = mapOf("User-Agent" to USER_AGENT), timeout = 20L).document
+        }.getOrNull() ?: return false
+
+        val shareName = doc.selectFirst("p:contains(Name:)")?.text()?.substringAfter("Name:")?.trim().orEmpty()
+        val shareSize = doc.selectFirst("p:contains(Size:)")?.text()?.substringAfter("Size:")?.trim().orEmpty()
+        val info = listOf(shareName, shareSize).filter { it.isNotBlank() }.joinToString(" ")
+        if (info.isBlank()) return false
+        val quality = parseIndexQuality(info)
+
+        var emittedAny = false
+        val semaphore = Semaphore(4)
+        coroutineScope {
+            for (a in doc.select("div.btn-group a.btn, a.btn")) {
+                val href = a.attr("abs:href").ifBlank { a.attr("href") }.trim()
+                if (!href.startsWith("http")) continue
+                async(Dispatchers.IO) {
+                    semaphore.withPermit {
+                        val targetUrl = when {
+                            a.classNames().contains("btn-info") -> hindmoviezHpageTarget(href)
+                            href.contains("gdshine.org/s/") ->
+                                hindmoviezGdshineTarget(href.substringAfter("/s/").substringBefore("?"))
+                            else -> null
+                        }
+                        if (targetUrl != null) {
+                            if (emitHindmoviezLink(targetUrl, info, quality, seenUrls, downloadOnly, callback)) {
+                                emittedAny = true
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return emittedAny
+    }
+
+    private fun hindmoviezEpisodeMatch(a: Element, targetSeason: Int, targetEpisode: Int): Boolean {
+        val fileName = Uri.decode(a.attr("href").substringAfter("?id=", ""))
+        val sxxexx = Regex("(?i)S0*$targetSeason\\s*[-–]?\\s*E0*$targetEpisode(?!\\d)")
+        val anyMarker = Regex("(?i)\\bS\\d{1,2}\\s*[-–]?\\s*E\\d{1,3}\\b")
+        return when {
+            anyMarker.containsMatchIn(fileName) -> sxxexx.containsMatchIn(fileName)
+            else -> Regex("(?i)Episode\\s*:?\\s*0*$targetEpisode(?!\\d)").containsMatchIn(a.text())
+        }
+    }
+
+    // VegaMovies Helpers
+    private data class VegaDoc(
+        val postTitle: String? = null,
+        val permalink: String? = null,
+        val domain: String = ""
+    )
+
+    private class VegaQualityGroup(
+        val label: String,
+        val links: MutableList<Pair<String, String>> = mutableListOf()
+    )
+
+    private class VegaSeasonBlock(val title: String, val number: Int) {
+        val groups: MutableList<VegaQualityGroup> = mutableListOf()
+    }
+
+    private class VegaPostDetail(
+        val seasons: List<VegaSeasonBlock>,
+        val movieGroups: List<VegaQualityGroup>
+    )
+
+    private class VegaDrivePage(
+        val servers: List<Pair<String, String>>,
+        val episodes: Map<Int, List<Pair<String, String>>>
+    )
+
+    private data class VegaServer(val name: String, val url: String)
+
+    private fun isVegaServerLink(href: String): Boolean {
+        if (vegaDeadHosts.containsMatchIn(href)) return false
+        return href.startsWith("http") && vegaButtonHosts.containsMatchIn(href)
+    }
+
+    private suspend fun searchVegaPosts(domain: String, query: String): List<VegaDoc> {
+        val url = "$domain/ts-search.php?q=${Uri.encode(query)}&page=1"
+        val text = runCatching {
+            val res = app.get(
+                url,
+                headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$domain/"),
+                interceptor = cfKiller,
+                timeout = 15L
+            )
+            if (res.code == 200) res.text else null
+        }.getOrNull() ?: return emptyList()
+
+        return runCatching {
+            JSONObject(text).optJSONArray("hits")?.let { hits ->
+                (0 until hits.length()).mapNotNull { i ->
+                    hits.optJSONObject(i)?.optJSONObject("document")?.let { d ->
+                        val title = d.optString("post_title")
+                        val link = d.optString("permalink")
+                        if (title.isBlank() || link.isBlank()) null
+                        else VegaDoc(title, link, domain)
+                    }
+                }
+            } ?: emptyList()
+        }.getOrDefault(emptyList())
+    }
+
+    private fun pickVegaPost(posts: List<VegaDoc>, targetTitle: String, isTv: Boolean, targetSeason: Int): VegaDoc? {
+        val matched = posts.filter { titleMatchesCandidate(it.postTitle, targetTitle) }
+        if (matched.isEmpty()) return null
+        return if (isTv) {
+            val seasonPosts = matched.filter {
+                seasonsInText(it.postTitle.orEmpty())?.contains(targetSeason) == true
+            }
+            seasonPosts.firstOrNull() ?: matched.firstOrNull { seasonsInText(it.postTitle.orEmpty()) == null } ?: matched.first()
+        } else {
+            matched.first()
+        }
+    }
+
+    private fun collectVegaButtons(scope: Element, group: VegaQualityGroup) {
+        for (a in scope.select("a[href]")) {
+            val href = a.attr("href").trim()
+            if (!isVegaServerLink(href) || vegaJunk.containsMatchIn(href)) continue
+            val label = a.selectFirst("button")?.text()?.replace(Regex("""\s+"""), " ")?.trim()
+                ?: a.text().replace(Regex("""\s+"""), " ").trim()
+            if (label.isBlank() || Regex("""(?i)batch|zip\b""").containsMatchIn(label)) continue
+            group.links.add(label to href)
+        }
+    }
+
+    private fun parseVegaPost(html: String): VegaPostDetail? {
+        val doc = Jsoup.parse(html)
+        val content = doc.selectFirst(".entry-content, .post-content, article") ?: doc
+        val qualityRegex = Regex("""\b(480p|720p|1080p|2160p|4K|60FPS)\b""", RegexOption.IGNORE_CASE)
+
+        fun groupsAfter(head: Element): MutableList<VegaQualityGroup> {
+            val out = mutableListOf<VegaQualityGroup>()
+            var sib = head.nextElementSibling()
+            while (sib != null) {
+                val tag = sib.tagName()
+                if (tag == "h1" || tag == "h2") break
+                if (tag == "h3" || tag == "h4" || tag == "h5") {
+                    val label = sib.text().replace(Regex("""\s+"""), " ").trim()
+                    if (label.isNotBlank() && qualityRegex.containsMatchIn(label)) {
+                        val group = VegaQualityGroup(label)
+                        var p = sib.nextElementSibling()
+                        while (p != null && !listOf("h1", "h2", "h3", "h4", "h5").contains(p.tagName())) {
+                            collectVegaButtons(p, group)
+                            p = p.nextElementSibling()
+                        }
+                        if (group.links.isNotEmpty()) out.add(group)
+                    }
+                }
+                sib = sib.nextElementSibling()
+            }
+            return out
+        }
+
+        val seasons = mutableListOf<VegaSeasonBlock>()
+        val seasonHeads = content.select("h1, h2").filter { el ->
+            Regex("""(?i)season\s*\d+|part\s*\d+""").containsMatchIn(el.text())
+        }
+        for (head in seasonHeads) {
+            val num = Regex("""(?i)season\s*(\d+)""").find(head.text())?.groupValues?.get(1)?.toIntOrNull()
+                ?: Regex("""(?i)part\s*(\d+)""").find(head.text())?.groupValues?.get(1)?.toIntOrNull()
+                ?: 1
+            val block = VegaSeasonBlock(head.text().replace(Regex("""\s+"""), " ").trim(), num)
+            block.groups.addAll(groupsAfter(head))
+            if (block.groups.isNotEmpty()) seasons.add(block)
+        }
+
+        val movieGroups = mutableListOf<VegaQualityGroup>()
+        if (seasons.isEmpty()) {
+            for (head in content.select("h3, h4, h5")) {
+                val label = head.text().replace(Regex("""\s+"""), " ").trim()
+                if (label.isBlank() || !qualityRegex.containsMatchIn(label)) continue
+                val group = VegaQualityGroup(label)
+                var sib = head.nextElementSibling()
+                while (sib != null && !listOf("h1", "h2", "h3", "h4", "h5").contains(sib.tagName())) {
+                    collectVegaButtons(sib, group)
+                    sib = sib.nextElementSibling()
+                }
+                if (group.links.isNotEmpty()) movieGroups.add(group)
+            }
+        }
+        if (seasons.isEmpty() && movieGroups.isEmpty()) return null
+        return VegaPostDetail(seasons, movieGroups)
+    }
+
+    private suspend fun fetchVegaDrivePage(url: String): VegaDrivePage? {
+        vegaDriveCache[url]?.let { return it }
+        if (vegaDriveCache.size > 40) vegaDriveCache.clear()
+        val res = runCatching {
+            app.get(
+                url,
+                headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "https://nexdrive.beer/"),
+                interceptor = cfKiller,
+                timeout = 20L
+            )
+        }.getOrNull() ?: return null
+
+        val html = res.text
+        if (Regex("""(?i)file (is )?deleted|not found""").containsMatchIn(html)) return null
+        val doc = Jsoup.parse(html)
+        val scope = doc.selectFirst(".entry, article, .post-inner") ?: doc
+
+        val servers = mutableListOf<Pair<String, String>>()
+        for (a in scope.select("a[href]")) {
+            val href = a.attr("href").trim()
+            val label = a.selectFirst("button")?.text()?.replace(Regex("""\s+"""), " ")?.trim()
+                ?: a.text().replace(Regex("""\s+"""), " ").trim()
+            if (label.isBlank() || !isVegaServerLink(href)) continue
+            if (vegaJunk.containsMatchIn(href) || vegaJunk.containsMatchIn(label)) continue
+            if (Regex("""(?i)batch|zip\b""").containsMatchIn(label)) continue
+            servers.add(label to href)
+        }
+
+        val episodes = LinkedHashMap<Int, List<Pair<String, String>>>()
+        for (head in scope.select("h3, h4, h5")) {
+            val num = Regex("""(?i)episodes?\s*:?\s*0*(\d{1,3})""").find(head.text())?.groupValues?.get(1)?.toIntOrNull()
+                ?: continue
+            val links = mutableListOf<Pair<String, String>>()
+            var sib = head.nextElementSibling()
+            while (sib != null && !listOf("h3", "h4", "h5").contains(sib.tagName())) {
+                for (a in sib.select("a[href]")) {
+                    val href = a.attr("href").trim()
+                    val label = a.selectFirst("button")?.text()?.replace(Regex("""\s+"""), " ")?.trim()
+                        ?: a.text().replace(Regex("""\s+"""), " ").trim()
+                    if (label.isBlank() || !isVegaServerLink(href) || vegaJunk.containsMatchIn(href)) continue
+                    links.add(label to href)
+                }
+                sib = sib.nextElementSibling()
+            }
+            if (links.isNotEmpty() && !episodes.containsKey(num)) {
+                episodes[num] = links
+            }
+        }
+        return VegaDrivePage(servers.distinctBy { it.second }, episodes).also { vegaDriveCache[url] = it }
+    }
+
+    private fun vegaServerNameOf(label: String, href: String): String? {
+        val low = label.lowercase()
+        val h = href.lowercase()
+        return when {
+            low.contains("fslv2") || low.contains("fsl v2") || low.contains("fsl2") -> "FSLv2"
+            low.contains("fsl") -> "FSL"
+            low.contains("pixelserver") || low.contains("pixel server") || low.contains("pixeldrain") -> "PixelDrain"
+            low.contains("gofile") -> "GoFile"
+            low.contains("10gbps") -> "10Gbps"
+            low.contains("buzzserver") -> "BuzzServer"
+            low.contains("instant download") || low.contains("instant dl") -> "Instant Download"
+            low.contains("vegadrive") || low.contains("v-drive") || low.contains("skydrop") -> "V-Drive"
+            low.contains("vcloud") || low.contains("v-cloud") -> "V-Cloud"
+            low.contains("g-direct") || low.contains("gdirect") || low.contains("fastdl") -> "G-Direct"
+            low.contains("filepress") || low.contains("filebee") -> "Filepress"
+            h.contains(".r2.cloudflarestorage.com") -> "FSLv2"
+            h.contains(".r2.dev") -> "FSL"
+            h.contains("pixeldrain") -> "PixelDrain"
+            h.contains("gpdl") -> "10Gbps"
+            else -> null
+        }
+    }
+
+    private fun vegaPixelApi(href: String): String {
+        val id = href.substringBefore("?").substringBefore("#").substringAfterLast("/")
+        return "${baseHostOf(href)}/api/file/$id"
+    }
+
+    private suspend fun vegaGpdlDirect(url: String): String? {
+        var cur = url
+        return runCatching {
+            for (i in 0 until 5) {
+                val res = app.get(cur, headers = mapOf("User-Agent" to USER_AGENT), allowRedirects = false, timeout = 15L)
+                val loc = res.headers["location"]
+                if (loc.isNullOrBlank() || res.code !in 301..308) break
+                cur = if (loc.startsWith("http")) loc else baseHostOf(cur) + loc
+            }
+            for (pair in cur.substringAfter("?", "").split("&")) {
+                if (pair.substringBefore("=") != "link") continue
+                val value = pair.substringAfter("=")
+                val direct = if (value.contains("%")) URLDecoder.decode(value, "UTF-8") else value
+                return@runCatching direct.takeIf { it.startsWith("http") }
+            }
+            null
+        }.getOrNull()
+    }
+
+    private suspend fun vegaGofileDirect(url: String): String? {
+        val code = url.substringAfterLast("/").substringBefore("#").substringBefore("?")
+        if (code.isBlank()) return null
+        return runCatching {
+            val api = "https://api.gofile.io"
+            val token = JSONObject(app.post("$api/accounts", timeout = 15L).text)
+                .getJSONObject("data").getString("token")
+            val wt = runCatching {
+                Regex("""appdata\.wt\s*=\s*["']([^"']+)["']""").find(
+                    app.get("$api/dist/js/global.js", timeout = 15L).text
+                )?.groupValues?.get(1)
+            }.getOrNull()
+            val contentUrl = if (wt.isNullOrBlank()) "$api/contents/$code?wt=$token" else "$api/contents/$code?wt=$wt"
+            val data = JSONObject(
+                app.get(contentUrl, headers = mapOf("Authorization" to "Bearer $token"), timeout = 20L).text
+            ).getJSONObject("data")
+            val children = data.optJSONObject("children") ?: return@runCatching null
+            var best: String? = null
+            var bestSize = -1L
+            for (key in children.keys()) {
+                val child = children.optJSONObject(key) ?: continue
+                if (Regex("""(?i)\.(zip|rar|7z)\s*$""").containsMatchIn(child.optString("name"))) continue
+                val link = child.optString("link").takeIf { it.startsWith("http") } ?: continue
+                if (child.optLong("size", 0L) > bestSize) {
+                    bestSize = child.optLong("size", 0L)
+                    best = link
+                }
+            }
+            best
+        }.getOrNull()
+    }
+
+    private suspend fun vegaFastdlDirect(url: String): String? {
+        return runCatching {
+            val res = app.get(url, headers = mapOf("User-Agent" to USER_AGENT), timeout = 20L)
+            val reurl = Regex("""var\s+reurl\s*=\s*"([^"]+)"""").find(res.text)?.groupValues?.get(1)
+                ?: Regex("""'(https://fastdl[^']*dl\.php\?link=[^']+)'""").find(res.text)?.groupValues?.get(1)
+                ?: return@runCatching null
+            val carrier = Regex("""[?&]r=([A-Za-z0-9+/=_-]+)""").find(reurl)?.groupValues?.get(1)?.let { wrapped ->
+                b64DecodeSafe(wrapped)
+            } ?: reurl
+            val encoded = Regex("""link=(https?://[^&"']+)""").find(carrier)?.groupValues?.get(1)
+                ?: return@runCatching null
+            URLDecoder.decode(encoded, "UTF-8").takeIf { it.startsWith("http") }
+        }.getOrNull()
+    }
+
+    private suspend fun vegaFilepressDirect(url: String): String? {
+        val id = Regex("""/file/([a-f0-9]{16,40})""").find(url)?.groupValues?.get(1) ?: return null
+        val base = "https://filebee.xyz"
+
+        suspend fun postTask(method: String, targetId: String): Any? {
+            return runCatching {
+                val endpoint = if (method == "indexDownlaod" && targetId != id) "$base/api/file/downlaod2/" else "$base/api/file/downlaod/"
+                val res = app.post(
+                    endpoint,
+                    headers = mapOf(
+                        "User-Agent" to USER_AGENT,
+                        "Referer" to "$base/",
+                        "Origin" to base,
+                        "Content-Type" to "application/json",
+                        "Accept" to "application/json"
+                    ),
+                    json = JSONObject()
+                        .put("captchaValue", JSONObject.NULL)
+                        .put("id", targetId)
+                        .put("method", method)
+                        .toString(),
+                    timeout = 25L
+                )
+                if (!res.isSuccessful) return@runCatching null
+                val parsed = JSONObject(res.text)
+                if (!parsed.optBoolean("status")) return@runCatching null
+                parsed.opt("data")
+            }.getOrNull()
+        }
+
+        val share = postTask("dotFlixDownlaod", id) as? String
+        if (!share.isNullOrBlank() && share.startsWith("http")) {
+            val dotRes = runCatching {
+                val pageText = app.get(
+                    share,
+                    headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "https://new3.dotflix.shop/"),
+                    timeout = 20L
+                ).text
+                val code = Regex("""btoa\('([^']+)'\)""").find(pageText)?.groupValues?.get(1) ?: return@runCatching null
+                val obfuscated = java.util.Base64.getEncoder().encodeToString(code.toByteArray()).reversed()
+                val requestId = List(13) { "abcdefghijklmnopqrstuvwxyz0123456789".random() }.joinToString("")
+                val timestamp = System.currentTimeMillis().toString()
+                val extractRes = app.post(
+                    "https://dotflix.fit/api/extract-download",
+                    headers = mapOf(
+                        "User-Agent" to USER_AGENT,
+                        "Referer" to "https://new3.dotflix.shop/",
+                        "Origin" to "https://new3.dotflix.shop",
+                        "Content-Type" to "application/json",
+                        "Accept" to "application/json",
+                        "X-Request-ID" to requestId,
+                        "X-Timestamp" to timestamp
+                    ),
+                    json = JSONObject()
+                        .put("requestId", requestId)
+                        .put("timestamp", timestamp)
+                        .put("data", obfuscated)
+                        .toString(),
+                    timeout = 25L
+                )
+                if (!extractRes.isSuccessful) return@runCatching null
+                val parsed = JSONObject(extractRes.text)
+                if (!parsed.optBoolean("success")) null else parsed.optString("downloadUrl").takeIf { it.startsWith("http") }
+            }.getOrNull()
+            if (dotRes != null) return dotRes
+        }
+
+        val task = postTask("indexDownlaod", id) as? String
+        if (!task.isNullOrBlank() && task.matches(Regex("[a-f0-9]{16,40}"))) {
+            return when (val finalData = postTask("indexDownlaod", task)) {
+                is String -> finalData.takeIf { it.startsWith("http") }
+                is JSONArray -> (0 until finalData.length())
+                    .firstNotNullOfOrNull { idx -> finalData.optString(idx).takeIf { it.startsWith("http") } }
+                else -> null
+            }
+        }
+        return null
+    }
+
+    private suspend fun vegaVegadriveSkydrop(url: String): VegaServer? {
+        val page = runCatching {
+            app.get(
+                url,
+                headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "https://nexdrive.beer/"),
+                timeout = 20L
+            )
+        }.getOrNull() ?: return null
+        val base = baseHostOf(page.url)
+        val token = url.substringAfter("/s/").substringBefore("?").substringBefore("#")
+            .substringAfter("/d/").substringBefore("/")
+        if (token.isBlank() || token == url) return null
+        for (attempt in 0 until 3) {
+            val res = runCatching {
+                app.get(
+                    "$base/download-link/$token/skydrop",
+                    headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$base/s/$token"),
+                    timeout = 15L
+                )
+            }.getOrNull() ?: return null
+            val parsed = runCatching { JSONObject(res.text) }.getOrNull()
+            val link = parsed?.optString("download_url").orEmpty()
+            if (res.code == 200 && link.startsWith("http")) return VegaServer("V-Drive", link)
+            if (res.code != 202) return null
+            delay((parsed?.optInt("retry_after_ms", 2500) ?: 2500).toLong().coerceAtMost(3000L))
+        }
+        return null
+    }
+
+    private suspend fun vegaAddServer(out: MutableList<VegaServer>, sName: String, href: String) {
+        when (sName) {
+            "10Gbps" -> vegaGpdlDirect(href)?.let { out.add(VegaServer(sName, it)) }
+            "GoFile" -> vegaGofileDirect(href)?.let { out.add(VegaServer(sName, it)) }
+            "PixelDrain" -> out.add(VegaServer(sName, vegaPixelApi(href)))
+            else -> out.add(VegaServer(sName, href))
+        }
+    }
+
+    private suspend fun vegaVcloudServers(url: String): List<VegaServer> {
+        val headers = mapOf(
+            "User-Agent" to USER_AGENT,
+            "Referer" to "https://nexdrive.beer/",
+            "Cookie" to "xla=s4t"
+        )
+        val first = runCatching { app.get(url, headers = headers, timeout = 25L).text }.getOrNull() ?: return emptyList()
+        val tokenRegex = Regex("""var\s+url\s*=\s*atob\s*\(\s*atob\s*\(\s*['"]([^'"]+)['"]""")
+        val plainRegex = Regex("""var\s+url\s*=\s*['"]([^'"]+)['"]""")
+
+        var target = tokenRegex.find(first)?.groupValues?.get(1)
+            ?.let { runCatching { base64Decode(base64Decode(it.trim())) }.getOrNull() }
+            ?: plainRegex.find(first)?.groupValues?.get(1)?.takeIf { it.startsWith("http") }
+        var fromUrl = url
+
+        if (target == null || !target.startsWith("http")) {
+            val hop = Jsoup.parse(first).selectFirst("div.main h4 a")?.attr("href")?.trim() ?: return emptyList()
+            fromUrl = if (hop.startsWith("http")) hop else baseHostOf(url) + hop
+            val hopHtml = runCatching {
+                app.get(fromUrl, headers = headers + mapOf("Referer" to url), timeout = 25L).text
+            }.getOrNull() ?: return emptyList()
+            target = tokenRegex.find(hopHtml)?.groupValues?.get(1)
+                ?.let { runCatching { base64Decode(base64Decode(it.trim())) }.getOrNull() }
+                ?: plainRegex.find(hopHtml)?.groupValues?.get(1)?.takeIf { it.startsWith("http") }
+        }
+        val resolvedTarget = target?.takeIf { it.startsWith("http") } ?: return emptyList()
+
+        val html = runCatching {
+            app.get(resolvedTarget, headers = headers + mapOf("Referer" to fromUrl), timeout = 25L).text
+        }.getOrNull() ?: return emptyList()
+
+        val out = mutableListOf<VegaServer>()
+        for (a in Jsoup.parse(html).select("a[href]")) {
+            val href = a.attr("href").trim()
+            if (!href.startsWith("http") || vegaJunk.containsMatchIn(href)) continue
+            val label = a.text().replace(Regex("""\s+"""), " ").trim()
+            if (label.isBlank()) continue
+            val sName = vegaServerNameOf(label, href) ?: continue
+            vegaAddServer(out, sName, href)
+        }
+        Regex("""var\s+pxl\s*=\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1)
+            ?.takeIf { it.startsWith("http") && it.contains("pixeldrain") }
+            ?.let { vegaAddServer(out, "PixelDrain", it) }
+
+        return out.distinctBy { it.url }
+    }
+
+    private suspend fun vegaHubcloudServers(url: String): List<VegaServer> {
+        val res = runCatching {
+            app.get(url, headers = mapOf("User-Agent" to USER_AGENT), timeout = 20L)
+        }.getOrNull() ?: return emptyList()
+        val doc = Jsoup.parse(res.text)
+        val header = doc.selectFirst("div.card-header")?.text()?.trim().orEmpty()
+        if (Regex("""(?i)\.(zip|rar|7z)\s*$""").containsMatchIn(header)) return emptyList()
+        val generate = doc.select("a.btn, a[download]")
+            .firstOrNull { it.text().contains("generate", true) }
+            ?.attr("href")?.trim() ?: return emptyList()
+        val genUrl = if (generate.startsWith("http")) generate else baseHostOf(res.url) + generate
+        val genRes = runCatching {
+            app.get(genUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to res.url), timeout = 25L)
+        }.getOrNull() ?: return emptyList()
+
+        val out = mutableListOf<VegaServer>()
+        for (a in Jsoup.parse(genRes.text).select("a[href]")) {
+            val href = a.attr("href").trim()
+            if (!href.startsWith("http") || vegaJunk.containsMatchIn(href)) continue
+            val label = a.text().replace(Regex("""\s+"""), " ").trim()
+            if (label.isBlank()) continue
+            val sName = vegaServerNameOf(label, href) ?: continue
+            vegaAddServer(out, sName, href)
+        }
+        return out.distinctBy { it.url }
+    }
+
+    private suspend fun resolveVegaHref(href: String): List<VegaServer> {
+        if (!href.startsWith("http") || vegaDeadHosts.containsMatchIn(href)) return emptyList()
+        val host = hostLower(href)
+        return runCatching {
+            when {
+                host.contains("vcloud") -> vegaVcloudServers(href)
+                host.contains("vegadrive") -> listOfNotNull(vegaVegadriveSkydrop(href))
+                host.contains("fastdl") -> vegaFastdlDirect(href)?.let { listOf(VegaServer("G-Direct", it)) } ?: emptyList()
+                host.contains("filebee") || host.contains("filepress") || host.contains("fpgo") ->
+                    vegaFilepressDirect(href)?.let { listOf(VegaServer("Filepress", it)) } ?: emptyList()
+                host.contains("gofile") -> vegaGofileDirect(href)?.let { listOf(VegaServer("GoFile", it)) } ?: emptyList()
+                host.contains("gpdl") -> vegaGpdlDirect(href)?.let { listOf(VegaServer("10Gbps", it)) } ?: emptyList()
+                host.contains("hubcloud") -> vegaHubcloudServers(href)
+                href.contains(".r2.cloudflarestorage.com", true) -> listOf(VegaServer("FSLv2", href))
+                href.contains(".r2.dev", true) -> listOf(VegaServer("FSL", href))
+                href.contains("pixeldrain", true) -> listOf(VegaServer("PixelDrain", vegaPixelApi(href)))
+                else -> emptyList()
+            }
+        }.getOrDefault(emptyList())
     }
 
     override suspend fun loadLinks(
@@ -1392,6 +2117,220 @@ class MovieFoxProvider : MainAPI() {
                                     resolvePrmoviesPagePlayer(targetDoc, seenUrls, callback)
                                 }
                                 if (prmoviesFound) found = true
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 6. HindMoviez Integration inside MovieFoxProvider
+            val hindmoviezEnabled = appCtx?.let { MovieFoxSettingsDialog.isServerEnabled(it, "hindmoviez") } ?: true
+            if (hindmoviezEnabled && pageTitle.isNotBlank()) {
+                runCatching {
+                    val targetSeason = season.toIntOrNull()?.coerceAtLeast(1) ?: 1
+                    val targetEpisode = episode.toIntOrNull()?.coerceAtLeast(1) ?: 1
+
+                    var chosenPost: Pair<String, String>? = null
+                    outer@ for (domain in hindmoviezDomains) {
+                        val searchUrl = "$domain/?s=${URLEncoder.encode(pageTitle, "UTF-8")}"
+                        val searchDoc = runCatching {
+                            app.get(searchUrl, headers = mapOf("User-Agent" to USER_AGENT), interceptor = cfKiller, timeout = 15L).document
+                        }.getOrNull() ?: continue
+
+                        val posts = searchDoc.select("h2.entry-title > a[href]").mapNotNull { a ->
+                            val t = a.text().replace(Regex("\\s+"), " ").trim()
+                            val h = a.attr("href").trim()
+                            if (t.isBlank() || !h.startsWith("http")) null else t to h
+                        }
+                        if (posts.isEmpty()) continue
+
+                        val matched = posts.filter { titleMatchesCandidate(it.first, pageTitle) }
+                        if (matched.isNotEmpty()) {
+                            chosenPost = if (isTv) {
+                                val sPosts = matched.filter { seasonsInText(it.first)?.contains(targetSeason) == true }
+                                sPosts.firstOrNull() ?: matched.firstOrNull { seasonsInText(it.first) == null } ?: matched.first()
+                            } else {
+                                matched.first()
+                            }
+                            if (chosenPost != null) break@outer
+                        }
+                    }
+
+                    if (chosenPost != null) {
+                        val postDoc = runCatching {
+                            app.get(chosenPost.second, headers = mapOf("User-Agent" to USER_AGENT), interceptor = cfKiller, timeout = 20L).document
+                        }.getOrNull()
+
+                        val targets = postDoc?.select("a.maxbutton")?.mapNotNull { a ->
+                            a.attr("href").trim().takeIf { it.startsWith("http") }
+                        }?.distinct().orEmpty()
+
+                        if (targets.isNotEmpty()) {
+                            val sem = Semaphore(3)
+                            coroutineScope {
+                                targets.map { linkUrl ->
+                                    async(Dispatchers.IO) {
+                                        sem.withPermit {
+                                            val subPage = runCatching {
+                                                app.get(linkUrl, headers = mapOf("User-Agent" to USER_AGENT), interceptor = cfKiller, timeout = 20L).document
+                                            }.getOrNull() ?: return@withPermit false
+
+                                            val shareHref = if (!isTv) {
+                                                subPage.select("a[href]").firstOrNull {
+                                                    it.attr("href").contains("?id=")
+                                                }?.attr("abs:href")?.trim()
+                                            } else {
+                                                subPage.select("a[href]").firstOrNull {
+                                                    it.attr("href").contains("?id=") && hindmoviezEpisodeMatch(it, targetSeason, targetEpisode)
+                                                }?.attr("abs:href")?.trim()
+                                            }
+
+                                            if (!shareHref.isNullOrBlank() && shareHref.startsWith("http")) {
+                                                emitHindmoviezShare(shareHref, seenUrls, downloadOnly, callback)
+                                            } else {
+                                                false
+                                            }
+                                        }
+                                    }
+                                }.forEach { job ->
+                                    if (job.await()) found = true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 7. VegaMovies Integration inside MovieFoxProvider
+            val vegamoviesEnabled = appCtx?.let { MovieFoxSettingsDialog.isServerEnabled(it, "vegamovies") } ?: true
+            if (vegamoviesEnabled && pageTitle.isNotBlank()) {
+                runCatching {
+                    val targetSeason = season.toIntOrNull()?.coerceAtLeast(1) ?: 1
+                    val targetEpisode = episode.toIntOrNull()?.coerceAtLeast(1) ?: 1
+
+                    var chosenVega: VegaDoc? = null
+                    val searchQueries = listOfNotNull(
+                        pageTitle,
+                        if (isTv) "$pageTitle Season $targetSeason" else null
+                    ).distinct()
+
+                    for (q in searchQueries) {
+                        val roundDocs = coroutineScope {
+                            vegamoviesDomains.map { domain ->
+                                async(Dispatchers.IO) { searchVegaPosts(domain, q) }
+                            }.flatMap { it.await() }
+                        }
+                        if (roundDocs.isEmpty()) continue
+                        chosenVega = pickVegaPost(roundDocs, pageTitle, isTv, targetSeason)
+                        if (chosenVega != null) break
+                    }
+
+                    val permalink = chosenVega?.permalink?.takeIf { it.isNotBlank() }
+                    if (permalink != null) {
+                        val domain = chosenVega.domain.ifBlank {
+                            vegamoviesDomains.firstOrNull { permalink.contains(it.removePrefix("https://"), true) }
+                                ?: vegamoviesDomains.first()
+                        }
+                        val postUrl = normalizeUrl(permalink, domain)
+                        val postHtml = runCatching {
+                            app.get(
+                                postUrl,
+                                headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$domain/"),
+                                interceptor = cfKiller,
+                                timeout = 20L
+                            ).text
+                        }.getOrNull().orEmpty()
+
+                        val detail = if (postHtml.isNotBlank()) parseVegaPost(postHtml) else null
+                        if (detail != null) {
+                            val groups: List<VegaQualityGroup> = if (isTv) {
+                                val inSeason = detail.seasons.filter { it.number == targetSeason }.flatMap { it.groups }
+                                when {
+                                    inSeason.isNotEmpty() -> inSeason
+                                    detail.seasons.isNotEmpty() ->
+                                        detail.seasons.filter { s -> seasonsInText(s.title) == null }.flatMap { it.groups }
+                                    seasonsInText(chosenVega.postTitle.orEmpty())?.contains(targetSeason) == true -> detail.movieGroups
+                                    else -> emptyList()
+                                }
+                            } else {
+                                detail.movieGroups
+                            }
+
+                            if (groups.isNotEmpty()) {
+                                val claimedKeys = ConcurrentHashMap.newKeySet<String>()
+                                coroutineScope {
+                                    val gate = Semaphore(5)
+                                    groups.map { group ->
+                                        async(Dispatchers.IO) {
+                                            gate.withPermit {
+                                                var groupEmitted = false
+                                                val tier = parseIndexQuality(group.label)
+                                                val cleanInfo = group.label
+                                                    .replace(Regex("""(?i)\bdownload\s+now\b|\bdownload\b"""), "")
+                                                    .replace(Regex("""\s+"""), " ").trim()
+                                                val isDv = Regex("""(?i)\bDV\b|dolby|hybrid""").containsMatchIn(group.label)
+
+                                                for ((_, driveUrl) in group.links.distinctBy { it.second }) {
+                                                    val drivePage = fetchVegaDrivePage(driveUrl) ?: continue
+                                                    val targets = if (isTv) {
+                                                        drivePage.episodes[targetEpisode]
+                                                            ?: drivePage.servers.takeIf { drivePage.episodes.isEmpty() }
+                                                    } else {
+                                                        drivePage.servers
+                                                    }.orEmpty()
+
+                                                    for ((_, href) in targets) {
+                                                        val nextList = if (href.contains("nexdrive", true)) {
+                                                            val nested = fetchVegaDrivePage(href) ?: continue
+                                                            if (isTv) {
+                                                                nested.episodes[targetEpisode]
+                                                                    ?: nested.servers.takeIf { nested.episodes.isEmpty() }
+                                                            } else {
+                                                                nested.servers
+                                                            }.orEmpty()
+                                                        } else {
+                                                            listOf("" to href)
+                                                        }
+
+                                                        for ((_, href2) in nextList) {
+                                                            for (srv in resolveVegaHref(href2)) {
+                                                                val streamUrl = normalizeUrl(srv.url)
+                                                                if (streamUrl.isBlank() || isAdUrl(streamUrl) || !seenUrls.add(streamUrl)) continue
+                                                                val isHls = streamUrl.contains(".m3u8", true)
+                                                                if (downloadOnly && isHls) continue
+
+                                                                val key = "${srv.name}|$tier|${if (isDv) "dv" else ""}"
+                                                                if (!claimedKeys.add(key)) continue
+
+                                                                val fullInfo = if (isDv && !cleanInfo.contains("DV", true)) {
+                                                                    "$cleanInfo DV".trim()
+                                                                } else {
+                                                                    cleanInfo
+                                                                }
+
+                                                                callback(
+                                                                    newExtractorLink(
+                                                                        source = "VegaMovies",
+                                                                        name = buildSourceLabel("VegaMovies", srv.name, fullInfo),
+                                                                        url = streamUrl,
+                                                                        type = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                                                    ) {
+                                                                        this.quality = tier
+                                                                        this.headers = mapOf("User-Agent" to USER_AGENT)
+                                                                    }
+                                                                )
+                                                                groupEmitted = true
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                groupEmitted
+                                            }
+                                        }
+                                    }.forEach { job ->
+                                        if (job.await()) found = true
+                                    }
+                                }
                             }
                         }
                     }
