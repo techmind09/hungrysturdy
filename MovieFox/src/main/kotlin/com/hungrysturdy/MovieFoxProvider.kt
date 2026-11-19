@@ -483,6 +483,7 @@ class MovieFoxProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
+            val appCtx = CloudStreamApp.context
             val cleanPageUrl = data.substringBefore("?")
             val rawHtml = app.get(cleanPageUrl, interceptor = cfKiller).text
             val document = org.jsoup.Jsoup.parse(rawHtml, mainUrl)
@@ -494,7 +495,7 @@ class MovieFoxProvider : MainAPI() {
                 .replace(Regex("\\s*\\(\\d{4}\\)\\s*$"), "")
                 .trim()
 
-            // Extract both internal ID and TMDB ID so Purstream/Castle/Watchout get the exact ID they expect
+            // Extract both internal ID and TMDB ID so Purstream/Castle/Watchout/FSL/GDrive get the exact ID
             val urlId = extractSeriesId(cleanPageUrl)
             val tmdbId = Regex("\"tmdbId\":(\\d+)").find(flightText)?.groupValues?.get(1)
             val jsonId = Regex("\"id\":(\\d+)").find(flightText)?.groupValues?.get(1)
@@ -523,7 +524,7 @@ class MovieFoxProvider : MainAPI() {
                 "$mainUrl/watch/movie-$primaryId"
             }
 
-            // Build endpoints for all candidate IDs (fixes Purstream, Castle, Watchout)
+            // Build endpoints for all candidate IDs
             val allEndpoints = mutableListOf<Pair<String, String>>()
             for (cid in candidateIds) {
                 allEndpoints.add("purstream" to "$mainUrl/api/stream/purstream?type=$contentType&id=$cid$imdbQuery$tvQuery")
@@ -539,12 +540,13 @@ class MovieFoxProvider : MainAPI() {
                 allEndpoints.add("gdrive" to "$mainUrl/api/stream/gdrive?type=$contentType&id=$cid$imdbQuery$tvQuery")
             }
 
+            val maxConcurrency = appCtx?.let { MovieFoxSettingsDialog.getParallelServers(it) } ?: 10
+            val downloadOnly = appCtx?.let { MovieFoxSettingsDialog.isDownloadOnly(it) } ?: false
+
             val activeEndpoints = allEndpoints
                 .distinctBy { it.second }
-                .filter { (key, _) -> MovieFoxSettingsDialog.isServerEnabled(key) }
-                .take(MovieFoxSettingsDialog.getParallelServers() * candidateIds.size)
-
-            val downloadOnly = MovieFoxSettingsDialog.isDownloadOnly()
+                .filter { (key, _) -> appCtx?.let { MovieFoxSettingsDialog.isServerEnabled(it, key) } ?: true }
+                .take(maxConcurrency * candidateIds.size)
 
             val baseHeaders = mapOf(
                 "Referer" to watchUrl,
@@ -582,7 +584,7 @@ class MovieFoxProvider : MainAPI() {
                 found = true
             }
 
-            // 1. Built-in MovieFox API Endpoints (Purstream, Castle, Watchout, Direct, Debrid, FSL, GDrive, etc.)
+            // 1. Built-in MovieFox API Endpoints
             for ((endpointName, apiUrl) in activeEndpoints) {
                 val response = runCatching {
                     app.get(apiUrl, headers = baseHeaders, interceptor = cfKiller)
@@ -652,7 +654,8 @@ class MovieFoxProvider : MainAPI() {
                     ).any { streamUrl.contains(it, true) }
 
                     if (isKnownHost) {
-                        if (MovieFoxSettingsDialog.isServerEnabled("embeds") && seenUrls.add(streamUrl)) {
+                        val embedsEnabled = appCtx?.let { MovieFoxSettingsDialog.isServerEnabled(it, "embeds") } ?: true
+                        if (embedsEnabled && seenUrls.add(streamUrl)) {
                             val extracted = runCatching {
                                 loadExtractor(streamUrl, watchUrl, subtitleCallback, callback)
                             }.getOrDefault(false)
@@ -686,8 +689,9 @@ class MovieFoxProvider : MainAPI() {
                 }
             }
 
-            // 2. Embed Servers from Watch Page & Detail Page
-            if (MovieFoxSettingsDialog.isServerEnabled("embeds")) {
+            // 2. Embed Servers & Worker HLS from Watch Page & Detail Page
+            val embedsEnabled = appCtx?.let { MovieFoxSettingsDialog.isServerEnabled(it, "embeds") } ?: true
+            if (embedsEnabled) {
                 val watchHtml = runCatching {
                     app.get(watchUrl, headers = baseHeaders, interceptor = cfKiller).text
                 }.getOrNull().orEmpty()
@@ -776,8 +780,11 @@ class MovieFoxProvider : MainAPI() {
                 }
             }
 
-            // 3. Auto-Fetch Servers from Any Pasted External Website (e.g., https://sflix.film/)
-            val enabledCustomSites = MovieFoxSettingsDialog.getCustomSites().filter { it.enabled }
+            // 3. Auto-Fetch from Saved Custom Domains in MovieFoxSettingsDialog
+            val enabledCustomSites = appCtx
+                ?.let { MovieFoxSettingsDialog.getCustomSites(it).filter { s -> s.enabled } }
+                .orEmpty()
+
             for (site in enabledCustomSites) {
                 val baseSiteUrl = site.baseUrl.trimEnd('/')
                 if (!baseSiteUrl.startsWith("http") || pageTitle.isBlank()) continue
@@ -815,7 +822,6 @@ class MovieFoxProvider : MainAPI() {
                     }
                 }
 
-                // Also try standard TMDB-based embed endpoints on the pasted domain
                 val candidatePages = buildList {
                     if (!matchedDetailUrl.isNullOrBlank()) add(matchedDetailUrl)
                     if (isTv) {
@@ -852,7 +858,6 @@ class MovieFoxProvider : MainAPI() {
                         "Accept" to "*/*"
                     )
 
-                    // Scan iframes and embed links on the external site's detail/watch page
                     val extDoc = org.jsoup.Jsoup.parse(extHtml, baseSiteUrl)
                     extDoc.select("iframe[src], [data-src], [data-link], [data-url]").forEach { el ->
                         val iframeUrl = normalizeUrl(
@@ -870,7 +875,6 @@ class MovieFoxProvider : MainAPI() {
                         }
                     }
 
-                    // Scan raw HTML / scripts for .m3u8 / .mp4 streams
                     val extStreamRegex = Regex(
                         """["'](https?://[^"'\s<>]+?(?:\.(?:m3u8|mp4)|workers\.dev/[^"'\s<>]+|itsnitrox\.tech/[^"'\s<>]+|vibuxer\.com[^"'\s<>]*|type=hls)[^"'\s<>]*)["']""",
                         RegexOption.IGNORE_CASE
@@ -893,7 +897,6 @@ class MovieFoxProvider : MainAPI() {
                         )
                     }
 
-                    // Scan raw HTML / scripts for known embed hosts
                     val extHostRegex = Regex(
                         """https?://(?:[a-zA-Z0-9.-]+\.)?(?:voe\.(?:sx|to|co)|pixeldrain\.(?:com|dev)|streamtape\.(?:com|to|net|xyz)|shavetape\.cash|strcloud\.link|strtape\.tech|stape\.fun|luluvid\.com|lulustream\.com|luluvdo\.com|vidara\.(?:to|so)|vidprime\.top|upbolt\.(?:to|tv)|abysscdn\.com|short\.icu|lplaygo\.com|vidmoly\.(?:me|to)|earnvids\.com|dingtezuni\.com|rabbitstream\.net|upcloud\.to|megacloud\.(?:tv|club)|streamwish\.to|filemoon\.sx|drive\.google\.com)/[^\s"'\\]+""",
                         RegexOption.IGNORE_CASE
