@@ -51,7 +51,7 @@ class Plugin : Plugin() {
 
         // Plugin Settings / Donation Dialog
         openSettings = { ctx ->
-            PluginDonation.open(
+            Multi2Donation.open(
                 context = ctx,
                 pluginName = "Sflix & HindiDrama"
             )
