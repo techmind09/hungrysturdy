@@ -20,6 +20,7 @@ import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
+import com.lagradost.cloudstream3.CloudStreamApp
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URI
@@ -34,7 +35,6 @@ object MovieFoxSettingsDialog {
     private const val PREF_CONCURRENCY = "parallel_servers"
     private const val PREF_TIMEOUT_SEC = "request_timeout_sec"
 
-    // In-memory cache for 0ms lag reads
     private var cachedPrefs: SharedPreferences? = null
     private var cachedSites: MutableList<CustomExternalSite>? = null
 
@@ -55,18 +55,18 @@ object MovieFoxSettingsDialog {
     )
 
     val BUILTIN_SERVERS = listOf(
-        ServerConfig("purstream", "Purstream", "API", "#3B82F6", "Primary high-speed JSON stream API"),
+        ServerConfig("purstream", "Purstream", "API", "#3B82F6", "Primary JSON stream endpoint"),
         ServerConfig("castle", "Castle", "API", "#3B82F6", "Secondary multi-quality JSON API"),
         ServerConfig("watchout", "Watchout", "API", "#3B82F6", "Multi-source resolver endpoint"),
-        ServerConfig("direct", "Direct Server", "Direct", "#10B981", "Direct MP4 / HLS stream source"),
-        ServerConfig("debrid", "Debrid", "Cloud", "#8B5CF6", "Cached high-bitrate stream links"),
-        ServerConfig("vidsrc", "VidSrc", "Embed", "#F59E0B", "TMDB/IMDb ID-based embed source"),
-        ServerConfig("autoembed", "AutoEmbed", "Embed", "#F59E0B", "Automated multi-host embed source"),
-        ServerConfig("hls", "HLS / Workers / Nitrox", "HLS", "#06B6D4", "Adaptive .m3u8 & edge worker streams"),
-        ServerConfig("fsl", "FSL Server", "Direct", "#10B981", "FSL direct media endpoint"),
-        ServerConfig("fsl2", "FSL2 Server", "Direct", "#10B981", "FSL2 backup mirror endpoint"),
-        ServerConfig("gdrive", "GDrive Server", "Cloud", "#8B5CF6", "Google Drive direct media source"),
-        ServerConfig("embeds", "Embed Hosts", "Extractors", "#EC4899", "Voe, StreamTape, Vidara, Lulu, Pixeldrain, VidPrime")
+        ServerConfig("direct", "Direct Server", "Direct", "#10B981", "Direct media source"),
+        ServerConfig("debrid", "Debrid", "Cloud", "#8B5CF6", "Cached stream source"),
+        ServerConfig("vidsrc", "VidSrc", "Embed", "#F59E0B", "ID-based embed source"),
+        ServerConfig("autoembed", "AutoEmbed", "Embed", "#F59E0B", "Automated embed source"),
+        ServerConfig("hls", "HLS / Workers / Nitrox", "HLS", "#06B6D4", "Playlist & worker streams"),
+        ServerConfig("fsl", "FSL Server", "Direct", "#10B981", "FSL media endpoint"),
+        ServerConfig("fsl2", "FSL2 Server", "Direct", "#10B981", "FSL2 mirror endpoint"),
+        ServerConfig("gdrive", "GDrive Server", "Cloud", "#8B5CF6", "Google Drive media source"),
+        ServerConfig("embeds", "Embed Hosts", "Extractors", "#EC4899", "Registered host extractors")
     )
 
     private fun prefs(ctx: Context): SharedPreferences {
@@ -79,6 +79,9 @@ object MovieFoxSettingsDialog {
         val def = BUILTIN_SERVERS.find { it.key == key }?.defaultEnabled ?: true
         return prefs(ctx).getBoolean("$PREF_SERVER_PREFIX$key", def)
     }
+
+    fun isServerEnabled(key: String): Boolean =
+        CloudStreamApp.context?.let { isServerEnabled(it, key) } ?: true
 
     fun setServerEnabled(ctx: Context, key: String, enabled: Boolean) {
         prefs(ctx).edit().putBoolean("$PREF_SERVER_PREFIX$key", enabled).apply()
@@ -109,6 +112,9 @@ object MovieFoxSettingsDialog {
         return list
     }
 
+    fun getCustomSites(): MutableList<CustomExternalSite> =
+        CloudStreamApp.context?.let { getCustomSites(it) } ?: mutableListOf()
+
     fun saveCustomSites(ctx: Context, sites: List<CustomExternalSite>) {
         cachedSites = sites.toMutableList()
         val arr = JSONArray()
@@ -136,18 +142,21 @@ object MovieFoxSettingsDialog {
     }
 
     fun isStreamOnly(ctx: Context): Boolean = prefs(ctx).getBoolean(PREF_STREAM_ONLY, false)
+    fun isStreamOnly(): Boolean = CloudStreamApp.context?.let { isStreamOnly(it) } ?: false
     fun setStreamOnly(ctx: Context, v: Boolean) { prefs(ctx).edit().putBoolean(PREF_STREAM_ONLY, v).apply() }
 
     fun isDownloadOnly(ctx: Context): Boolean = prefs(ctx).getBoolean(PREF_DOWNLOAD_ONLY, false)
+    fun isDownloadOnly(): Boolean = CloudStreamApp.context?.let { isDownloadOnly(it) } ?: false
     fun setDownloadOnly(ctx: Context, v: Boolean) { prefs(ctx).edit().putBoolean(PREF_DOWNLOAD_ONLY, v).apply() }
 
     fun getParallelServers(ctx: Context): Int = prefs(ctx).getInt(PREF_CONCURRENCY, 10)
+    fun getParallelServers(): Int = CloudStreamApp.context?.let { getParallelServers(it) } ?: 10
     fun setParallelServers(ctx: Context, v: Int) { prefs(ctx).edit().putInt(PREF_CONCURRENCY, v.coerceIn(1, 25)).apply() }
 
     fun getTimeoutSeconds(ctx: Context): Int = prefs(ctx).getInt(PREF_TIMEOUT_SEC, 12)
+    fun getTimeoutSeconds(): Int = CloudStreamApp.context?.let { getTimeoutSeconds(it) } ?: 12
     fun setTimeoutSeconds(ctx: Context, v: Int) { prefs(ctx).edit().putInt(PREF_TIMEOUT_SEC, v.coerceIn(3, 30)).apply() }
 
-    // --- UI STYLING HELPERS ---
     private fun dp(ctx: Context, value: Int): Int =
         (value * ctx.resources.displayMetrics.density).toInt()
 
@@ -192,9 +201,6 @@ object MovieFoxSettingsDialog {
             setPadding(dp(ctx, 16), dp(ctx, 16), dp(ctx, 16), dp(ctx, 16))
         }
 
-        // ==========================================
-        // 1. HERO DASHBOARD HEADER WITH LIVE METRICS
-        // ==========================================
         val heroCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = gradientBanner()
@@ -228,7 +234,6 @@ object MovieFoxSettingsDialog {
         brandRow.addView(liveBadge)
         heroCard.addView(brandRow)
 
-        // 3 Telemetry Mini-Cards
         val metricsRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
@@ -290,9 +295,6 @@ object MovieFoxSettingsDialog {
         }
         refreshMetrics()
 
-        // ==========================================
-        // 2. SEGMENTED TAB SWITCHER
-        // ==========================================
         val tabBar = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             background = glassCard("#0E121B", "#1E2638", 20f)
@@ -342,9 +344,6 @@ object MovieFoxSettingsDialog {
         val sitesTab = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val engineTab = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
 
-        // ==========================================
-        // TAB 1: SERVERS (SEARCH + CATEGORY CHIPS + CARDS)
-        // ==========================================
         fun applyServerFilters() {
             BUILTIN_SERVERS.forEach { srv ->
                 val matchesCat = selectedCategory == "All" || srv.category.equals(selectedCategory, true)
@@ -414,7 +413,6 @@ object MovieFoxSettingsDialog {
         searchRow.addView(disableAllBtn)
         serversTab.addView(searchRow)
 
-        // Horizontal Category Chips
         val chipScroll = HorizontalScrollView(ctx).apply {
             isHorizontalScrollBarEnabled = false
             layoutParams = LinearLayout.LayoutParams(
@@ -461,7 +459,6 @@ object MovieFoxSettingsDialog {
         chipScroll.addView(chipRow)
         serversTab.addView(chipScroll)
 
-        // Server Cards
         BUILTIN_SERVERS.forEach { srv ->
             val card = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -522,9 +519,7 @@ object MovieFoxSettingsDialog {
             switchMap[srv.key] = sw
             rowMap[srv.key] = card
 
-            // Clicking anywhere on card toggles the switch smoothly
             card.setOnClickListener { sw.isChecked = !sw.isChecked }
-
             card.addView(col)
             card.addView(sw)
             serversTab.addView(card)
@@ -539,9 +534,6 @@ object MovieFoxSettingsDialog {
             override fun afterTextChanged(s: Editable?) {}
         })
 
-        // ==========================================
-        // TAB 2: CUSTOM SITES (CLIPBOARD PASTE + INSTANT SAVE)
-        // ==========================================
         val addBox = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = glassCard("#121724", "#2D3B55", 22f)
@@ -598,7 +590,7 @@ object MovieFoxSettingsDialog {
                     urlInput.setText(clipText)
                     urlInput.setSelection(clipText.length)
                 } else {
-                    Toast.makeText(ctx, "Clipboard is empty", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(ctx, "Clipboard khali hai", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -612,7 +604,7 @@ object MovieFoxSettingsDialog {
             savedListHolder.removeAllViews()
             if (customSites.isEmpty()) {
                 savedListHolder.addView(TextView(ctx).apply {
-                    text = "No saved domains yet. Paste a domain URL above to add it."
+                    text = "Koi domain save nahi hai. Upar URL paste karke add karein."
                     textSize = 12f
                     setTextColor(Color.parseColor("#64748B"))
                     gravity = Gravity.CENTER
@@ -697,7 +689,7 @@ object MovieFoxSettingsDialog {
             setOnClickListener {
                 var raw = urlInput.text.toString().trim()
                 if (raw.isBlank()) {
-                    Toast.makeText(ctx, "Paste or enter a URL first", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(ctx, "Pehle URL enter karein", Toast.LENGTH_SHORT).show()
                     return@setOnClickListener
                 }
                 if (!raw.startsWith("http://") && !raw.startsWith("https://")) {
@@ -716,7 +708,7 @@ object MovieFoxSettingsDialog {
                 urlInput.setText("")
                 refreshMetrics()
                 renderSavedSites()
-                Toast.makeText(ctx, "$title saved!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(ctx, "$title save ho gaya!", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -726,9 +718,6 @@ object MovieFoxSettingsDialog {
         sitesTab.addView(savedListHolder)
         renderSavedSites()
 
-        // ==========================================
-        // TAB 3: ENGINE & PERFORMANCE CONTROLS
-        // ==========================================
         val streamSwitch = Switch(ctx).apply {
             isChecked = isStreamOnly(ctx)
             setOnCheckedChangeListener { _, v -> setStreamOnly(ctx, v) }
@@ -770,8 +759,8 @@ object MovieFoxSettingsDialog {
             engineTab.addView(card)
         }
 
-        addEngineToggle("Stream Only Mode", "Prefer adaptive HLS (.m3u8) playlists", streamSwitch)
-        addEngineToggle("Download Only Mode", "Show direct MP4 / cloud files only", downloadSwitch)
+        addEngineToggle("Stream Only Mode", "Prefer adaptive HLS playlists", streamSwitch)
+        addEngineToggle("Download Only Mode", "Prefer direct files only", downloadSwitch)
 
         fun addStepperCard(
             title: String,
@@ -875,7 +864,6 @@ object MovieFoxSettingsDialog {
             setTimeoutSeconds(ctx, newSec)
         }
 
-        // Tab Switching Logic
         fun selectTab(idx: Int) {
             serversTab.visibility = if (idx == 0) View.VISIBLE else View.GONE
             sitesTab.visibility = if (idx == 1) View.VISIBLE else View.GONE
@@ -905,7 +893,6 @@ object MovieFoxSettingsDialog {
 
         val dialog = AlertDialog.Builder(ctx).setView(root).create()
 
-        // Footer Bar
         val footer = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
@@ -933,7 +920,7 @@ object MovieFoxSettingsDialog {
             layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 44), 1.3f).apply { marginStart = dp(ctx, 8) }
             setOnClickListener {
                 saveCustomSites(ctx, customSites)
-                Toast.makeText(ctx, "Settings applied!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(ctx, "Settings apply ho gayi!", Toast.LENGTH_SHORT).show()
                 dialog.dismiss()
             }
         }
