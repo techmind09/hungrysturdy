@@ -24,7 +24,7 @@ class MovieFoxPlugin : Plugin() {
         registerExtractorAPI(GDShineExtractor())
 
         openSettings = { ctx ->
-            PluginDonation.open(
+            MovieFoxDonation.open(
                 context = ctx,
                 pluginName = "MovieFox"
             )
