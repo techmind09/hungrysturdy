@@ -124,7 +124,7 @@ class MovieFoxProvider : MainAPI() {
 
         if (title.isBlank() || title.lowercase() in ignoredLinkTexts) return null
 
-        val poster = img?.let {
+        val poster: String? = img?.let {
             it.attr("src")
                 .ifEmpty { it.attr("data-src") }
                 .ifEmpty { it.attr("srcset").substringBefore(" ") }
@@ -231,8 +231,8 @@ class MovieFoxProvider : MainAPI() {
             }
             .ifEmpty { document.select("title").text().substringBefore("—").trim() }
 
-        val posterPath = Regex("\"posterPath\":\"(/[^\"\\\\]+)\"").find(flightText)?.groupValues?.get(1)
-        val poster = if (!posterPath.isNullOrBlank()) {
+        val posterPath: String? = Regex("\"posterPath\":\"(/[^\"\\\\]+)\"").find(flightText)?.groupValues?.get(1)
+        val poster: String? = if (!posterPath.isNullOrBlank()) {
             "https://image.tmdb.org/t/p/w500$posterPath"
         } else {
             document.select("main img, img.object-cover, img[data-nimg='fill']").firstOrNull()?.let {
@@ -280,9 +280,9 @@ class MovieFoxProvider : MainAPI() {
                         if (sNum <= 0 || eNum <= 0) continue
 
                         val epTitle = obj.optString("name").ifBlank { "Episode $eNum" }
-                        val epOverview = obj.optString("overview").takeIf { it.isNotBlank() }
-                        val stillPath = obj.optString("stillPath").takeIf { it.startsWith("/") }
-                        val epThumb = stillPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+                        val epOverview: String? = obj.optString("overview").takeIf { it.isNotBlank() }
+                        val stillPath: String? = obj.optString("stillPath").takeIf { it.startsWith("/") }
+                        val epThumb: String? = stillPath?.let { "https://image.tmdb.org/t/p/w500$it" }
 
                         episodes.add(
                             newEpisode("$baseUrlWithoutQuery?season=$sNum&episode=$eNum") {
@@ -346,7 +346,7 @@ class MovieFoxProvider : MainAPI() {
                         }
                         .ifEmpty { "Episode $eNum" }
 
-                    val thumb = element.selectFirst("img")?.attr("src")?.takeIf { it.startsWith("http") }
+                    val thumb: String? = element.selectFirst("img")?.attr("src")?.takeIf { it.startsWith("http") }
 
                     episodes.add(
                         newEpisode("$baseUrlWithoutQuery?season=$sNum&episode=$eNum") {
@@ -561,6 +561,7 @@ class MovieFoxProvider : MainAPI() {
                 found = true
             }
 
+            // 1. Built-in MovieFox API Endpoints
             for ((endpointName, apiUrl) in activeEndpoints) {
                 val response = runCatching {
                     app.get(apiUrl, headers = baseHeaders, interceptor = cfKiller)
@@ -608,7 +609,7 @@ class MovieFoxProvider : MainAPI() {
                         val rawSubUrl = sub.url.ifBlank { sub.file }.trim()
                         if (rawSubUrl.isNotBlank()) {
                             subtitleCallback(
-                                SubtitleFile(
+                                newSubtitleFile(
                                     lang = sub.label.ifBlank {
                                         sub.language.ifBlank {
                                             sub.lang.ifBlank { "English" }
@@ -664,6 +665,7 @@ class MovieFoxProvider : MainAPI() {
                 }
             }
 
+            // 2. Embed Servers from Watch Page & Detail Page
             if (MovieFoxSettingsDialog.isServerEnabled("embeds")) {
                 val watchUrl = if (isTv) {
                     "$mainUrl/watch/tv-$matchId?s=$season&e=$episode"
@@ -755,6 +757,116 @@ class MovieFoxProvider : MainAPI() {
                                 if (extracted) found = true
                             }
                         }
+                    }
+                }
+            }
+
+            // 3. Custom External Websites Added in MovieFox Settings
+            val enabledCustomSites = MovieFoxSettingsDialog.getCustomSites().filter { it.enabled }
+            for (site in enabledCustomSites) {
+                val rawTemplate = if (isTv) {
+                    site.tvTemplate.ifBlank { site.movieTemplate }
+                } else {
+                    site.movieTemplate.ifBlank { site.tvTemplate }
+                }
+                if (rawTemplate.isBlank()) continue
+
+                val resolvedUrl = rawTemplate
+                    .replace("{id}", matchId, ignoreCase = true)
+                    .replace("{tmdb}", matchId, ignoreCase = true)
+                    .replace("{imdb}", imdbId, ignoreCase = true)
+                    .replace("{type}", contentType, ignoreCase = true)
+                    .replace("{season}", season, ignoreCase = true)
+                    .replace("{s}", season, ignoreCase = true)
+                    .replace("{episode}", episode, ignoreCase = true)
+                    .replace("{e}", episode, ignoreCase = true)
+                    .trim()
+
+                if (!resolvedUrl.startsWith("http") || isAdUrl(resolvedUrl)) continue
+
+                // Try direct extractor first
+                if (seenUrls.add(resolvedUrl)) {
+                    val directExtracted = runCatching {
+                        loadExtractor(resolvedUrl, mainUrl, subtitleCallback, callback)
+                    }.getOrDefault(false)
+                    if (directExtracted) {
+                        found = true
+                    }
+                }
+
+                // Fetch external website HTML/JSON response and extract streams & embed hosts
+                val extResponse = runCatching {
+                    app.get(
+                        resolvedUrl,
+                        headers = mapOf(
+                            "User-Agent" to USER_AGENT,
+                            "Referer" to resolvedUrl,
+                            "Accept" to "*/*"
+                        ),
+                        interceptor = cfKiller
+                    )
+                }.getOrNull() ?: continue
+
+                val extText = extResponse.text
+                if (extText.isBlank()) continue
+
+                val extOrigin = Regex("https?://[^/]+").find(resolvedUrl)?.value.orEmpty()
+                val extHeaders = mapOf(
+                    "Referer" to resolvedUrl,
+                    "Origin" to extOrigin,
+                    "User-Agent" to USER_AGENT,
+                    "Accept" to "*/*"
+                )
+
+                if (
+                    extResponse.headers["Content-Type"]?.contains("mpegurl", true) == true ||
+                    extText.trimStart().startsWith("#EXTM3U")
+                ) {
+                    emitServerLink(
+                        serverName = "${site.name} (HLS)",
+                        streamUrl = resolvedUrl,
+                        isHls = true,
+                        qualityStr = "1080p",
+                        customHeaders = extHeaders
+                    )
+                    continue
+                }
+
+                // Extract .m3u8 / .mp4 streams from external site
+                val extStreamRegex = Regex(
+                    """["'](https?://[^"'\s<>]+?(?:\.(?:m3u8|mp4)|workers\.dev/[^"'\s<>]+|itsnitrox\.tech/[^"'\s<>]+|vibuxer\.com[^"'\s<>]*|type=hls)[^"'\s<>]*)["']""",
+                    RegexOption.IGNORE_CASE
+                )
+                extStreamRegex.findAll(extText).forEach { m ->
+                    val foundStream = normalizeUrl(m.groupValues[1])
+                    if (isAdUrl(foundStream)) return@forEach
+                    val isHls = foundStream.contains(".m3u8", true) ||
+                        foundStream.contains("type=hls", true) ||
+                        foundStream.contains("workers.dev", true) ||
+                        foundStream.contains("itsnitrox.tech", true) ||
+                        foundStream.contains("vibuxer.com", true)
+
+                    emitServerLink(
+                        serverName = "${site.name} ${if (isHls) "HLS" else "MP4"}",
+                        streamUrl = foundStream,
+                        isHls = isHls,
+                        qualityStr = "1080p",
+                        customHeaders = extHeaders
+                    )
+                }
+
+                // Extract embed hosts (Voe, StreamTape, Vidara, Lulu, Pixeldrain, GDrive, etc.) from external site
+                val extHostRegex = Regex(
+                    """https?://(?:[a-zA-Z0-9.-]+\.)?(?:voe\.(?:sx|to|co)|pixeldrain\.(?:com|dev)|streamtape\.(?:com|to|net|xyz)|shavetape\.cash|strcloud\.link|strtape\.tech|stape\.fun|luluvid\.com|lulustream\.com|luluvdo\.com|vidara\.(?:to|so)|vidprime\.top|upbolt\.(?:to|tv)|abysscdn\.com|short\.icu|lplaygo\.com|vidmoly\.(?:me|to)|earnvids\.com|dingtezuni\.com|rabbitstream\.net|upcloud\.to|megacloud\.(?:tv|club)|streamwish\.to|filemoon\.sx|drive\.google\.com)/[^\s"'\\]+""",
+                    RegexOption.IGNORE_CASE
+                )
+                extHostRegex.findAll(extText).forEach { m ->
+                    val hostUrl = normalizeUrl(m.value)
+                    if (!isAdUrl(hostUrl) && seenUrls.add(hostUrl)) {
+                        val extracted = runCatching {
+                            loadExtractor(hostUrl, resolvedUrl, subtitleCallback, callback)
+                        }.getOrDefault(false)
+                        if (extracted) found = true
                     }
                 }
             }
