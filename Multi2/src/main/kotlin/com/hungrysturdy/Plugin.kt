@@ -2,8 +2,8 @@ package com.hungrysturdy
 
 import android.app.AlertDialog
 import android.content.Context
-import com.lagradost.cloudstream3.AcraApplication.Companion.getKey
-import com.lagradost.cloudstream3.AcraApplication.Companion.setKey
+import com.lagradost.cloudstream3.CloudStreamApp.Companion.getKey
+import com.lagradost.cloudstream3.CloudStreamApp.Companion.setKey
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 
@@ -13,7 +13,6 @@ class Plugin : Plugin() {
     companion object {
         const val PREF_PREFIX = "moviefox_server_"
 
-        // Sabhi configurable servers (Aage FSL, FSL2, GDrive ya naye servers yahan add karein)
         val AVAILABLE_SERVERS = listOf(
             "purstream" to "Purstream (Direct API)",
             "castle" to "Castle (Direct API)",
@@ -107,7 +106,7 @@ class Plugin : Plugin() {
         registerExtractorAPI(StrTapeTechExtractor())
         registerExtractorAPI(StapeFunExtractor())
 
-        // Extension Settings UI (Khud Servers Select Karne Ke Liye)
+        // Extension Settings UI
         openSettings = { ctx ->
             val labels = AVAILABLE_SERVERS.map { it.second }.toTypedArray()
             val checkedItems = AVAILABLE_SERVERS.map { isServerEnabled(it.first) }.toBooleanArray()
