@@ -67,6 +67,8 @@ object MovieFoxSettingsDialog {
         ServerConfig("fsl2", "FSL2 Server", "Direct", "#10B981", "FSL2 mirror endpoint"),
         ServerConfig("gdrive", "GDrive Server", "Cloud", "#8B5CF6", "Google Drive media source"),
         ServerConfig("embeds", "Embed Hosts", "Extractors", "#EC4899", "Registered host extractors")
+        ServerConfig("sflix", "Sflix Servers", "API", "#F97316", "Sflix / wefeed-h5api-bff DASH, HLS & MP4"),
+
     )
 
     private fun prefs(ctx: Context): SharedPreferences {
