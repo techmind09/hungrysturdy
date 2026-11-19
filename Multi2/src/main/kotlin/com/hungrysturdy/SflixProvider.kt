@@ -60,6 +60,8 @@ class SflixProvider : MainAPI() {
     override var mainUrl = "https://sflix.film"
     private val playerUrl = "https://mzfi.me"
     override var name = "Sflix"
+    override var iconUrl: String? =
+        "https://raw.githubusercontent.com/techmind09/hungrysturdy/refs/heads/main/246481509.png"
     override val hasMainPage = true
     override var lang = "en"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Anime)
