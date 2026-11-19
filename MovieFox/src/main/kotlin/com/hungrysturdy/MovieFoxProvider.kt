@@ -1460,7 +1460,7 @@ class MovieFoxProvider : MainAPI() {
             val collectedLinks = mutableListOf<QueuedLink>()
             var found = false
 
-            fun recordLink(extractorLink: ExtractorLink, isStream: Boolean) {
+            suspend fun recordLink(extractorLink: ExtractorLink, isStream: Boolean) {
                 if (downloadOnly && isStream) return
                 collectedLinks.add(QueuedLink(extractorLink, isStream))
                 found = true
@@ -1487,6 +1487,19 @@ class MovieFoxProvider : MainAPI() {
                     this.headers = customHeaders
                 }
                 recordLink(link, isStream = isHls)
+            }
+
+            suspend fun extractHostWithQueue(hostUrl: String, refUrl: String): Boolean {
+                val tempList = mutableListOf<ExtractorLink>()
+                val ok = runCatching {
+                    loadExtractor(hostUrl, refUrl, subtitleCallback) { ex ->
+                        tempList.add(ex)
+                    }
+                }.getOrDefault(false)
+                for (ex in tempList) {
+                    recordLink(ex, isStream = isStreamOrHlsLink(ex.url, ex.type))
+                }
+                return ok || tempList.isNotEmpty()
             }
 
             // 1. Built-in MovieFox API Endpoints
@@ -1561,12 +1574,7 @@ class MovieFoxProvider : MainAPI() {
                     if (isKnownHost) {
                         val embedsEnabled = appCtx?.let { MovieFoxSettingsDialog.isServerEnabled(it, "embeds") } ?: true
                         if (embedsEnabled && seenUrls.add(streamUrl)) {
-                            val extracted = runCatching {
-                                loadExtractor(streamUrl, watchUrl, subtitleCallback) { ex ->
-                                    recordLink(ex, isStream = isStreamOrHlsLink(ex.url, ex.type))
-                                }
-                            }.getOrDefault(false)
-                            if (extracted) found = true
+                            if (extractHostWithQueue(streamUrl, watchUrl)) found = true
                         }
                         continue
                     }
@@ -1616,9 +1624,9 @@ class MovieFoxProvider : MainAPI() {
                     RegexOption.IGNORE_CASE
                 )
 
-                hostScanRegex.findAll(combinedScanText).forEach { m ->
+                for (m in hostScanRegex.findAll(combinedScanText)) {
                     val hostUrl = normalizeUrl(m.value)
-                    if (isAdUrl(hostUrl) || !seenUrls.add(hostUrl)) return@forEach
+                    if (isAdUrl(hostUrl) || !seenUrls.add(hostUrl)) continue
 
                     if (hostUrl.contains("workers.dev", true)) {
                         emitServerLink(
@@ -1628,13 +1636,8 @@ class MovieFoxProvider : MainAPI() {
                             qualityStr = "1080p",
                             customHeaders = baseHeaders + mapOf("Referer" to watchUrl)
                         )
-                    } else {
-                        val extracted = runCatching {
-                            loadExtractor(hostUrl, watchUrl, subtitleCallback) { ex ->
-                                recordLink(ex, isStream = isStreamOrHlsLink(ex.url, ex.type))
-                            }
-                        }.getOrDefault(false)
-                        if (extracted) found = true
+                    } else if (extractHostWithQueue(hostUrl, watchUrl)) {
+                        found = true
                     }
                 }
 
@@ -1678,13 +1681,8 @@ class MovieFoxProvider : MainAPI() {
                                     qualityStr = obj.optString("quality"),
                                     customHeaders = customHeaders
                                 )
-                            } else {
-                                val extracted = runCatching {
-                                    loadExtractor(embedUrl, watchUrl, subtitleCallback) { ex ->
-                                        recordLink(ex, isStream = isStreamOrHlsLink(ex.url, ex.type))
-                                    }
-                                }.getOrDefault(false)
-                                if (extracted) found = true
+                            } else if (extractHostWithQueue(embedUrl, watchUrl)) {
+                                found = true
                             }
                         }
                     }
@@ -1771,7 +1769,7 @@ class MovieFoxProvider : MainAPI() {
                     )
 
                     val extDoc = Jsoup.parse(extHtml, baseSiteUrl)
-                    extDoc.select("iframe[src], [data-src], [data-link], [data-url]").forEach { el ->
+                    for (el in extDoc.select("iframe[src], [data-src], [data-link], [data-url]")) {
                         val iframeUrl = normalizeUrl(
                             el.attr("src")
                                 .ifEmpty { el.attr("data-src") }
@@ -1780,12 +1778,7 @@ class MovieFoxProvider : MainAPI() {
                             baseSiteUrl
                         )
                         if (iframeUrl.startsWith("http") && !isAdUrl(iframeUrl) && seenUrls.add(iframeUrl)) {
-                            val extracted = runCatching {
-                                loadExtractor(iframeUrl, targetPageUrl, subtitleCallback) { ex ->
-                                    recordLink(ex, isStream = isStreamOrHlsLink(ex.url, ex.type))
-                                }
-                            }.getOrDefault(false)
-                            if (extracted) found = true
+                            if (extractHostWithQueue(iframeUrl, targetPageUrl)) found = true
                         }
                     }
 
@@ -1793,9 +1786,9 @@ class MovieFoxProvider : MainAPI() {
                         """["'](https?://[^"'\s<>]+?(?:\.(?:m3u8|mp4)|workers\.dev/[^"'\s<>]+|itsnitrox\.tech/[^"'\s<>]+|vibuxer\.com[^"'\s<>]*|type=hls)[^"'\s<>]*)["']""",
                         RegexOption.IGNORE_CASE
                     )
-                    extStreamRegex.findAll(extHtml).forEach { m ->
+                    for (m in extStreamRegex.findAll(extHtml)) {
                         val foundStream = normalizeUrl(m.groupValues[1], baseSiteUrl)
-                        if (isAdUrl(foundStream)) return@forEach
+                        if (isAdUrl(foundStream)) continue
                         val isHls = foundStream.contains(".m3u8", true) ||
                             foundStream.contains("type=hls", true) ||
                             foundStream.contains("workers.dev", true) ||
@@ -1815,15 +1808,10 @@ class MovieFoxProvider : MainAPI() {
                         """https?://(?:[a-zA-Z0-9.-]+\.)?(?:voe\.(?:sx|to|co)|pixeldrain\.(?:com|dev)|streamtape\.(?:com|to|net|xyz)|shavetape\.cash|strcloud\.link|strtape\.tech|stape\.fun|luluvid\.com|lulustream\.com|luluvdo\.com|vidara\.(?:to|so)|vidprime\.top|upbolt\.(?:to|tv)|abysscdn\.com|short\.icu|lplaygo\.com|vidmoly\.(?:me|to)|earnvids\.com|dingtezuni\.com|rabbitstream\.net|upcloud\.to|megacloud\.(?:tv|club)|streamwish\.to|filemoon\.sx|drive\.google\.com)/[^\s"'\\]+""",
                         RegexOption.IGNORE_CASE
                     )
-                    extHostRegex.findAll(extHtml).forEach { m ->
+                    for (m in extHostRegex.findAll(extHtml)) {
                         val hostUrl = normalizeUrl(m.value, baseSiteUrl)
                         if (!isAdUrl(hostUrl) && seenUrls.add(hostUrl)) {
-                            val extracted = runCatching {
-                                loadExtractor(hostUrl, targetPageUrl, subtitleCallback) { ex ->
-                                    recordLink(ex, isStream = isStreamOrHlsLink(ex.url, ex.type))
-                                }
-                            }.getOrDefault(false)
-                            if (extracted) found = true
+                            if (extractHostWithQueue(hostUrl, targetPageUrl)) found = true
                         }
                     }
                 }
@@ -1956,7 +1944,7 @@ class MovieFoxProvider : MainAPI() {
                                     val rootJson = runCatching { JSONObject(playResp.text) }.getOrNull() ?: continue
                                     val dataObj = rootJson.optJSONObject("data") ?: continue
 
-                                    fun emitSflixArray(arr: JSONArray?, kind: String) {
+                                    suspend fun emitSflixArray(arr: JSONArray?, kind: String) {
                                         if (arr == null) return
                                         for (i in 0 until arr.length()) {
                                             val item = arr.optJSONObject(i) ?: continue
@@ -2016,16 +2004,9 @@ class MovieFoxProvider : MainAPI() {
                                         }
                                     }
 
-                                    // Stream Only mode mein adaptive streams (DASH/HLS) pehle emit karein
-                                    if (streamOnly) {
-                                        emitSflixArray(dataObj.optJSONArray("dash"), "DASH")
-                                        emitSflixArray(dataObj.optJSONArray("hls"), "HLS")
-                                        emitSflixArray(dataObj.optJSONArray("streams"), "MP4")
-                                    } else {
-                                        emitSflixArray(dataObj.optJSONArray("dash"), "DASH")
-                                        emitSflixArray(dataObj.optJSONArray("hls"), "HLS")
-                                        emitSflixArray(dataObj.optJSONArray("streams"), "MP4")
-                                    }
+                                    emitSflixArray(dataObj.optJSONArray("dash"), "DASH")
+                                    emitSflixArray(dataObj.optJSONArray("hls"), "HLS")
+                                    emitSflixArray(dataObj.optJSONArray("streams"), "MP4")
 
                                     if (serverMatched) break
                                 }
@@ -2105,16 +2086,20 @@ class MovieFoxProvider : MainAPI() {
                                     }
                                 }
 
+                                val prLinks = mutableListOf<ExtractorLink>()
                                 val prmoviesFound = if (targetPageUrl.contains("/episode/", true)) {
                                     resolvePrmoviesEpisodePage(targetDoc, targetPageUrl, seenUrls, timeoutSec) { ex ->
-                                        recordLink(ex, isStream = true)
+                                        prLinks.add(ex)
                                     }
                                 } else {
                                     resolvePrmoviesPagePlayer(targetDoc, seenUrls, timeoutSec) { ex ->
-                                        recordLink(ex, isStream = true)
+                                        prLinks.add(ex)
                                     }
                                 }
-                                if (prmoviesFound) found = true
+                                for (ex in prLinks) {
+                                    recordLink(ex, isStream = isStreamOrHlsLink(ex.url, ex.type))
+                                }
+                                if (prmoviesFound || prLinks.isNotEmpty()) found = true
                             }
                         }
                     }
