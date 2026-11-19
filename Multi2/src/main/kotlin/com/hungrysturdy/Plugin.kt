@@ -37,66 +37,53 @@ class Plugin : Plugin() {
     }
 
     override fun load(context: Context) {
-        // Main Providers
         registerMainAPI(SflixProvider())
         registerMainAPI(HindiDramaProvider())
         registerMainAPI(MovieFoxProvider())
 
-        // Voe Extractors (All Domains)
         registerExtractorAPI(VoeExtractor())
         registerExtractorAPI(VoeToExtractor())
         registerExtractorAPI(VoeCoExtractor())
 
-        // Pixeldrain & GDrive Extractors
         registerExtractorAPI(PixeldrainExtractor())
         registerExtractorAPI(PixeldrainDevExtractor())
         registerExtractorAPI(GDriveExtractor())
 
-        // VidPrime, Nitrox, NxStreamHub & Vibuxer Extractors
         registerExtractorAPI(VidPrimeExtractor())
         registerExtractorAPI(NitroxExtractor())
         registerExtractorAPI(NxStreamHubExtractor())
         registerExtractorAPI(VibuxerExtractor())
 
-        // SFlix / Rabbitstream / UpCloud / MegaCloud Extractors
         registerExtractorAPI(RabbitstreamExtractor())
         registerExtractorAPI(UpCloudExtractor())
         registerExtractorAPI(MegaCloudExtractor())
         registerExtractorAPI(MegaCloudClubExtractor())
 
-        // StreamWish & Filemoon Extractors
         registerExtractorAPI(StreamWishExtractor())
         registerExtractorAPI(FilemoonExtractor())
 
-        // LuluStream Extractors
         registerExtractorAPI(LuluVidExtractor())
         registerExtractorAPI(LuluStreamAltExtractor())
         registerExtractorAPI(LuluVdoExtractor())
 
-        // EarnVids Extractors
         registerExtractorAPI(EarnVidsExtractor())
         registerExtractorAPI(EarnVidsProExtractor())
 
-        // Vidara Extractors
         registerExtractorAPI(VidaraExtractor())
         registerExtractorAPI(VidaraAltExtractor())
 
-        // UpBolt Extractors
         registerExtractorAPI(UpBoltExtractor())
         registerExtractorAPI(UpBoltTvExtractor())
 
-        // Abyss & Short.icu Extractors
         registerExtractorAPI(AbyssExtractor())
         registerExtractorAPI(AbyssCdnExtractor())
         registerExtractorAPI(ShortIcuExtractor())
 
-        // LPlayGo & VidMoly Extractors
         registerExtractorAPI(LPlayGoExtractor())
         registerExtractorAPI(VidMolyExtractor())
         registerExtractorAPI(SwVidMolyExtractor())
         registerExtractorAPI(VidMolyToExtractor())
 
-        // StreamTape Extractors (All Domains)
         registerExtractorAPI(StreamTapeExtractor())
         registerExtractorAPI(StreamTapeToExtractor())
         registerExtractorAPI(StreamTapeNetExtractor())
@@ -106,7 +93,6 @@ class Plugin : Plugin() {
         registerExtractorAPI(StrTapeTechExtractor())
         registerExtractorAPI(StapeFunExtractor())
 
-        // Extension Settings UI
         openSettings = { ctx ->
             val labels = AVAILABLE_SERVERS.map { it.second }.toTypedArray()
             val checkedItems = AVAILABLE_SERVERS.map { isServerEnabled(it.first) }.toBooleanArray()
