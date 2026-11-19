@@ -9,21 +9,25 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
+import android.widget.Toast
 import com.lagradost.cloudstream3.CloudStreamApp.Companion.getKey
 import com.lagradost.cloudstream3.CloudStreamApp.Companion.setKey
+import org.json.JSONArray
+import org.json.JSONObject
 
 object MovieFoxSettingsDialog {
 
     private const val PREF_SERVER_PREFIX = "mf_srv_"
+    private const val PREF_CUSTOM_SITES = "mf_custom_external_sites_json"
     private const val PREF_STREAM_ONLY = "mf_stream_only"
     private const val PREF_DOWNLOAD_ONLY = "mf_download_only"
     private const val PREF_CONCURRENCY = "mf_parallel_servers"
 
-    // Yahan aap aage FSL, FSL2, GDrive ya naye servers add kar sakte hain
     data class ServerConfig(
         val key: String,
         val title: String,
@@ -31,27 +35,72 @@ object MovieFoxSettingsDialog {
         val defaultEnabled: Boolean = true
     )
 
-    val SERVERS = listOf(
-        ServerConfig("purstream", "Purstream", "Direct stream API"),
-        ServerConfig("castle", "Castle", "Direct stream API"),
+    data class CustomExternalSite(
+        val id: String,
+        val name: String,
+        val movieTemplate: String,
+        val tvTemplate: String,
+        var enabled: Boolean = true
+    )
+
+    val BUILTIN_SERVERS = listOf(
+        ServerConfig("purstream", "Purstream", "MovieFox Purstream API"),
+        ServerConfig("castle", "Castle", "MovieFox Castle API"),
         ServerConfig("direct", "Direct Server", "Direct MP4 / HLS API"),
-        ServerConfig("debrid", "Debrid", "Debrid / cached links"),
-        ServerConfig("vidsrc", "VidSrc", "VidSrc stream endpoint"),
-        ServerConfig("autoembed", "AutoEmbed", "AutoEmbed stream endpoint"),
+        ServerConfig("debrid", "Debrid", "Debrid / Cached Streams"),
+        ServerConfig("vidsrc", "VidSrc", "VidSrc Stream API"),
+        ServerConfig("autoembed", "AutoEmbed", "AutoEmbed Stream API"),
         ServerConfig("hls", "HLS / Workers / Nitrox", "m3u8, workers.dev, nitrox, vibuxer"),
-        ServerConfig("fsl", "FSL Server", "FSL stream server"),
-        ServerConfig("fsl2", "FSL2 Server", "FSL2 stream server"),
-        ServerConfig("gdrive", "GDrive Server", "Google Drive stream server"),
+        ServerConfig("fsl", "FSL Server", "FSL Direct Server"),
+        ServerConfig("fsl2", "FSL2 Server", "FSL2 Backup Server"),
+        ServerConfig("gdrive", "GDrive Server", "Google Drive Stream Server"),
         ServerConfig("embeds", "Embed Hosts", "Voe, StreamTape, Vidara, Lulu, Pixeldrain, VidPrime")
     )
 
     fun isServerEnabled(key: String): Boolean {
-        val defaultVal = SERVERS.find { it.key == key }?.defaultEnabled ?: true
+        val defaultVal = BUILTIN_SERVERS.find { it.key == key }?.defaultEnabled ?: true
         return getKey("$PREF_SERVER_PREFIX$key", defaultVal) ?: defaultVal
     }
 
     fun setServerEnabled(key: String, enabled: Boolean) {
         setKey("$PREF_SERVER_PREFIX$key", enabled)
+    }
+
+    fun getCustomSites(): MutableList<CustomExternalSite> {
+        val raw = getKey<String>(PREF_CUSTOM_SITES, "[]").orEmpty()
+        val list = mutableListOf<CustomExternalSite>()
+        runCatching {
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                list.add(
+                    CustomExternalSite(
+                        id = obj.optString("id", System.currentTimeMillis().toString()),
+                        name = obj.optString("name", "Custom Site"),
+                        movieTemplate = obj.optString("movieTemplate", ""),
+                        tvTemplate = obj.optString("tvTemplate", ""),
+                        enabled = obj.optBoolean("enabled", true)
+                    )
+                )
+            }
+        }
+        return list
+    }
+
+    fun saveCustomSites(sites: List<CustomExternalSite>) {
+        val arr = JSONArray()
+        sites.forEach { site ->
+            arr.put(
+                JSONObject().apply {
+                    put("id", site.id)
+                    put("name", site.name)
+                    put("movieTemplate", site.movieTemplate)
+                    put("tvTemplate", site.tvTemplate)
+                    put("enabled", site.enabled)
+                }
+            )
+        }
+        setKey(PREF_CUSTOM_SITES, arr.toString())
     }
 
     fun isStreamOnly(): Boolean = getKey(PREF_STREAM_ONLY, false) ?: false
@@ -60,185 +109,407 @@ object MovieFoxSettingsDialog {
     fun isDownloadOnly(): Boolean = getKey(PREF_DOWNLOAD_ONLY, false) ?: false
     fun setDownloadOnly(value: Boolean) = setKey(PREF_DOWNLOAD_ONLY, value)
 
-    fun getParallelServers(): Int = getKey(PREF_CONCURRENCY, 6) ?: 6
-    fun setParallelServers(value: Int) = setKey(PREF_CONCURRENCY, value.coerceIn(1, 20))
+    fun getParallelServers(): Int = getKey(PREF_CONCURRENCY, 8) ?: 8
+    fun setParallelServers(value: Int) = setKey(PREF_CONCURRENCY, value.coerceIn(1, 25))
 
-    private fun cardBg(bgColor: Int = Color.parseColor("#181A20"), strokeColor: Int = Color.parseColor("#2A2E39")): GradientDrawable {
+    private fun dp(ctx: Context, value: Int): Int =
+        (value * ctx.resources.displayMetrics.density).toInt()
+
+    private fun cardBg(
+        bgColor: Int = Color.parseColor("#161922"),
+        strokeColor: Int = Color.parseColor("#282D3C"),
+        radius: Float = 26f
+    ): GradientDrawable {
         return GradientDrawable().apply {
             setColor(bgColor)
-            cornerRadius = 24f
+            cornerRadius = radius
             setStroke(2, strokeColor)
         }
     }
 
-    private fun pillButtonBg(bgColor: Int): GradientDrawable {
+    private fun pillBg(bgColor: Int, radius: Float = 20f): GradientDrawable {
         return GradientDrawable().apply {
             setColor(bgColor)
-            cornerRadius = 20f
+            cornerRadius = radius
         }
     }
 
-    private fun dp(ctx: Context, value: Int): Int = (value * ctx.resources.displayMetrics.density).toInt()
+    private fun inputBg(): GradientDrawable {
+        return GradientDrawable().apply {
+            setColor(Color.parseColor("#0D0F14"))
+            cornerRadius = 18f
+            setStroke(2, Color.parseColor("#32384A"))
+        }
+    }
 
     fun show(ctx: Context) {
-        val activeCount = SERVERS.count { isServerEnabled(it.key) }
+        val customSites = getCustomSites()
+        val switchMap = mutableMapOf<String, Switch>()
+
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#0F1115"))
-            setPadding(dp(ctx, 16), dp(ctx, 18), dp(ctx, 16), dp(ctx, 16))
-        }
-
-        // Header Card (JustPlay style)
-        val headerCard = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            background = cardBg(Color.parseColor("#171A21"))
+            background = cardBg(Color.parseColor("#0D0F14"), Color.parseColor("#232836"), 32f)
             setPadding(dp(ctx, 16), dp(ctx, 16), dp(ctx, 16), dp(ctx, 16))
         }
 
-        val titleView = TextView(ctx).apply {
-            text = "MovieFox"
-            textSize = 22f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE)
+        // Top Banner Card
+        val headerCard = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardBg(Color.parseColor("#151923"), Color.parseColor("#293042"))
+            setPadding(dp(ctx, 16), dp(ctx, 14), dp(ctx, 16), dp(ctx, 14))
         }
 
-        val subView = TextView(ctx).apply {
-            text = "MOVIEFOX SERVER MANAGER"
-            textSize = 11f
-            setTextColor(Color.parseColor("#8E95A5"))
-            setPadding(0, dp(ctx, 2), 0, dp(ctx, 12))
-        }
-
-        val badgeRow = LinearLayout(ctx).apply {
+        val titleRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        val modeBadge = TextView(ctx).apply {
-            text = "●  CUSTOM SERVERS"
-            textSize = 11f
+        val titleText = TextView(ctx).apply {
+            text = "MovieFox Pro"
+            textSize = 21f
             setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.parseColor("#38D996"))
-            background = pillButtonBg(Color.parseColor("#122B22"))
-            setPadding(dp(ctx, 10), dp(ctx, 6), dp(ctx, 10), dp(ctx, 6))
+            setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
 
-        val countBadge = TextView(ctx).apply {
-            text = "$activeCount/${SERVERS.size} SERVERS ON"
+        val statusPill = TextView(ctx).apply {
+            text = "● ACTIVE"
             textSize = 11f
             setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.parseColor("#D0D5E0"))
-            background = pillButtonBg(Color.parseColor("#232732"))
-            setPadding(dp(ctx, 10), dp(ctx, 6), dp(ctx, 10), dp(ctx, 6))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                marginStart = dp(ctx, 8)
+            setTextColor(Color.parseColor("#34D399"))
+            background = pillBg(Color.parseColor("#102A22"))
+            setPadding(dp(ctx, 10), dp(ctx, 5), dp(ctx, 10), dp(ctx, 5))
+        }
+
+        titleRow.addView(titleText)
+        titleRow.addView(statusPill)
+
+        val subtitleText = TextView(ctx).apply {
+            text = "MULTI-SOURCE & EXTERNAL SITE SERVER ENGINE"
+            textSize = 11f
+            setTextColor(Color.parseColor("#8B93A7"))
+            setPadding(0, dp(ctx, 3), 0, dp(ctx, 10))
+        }
+
+        val statsText = TextView(ctx).apply {
+            textSize = 12f
+            setTextColor(Color.parseColor("#60A5FA"))
+            setTypeface(typeface, Typeface.BOLD)
+        }
+
+        fun updateStats() {
+            val builtInOn = switchMap.values.count { it.isChecked }.let {
+                if (switchMap.isEmpty()) BUILTIN_SERVERS.count { isServerEnabled(it.key) } else it
             }
+            val extOn = customSites.count { it.enabled }
+            statsText.text = "Built-in: $builtInOn/${BUILTIN_SERVERS.size} ON   •   External Sites: $extOn/${customSites.size} ON"
         }
+        updateStats()
 
-        badgeRow.addView(modeBadge)
-        badgeRow.addView(countBadge)
-        headerCard.addView(titleView)
-        headerCard.addView(subView)
-        headerCard.addView(badgeRow)
-
+        headerCard.addView(titleRow)
+        headerCard.addView(subtitleText)
+        headerCard.addView(statsText)
         root.addView(headerCard, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply {
-            bottomMargin = dp(ctx, 14)
-        })
+        ).apply { bottomMargin = dp(ctx, 12) })
 
-        // Scrollable Content
+        // Advanced 3-Tab Switcher
+        val tabBar = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = cardBg(Color.parseColor("#13161F"), Color.parseColor("#242938"), 22f)
+            setPadding(dp(ctx, 4), dp(ctx, 4), dp(ctx, 4), dp(ctx, 4))
+        }
+
+        val tabBuiltIn = Button(ctx).apply {
+            text = "Servers"
+            textSize = 12f
+            isAllCaps = false
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1f)
+        }
+        val tabExternal = Button(ctx).apply {
+            text = "External Sites"
+            textSize = 12f
+            isAllCaps = false
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1f)
+        }
+        val tabSettings = Button(ctx).apply {
+            text = "Engine"
+            textSize = 12f
+            isAllCaps = false
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1f)
+        }
+
+        tabBar.addView(tabBuiltIn)
+        tabBar.addView(tabExternal)
+        tabBar.addView(tabSettings)
+        root.addView(tabBar, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = dp(ctx, 12) })
+
+        // Scrollable Body Containers for 3 Tabs
         val scrollView = ScrollView(ctx).apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
+                dp(ctx, 340)
             )
         }
 
-        val contentList = LinearLayout(ctx).apply {
+        val containerWrapper = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
         }
 
-        // Section: Servers
-        val serversHeader = TextView(ctx).apply {
-            text = "—  SERVERS"
-            textSize = 12f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.parseColor("#8E95A5"))
-            setPadding(dp(ctx, 4), dp(ctx, 4), 0, dp(ctx, 8))
-        }
-        contentList.addView(serversHeader)
+        val builtInContainer = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        val externalContainer = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        val engineContainer = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
 
-        val switchMap = mutableMapOf<String, Switch>()
-
-        SERVERS.forEach { srv ->
-            val rowCard = LinearLayout(ctx).apply {
+        // ------------------------------------------
+        // TAB 1: BUILT-IN SERVERS
+        // ------------------------------------------
+        BUILTIN_SERVERS.forEach { srv ->
+            val card = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 background = cardBg()
-                setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
+                setPadding(dp(ctx, 14), dp(ctx, 11), dp(ctx, 14), dp(ctx, 11))
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    bottomMargin = dp(ctx, 8)
-                }
+                ).apply { bottomMargin = dp(ctx, 8) }
             }
 
-            val textCol = LinearLayout(ctx).apply {
+            val col = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             }
-
-            val srvName = TextView(ctx).apply {
+            col.addView(TextView(ctx).apply {
                 text = srv.title
-                textSize = 15f
+                textSize = 14.5f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.WHITE)
-            }
-
-            val srvDesc = TextView(ctx).apply {
+            })
+            col.addView(TextView(ctx).apply {
                 text = srv.subtitle
-                textSize = 12f
-                setTextColor(Color.parseColor("#8E95A5"))
-            }
+                textSize = 11.5f
+                setTextColor(Color.parseColor("#8B93A7"))
+            })
 
-            textCol.addView(srvName)
-            textCol.addView(srvDesc)
-
-            val toggle = Switch(ctx).apply {
+            val sw = Switch(ctx).apply {
                 isChecked = isServerEnabled(srv.key)
-                setOnCheckedChangeListener { _, _ ->
-                    val onCount = switchMap.values.count { it.isChecked }
-                    countBadge.text = "$onCount/${SERVERS.size} SERVERS ON"
-                }
+                setOnCheckedChangeListener { _, _ -> updateStats() }
             }
-            switchMap[srv.key] = toggle
+            switchMap[srv.key] = sw
 
-            rowCard.addView(textCol)
-            rowCard.addView(toggle)
-            contentList.addView(rowCard)
+            card.addView(col)
+            card.addView(sw)
+            builtInContainer.addView(card)
         }
 
-        // Section: Manage Sources
-        val sourcesHeader = TextView(ctx).apply {
-            text = "—  MANAGE SOURCES"
+        // ------------------------------------------
+        // TAB 2: EXTERNAL WEBSITE SERVER FETCHER
+        // ------------------------------------------
+        val addFormCard = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardBg(Color.parseColor("#151A24"), Color.parseColor("#2E3A52"))
+            setPadding(dp(ctx, 14), dp(ctx, 14), dp(ctx, 14), dp(ctx, 14))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(ctx, 12) }
+        }
+
+        addFormCard.addView(TextView(ctx).apply {
+            text = "+ Add External Website Source"
+            textSize = 15f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.parseColor("#60A5FA"))
+        })
+
+        addFormCard.addView(TextView(ctx).apply {
+            text = "Placeholders: {id} = TMDB ID, {imdb} = IMDb ID, {season}, {episode}\nExample: https://vidlink.pro/movie/{id}  |  https://vidlink.pro/tv/{id}/{season}/{episode}"
+            textSize = 11f
+            setTextColor(Color.parseColor("#8B93A7"))
+            setPadding(0, dp(ctx, 4), 0, dp(ctx, 10))
+        })
+
+        val nameInput = EditText(ctx).apply {
+            hint = "Server Name (e.g., VidLink / EmbedSu / CustomSite)"
+            setHintTextColor(Color.parseColor("#64748B"))
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            background = inputBg()
+            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(ctx, 8) }
+        }
+
+        val movieUrlInput = EditText(ctx).apply {
+            hint = "Movie URL Template (e.g., https://site.com/embed/movie/{id})"
+            setHintTextColor(Color.parseColor("#64748B"))
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            background = inputBg()
+            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(ctx, 8) }
+        }
+
+        val tvUrlInput = EditText(ctx).apply {
+            hint = "TV URL Template (e.g., https://site.com/embed/tv/{id}/{season}/{episode})"
+            setHintTextColor(Color.parseColor("#64748B"))
+            setTextColor(Color.WHITE)
+            textSize = 13f
+            background = inputBg()
+            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(ctx, 10) }
+        }
+
+        val externalListHolder = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        fun renderExternalSitesList() {
+            externalListHolder.removeAllViews()
+            if (customSites.isEmpty()) {
+                externalListHolder.addView(TextView(ctx).apply {
+                    text = "No external websites added yet. Add any site URL above to fetch its servers inside MovieFox."
+                    textSize = 12f
+                    setTextColor(Color.parseColor("#64748B"))
+                    gravity = Gravity.CENTER
+                    setPadding(dp(ctx, 12), dp(ctx, 16), dp(ctx, 12), dp(ctx, 16))
+                })
+                return
+            }
+
+            customSites.forEachIndexed { index, site ->
+                val itemCard = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    background = cardBg()
+                    setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = dp(ctx, 8) }
+                }
+
+                val topRow = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+
+                val siteTitle = TextView(ctx).apply {
+                    text = site.name
+                    textSize = 14f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.WHITE)
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                }
+
+                val delBtn = TextView(ctx).apply {
+                    text = "DELETE"
+                    textSize = 11f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.parseColor("#F87171"))
+                    background = pillBg(Color.parseColor("#2A1519"), 14f)
+                    setPadding(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4))
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { marginEnd = dp(ctx, 8) }
+                    setOnClickListener {
+                        customSites.removeAt(index)
+                        updateStats()
+                        renderExternalSitesList()
+                    }
+                }
+
+                val siteSwitch = Switch(ctx).apply {
+                    isChecked = site.enabled
+                    setOnCheckedChangeListener { _, checked ->
+                        site.enabled = checked
+                        updateStats()
+                    }
+                }
+
+                topRow.addView(siteTitle)
+                topRow.addView(delBtn)
+                topRow.addView(siteSwitch)
+
+                val urlsPreview = TextView(ctx).apply {
+                    text = "Movie: ${site.movieTemplate.ifBlank { "N/A" }}\nTV: ${site.tvTemplate.ifBlank { "N/A" }}"
+                    textSize = 11f
+                    setTextColor(Color.parseColor("#8B93A7"))
+                    setPadding(0, dp(ctx, 4), 0, 0)
+                }
+
+                itemCard.addView(topRow)
+                itemCard.addView(urlsPreview)
+                externalListHolder.addView(itemCard)
+            }
+        }
+
+        val addSiteBtn = Button(ctx).apply {
+            text = "ADD WEBSITE SERVER"
             textSize = 12f
             setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.parseColor("#8E95A5"))
-            setPadding(dp(ctx, 4), dp(ctx, 8), 0, dp(ctx, 8))
+            setTextColor(Color.WHITE)
+            background = pillBg(Color.parseColor("#10B981"), 18f)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(ctx, 42)
+            )
+            setOnClickListener {
+                val sName = nameInput.text.toString().trim()
+                val mTpl = movieUrlInput.text.toString().trim()
+                val tTpl = tvUrlInput.text.toString().trim()
+
+                if (sName.isBlank() || (mTpl.isBlank() && tTpl.isBlank())) {
+                    Toast.makeText(ctx, "Enter Server Name and at least one URL template", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+
+                customSites.add(
+                    CustomExternalSite(
+                        id = System.currentTimeMillis().toString(),
+                        name = sName,
+                        movieTemplate = mTpl,
+                        tvTemplate = tTpl,
+                        enabled = true
+                    )
+                )
+                nameInput.setText("")
+                movieUrlInput.setText("")
+                tvUrlInput.setText("")
+                updateStats()
+                renderExternalSitesList()
+                Toast.makeText(ctx, "$sName added! Click SAVE to apply.", Toast.LENGTH_SHORT).show()
+            }
         }
-        contentList.addView(sourcesHeader)
 
-        val streamSwitch = Switch(ctx).apply { isChecked = isStreamOnly() }
-        val downloadSwitch = Switch(ctx).apply { isChecked = isDownloadOnly() }
+        addFormCard.addView(nameInput)
+        addFormCard.addView(movieUrlInput)
+        addFormCard.addView(tvUrlInput)
+        addFormCard.addView(addSiteBtn)
 
-        fun addModeCard(title: String, desc: String, sw: Switch) {
+        externalContainer.addView(addFormCard)
+        externalContainer.addView(externalListHolder)
+        renderExternalSitesList()
+
+        // ------------------------------------------
+        // TAB 3: ENGINE & PERFORMANCE
+        // ------------------------------------------
+        val streamOnlySwitch = Switch(ctx).apply { isChecked = isStreamOnly() }
+        val downloadOnlySwitch = Switch(ctx).apply { isChecked = isDownloadOnly() }
+
+        fun addToggleCard(title: String, desc: String, sw: Switch) {
             val card = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -247,9 +518,7 @@ object MovieFoxSettingsDialog {
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    bottomMargin = dp(ctx, 8)
-                }
+                ).apply { bottomMargin = dp(ctx, 8) }
             }
             val col = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
@@ -257,34 +526,24 @@ object MovieFoxSettingsDialog {
             }
             col.addView(TextView(ctx).apply {
                 text = title
-                textSize = 15f
+                textSize = 14.5f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.WHITE)
             })
             col.addView(TextView(ctx).apply {
                 text = desc
-                textSize = 12f
-                setTextColor(Color.parseColor("#8E95A5"))
+                textSize = 11.5f
+                setTextColor(Color.parseColor("#8B93A7"))
             })
             card.addView(col)
             card.addView(sw)
-            contentList.addView(card)
+            engineContainer.addView(card)
         }
 
-        addModeCard("Stream Only Sources", "Prioritize streaming HLS / MP4 links", streamSwitch)
-        addModeCard("Download Only Sources", "Show downloadable / direct links only", downloadSwitch)
+        addToggleCard("Stream Only Mode", "Prioritize adaptive HLS (.m3u8) streams", streamOnlySwitch)
+        addToggleCard("Download Only Mode", "Show direct MP4 / GDrive / Pixeldrain files only", downloadOnlySwitch)
 
-        // Section: Performance
-        val perfHeader = TextView(ctx).apply {
-            text = "—  PERFORMANCE"
-            textSize = 12f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.parseColor("#8E95A5"))
-            setPadding(dp(ctx, 4), dp(ctx, 8), 0, dp(ctx, 8))
-        }
-        contentList.addView(perfHeader)
-
-        var currentConcurrency = getParallelServers()
+        var concurrency = getParallelServers()
         val perfCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -293,118 +552,138 @@ object MovieFoxSettingsDialog {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = dp(ctx, 12)
-            }
+            ).apply { bottomMargin = dp(ctx, 10) }
         }
-
-        val perfTextCol = LinearLayout(ctx).apply {
+        val perfCol = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
-        perfTextCol.addView(TextView(ctx).apply {
-            text = "Parallel servers"
-            textSize = 15f
+        perfCol.addView(TextView(ctx).apply {
+            text = "Max Active Endpoints"
+            textSize = 14.5f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
         })
-        perfTextCol.addView(TextView(ctx).apply {
-            text = "How many servers fetch links at once"
-            textSize = 12f
-            setTextColor(Color.parseColor("#8E95A5"))
+        perfCol.addView(TextView(ctx).apply {
+            text = "Limit how many API servers run per title"
+            textSize = 11.5f
+            setTextColor(Color.parseColor("#8B93A7"))
         })
 
-        val countLabel = TextView(ctx).apply {
-            text = "$currentConcurrency"
+        val numLabel = TextView(ctx).apply {
+            text = "$concurrency"
             textSize = 16f
             setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.parseColor("#4DA3FF"))
+            setTextColor(Color.parseColor("#60A5FA"))
             setPadding(dp(ctx, 12), 0, dp(ctx, 12), 0)
         }
 
         val minusBtn = Button(ctx).apply {
             text = "−"
-            textSize = 18f
+            textSize = 17f
             setTextColor(Color.WHITE)
-            background = pillButtonBg(Color.parseColor("#262B38"))
-            layoutParams = LinearLayout.LayoutParams(dp(ctx, 42), dp(ctx, 42))
+            background = pillBg(Color.parseColor("#242938"), 16f)
+            layoutParams = LinearLayout.LayoutParams(dp(ctx, 40), dp(ctx, 40))
             setOnClickListener {
-                if (currentConcurrency > 1) {
-                    currentConcurrency--
-                    countLabel.text = "$currentConcurrency"
+                if (concurrency > 1) {
+                    concurrency--
+                    numLabel.text = "$concurrency"
                 }
             }
         }
-
         val plusBtn = Button(ctx).apply {
             text = "+"
-            textSize = 18f
+            textSize = 17f
             setTextColor(Color.WHITE)
-            background = pillButtonBg(Color.parseColor("#262B38"))
-            layoutParams = LinearLayout.LayoutParams(dp(ctx, 42), dp(ctx, 42))
+            background = pillBg(Color.parseColor("#242938"), 16f)
+            layoutParams = LinearLayout.LayoutParams(dp(ctx, 40), dp(ctx, 40))
             setOnClickListener {
-                if (currentConcurrency < 20) {
-                    currentConcurrency++
-                    countLabel.text = "$currentConcurrency"
+                if (concurrency < 25) {
+                    concurrency++
+                    numLabel.text = "$concurrency"
                 }
             }
         }
 
-        perfCard.addView(perfTextCol)
+        perfCard.addView(perfCol)
         perfCard.addView(minusBtn)
-        perfCard.addView(countLabel)
+        perfCard.addView(numLabel)
         perfCard.addView(plusBtn)
-        contentList.addView(perfCard)
+        engineContainer.addView(perfCard)
 
-        scrollView.addView(contentList)
+        // Tab Switching Styling Logic
+        fun selectTab(activeIndex: Int) {
+            builtInContainer.visibility = if (activeIndex == 0) View.VISIBLE else View.GONE
+            externalContainer.visibility = if (activeIndex == 1) View.VISIBLE else View.GONE
+            engineContainer.visibility = if (activeIndex == 2) View.VISIBLE else View.GONE
+
+            val tabs = listOf(tabBuiltIn, tabExternal, tabSettings)
+            tabs.forEachIndexed { idx, btn ->
+                if (idx == activeIndex) {
+                    btn.background = pillBg(Color.parseColor("#2563EB"), 18f)
+                    btn.setTextColor(Color.WHITE)
+                } else {
+                    btn.setBackgroundColor(Color.TRANSPARENT)
+                    btn.setTextColor(Color.parseColor("#8B93A7"))
+                }
+            }
+        }
+
+        tabBuiltIn.setOnClickListener { selectTab(0) }
+        tabExternal.setOnClickListener { selectTab(1) }
+        tabSettings.setOnClickListener { selectTab(2) }
+        selectTab(0)
+
+        containerWrapper.addView(builtInContainer)
+        containerWrapper.addView(externalContainer)
+        containerWrapper.addView(engineContainer)
+        scrollView.addView(containerWrapper)
         root.addView(scrollView)
 
         val dialog = AlertDialog.Builder(ctx)
             .setView(root)
             .create()
 
-        // Action Buttons (SAVE & CLOSE)
-        val actionRow = LinearLayout(ctx).apply {
+        // Bottom Save & Close Bar
+        val bottomRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = dp(ctx, 10)
-            }
+            ).apply { topMargin = dp(ctx, 12) }
         }
 
         val closeBtn = Button(ctx).apply {
             text = "CLOSE"
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
-            background = pillButtonBg(Color.parseColor("#232732"))
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 46), 1f).apply {
-                marginEnd = dp(ctx, 8)
-            }
+            background = pillBg(Color.parseColor("#232732"), 20f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 46), 1f).apply { marginEnd = dp(ctx, 8) }
             setOnClickListener { dialog.dismiss() }
         }
 
         val saveBtn = Button(ctx).apply {
-            text = "SAVE"
+            text = "SAVE SETTINGS"
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
-            background = pillButtonBg(Color.parseColor("#2563EB"))
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 46), 1f).apply {
-                marginStart = dp(ctx, 8)
-            }
+            background = pillBg(Color.parseColor("#2563EB"), 20f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 46), 1.3f).apply { marginStart = dp(ctx, 8) }
             setOnClickListener {
-                switchMap.forEach { (key, sw) ->
-                    setServerEnabled(key, sw.isChecked)
-                }
-                setStreamOnly(streamSwitch.isChecked)
-                setDownloadOnly(downloadSwitch.isChecked)
-                setParallelServers(currentConcurrency)
+                switchMap.forEach { (key, sw) -> setServerEnabled(key, sw.isChecked) }
+                saveCustomSites(customSites)
+                setStreamOnly(streamOnlySwitch.isChecked)
+                setDownloadOnly(downloadOnlySwitch.isChecked)
+                setParallelServers(concurrency)
+                Toast.makeText(ctx, "MovieFox Settings Saved!", Toast.LENGTH_SHORT).show()
                 dialog.dismiss()
             }
         }
 
-        actionRow.addView(closeBtn)
-        actionRow.addView(saveBtn)
-        root.addView(actionRow)
+        bottomRow.addView(closeBtn)
+        bottomRow.addView(saveBtn)
+        root.addView(bottomRow)
 
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
         dialog.show()
