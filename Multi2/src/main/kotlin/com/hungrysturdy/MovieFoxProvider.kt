@@ -4,6 +4,8 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
+import org.json.JSONArray
+import org.json.JSONObject
 import org.jsoup.nodes.Element
 
 class MovieFoxProvider : MainAPI() {
@@ -48,6 +50,19 @@ class MovieFoxProvider : MainAPI() {
         "$mainUrl/dramas?category=classics" to "Classic Dramas"
     )
 
+    private val ignoredLinkTexts = setOf(
+        "where to watch",
+        "more info",
+        "watch now",
+        "view all",
+        "play",
+        "play now",
+        "trailer",
+        "all options",
+        "go home",
+        "search"
+    )
+
     private fun cleanHeading(text: String): String {
         return text
             .replace(Regex("View\\s*all.*", RegexOption.IGNORE_CASE), "")
@@ -70,8 +85,10 @@ class MovieFoxProvider : MainAPI() {
         val document = app.get(targetUrl, interceptor = cfKiller).document
         val home = mutableListOf<HomePageList>()
 
-        val linkSelector =
-            "a[href*=/movie/], a[href*=/tv/], a[href*=/dramas/], a[href*=/anime/], a[href*=/series/], a[href*=/universes/], a[href*=/universe/], a[href*=/channel/]"
+        val cardSelector =
+            "article[data-cf] a[aria-label][href], a[href*=/universes/], a[href*=/universe/], a[href*=/channel/]"
+        val fallbackLinkSelector =
+            "a[href*=/movie/], a[href*=/tv/], a[href*=/dramas/], a[href*=/anime/], a[href*=/series/]"
 
         val sections = document.select("section")
             .ifEmpty { document.select("main > div, div:has(h2):has(a[href])") }
@@ -90,7 +107,8 @@ class MovieFoxProvider : MainAPI() {
 
             if (!isTarget) return@forEach
 
-            val items = row.select(linkSelector)
+            val elements = row.select(cardSelector).ifEmpty { row.select(fallbackLinkSelector) }
+            val items = elements
                 .mapNotNull { element -> toSearchResult(element) }
                 .distinctBy { it.url }
 
@@ -100,9 +118,9 @@ class MovieFoxProvider : MainAPI() {
             }
         }
 
-        // Dedicated pages like /universes, /dramas, /dramas?category=classics, or /movies?list=top_rated
         if (!matchedSection) {
-            val gridItems = document.select(linkSelector)
+            val elements = document.select(cardSelector).ifEmpty { document.select(fallbackLinkSelector) }
+            val gridItems = elements
                 .mapNotNull { element -> toSearchResult(element) }
                 .distinctBy { it.url }
 
@@ -119,30 +137,43 @@ class MovieFoxProvider : MainAPI() {
         val href = element.attr("href").trim()
         if (href.isBlank()) return null
 
+        val rawText = element.text().trim()
+        if (rawText.lowercase() in ignoredLinkTexts) return null
+
+        val article = element.closest("article")
+        val img = element.selectFirst("img") ?: article?.selectFirst("img")
+        val isSpecialCard = href.contains("/universe") || href.contains("/channel/")
+
+        if (img == null && !isSpecialCard) return null
+
         val ariaTitle = element.attr("aria-label")
             .replace(Regex("^Number \\d+:\\s*"), "")
             .substringBefore(" (20")
+            .substringBefore(" (19")
             .trim()
 
-        val imgAlt = element.selectFirst("img")?.attr("alt")?.trim().orEmpty()
-        val textTitle = element.selectFirst("h3, h4, .title")?.text()?.trim()
-            ?: element.text().trim()
+        val imgAlt = img?.attr("alt")?.trim().orEmpty()
+        val headingTitle = article?.selectFirst("h3, h4")?.text()?.trim().orEmpty()
+        val title = ariaTitle.ifEmpty { imgAlt }.ifEmpty { headingTitle }.ifEmpty { rawText }
 
-        val title = ariaTitle.ifEmpty { imgAlt }.ifEmpty { textTitle }
-        if (title.isBlank()) return null
+        if (title.isBlank() || title.lowercase() in ignoredLinkTexts) return null
 
-        val poster = element.selectFirst("img")?.let { img ->
-            img.attr("src")
-                .ifEmpty { img.attr("data-src") }
-                .ifEmpty { img.attr("srcset").substringBefore(" ") }
+        val poster = img?.let {
+            it.attr("src")
+                .ifEmpty { it.attr("data-src") }
+                .ifEmpty { it.attr("srcset").substringBefore(" ") }
         }
 
         val fixedUrl = if (href.startsWith("http")) href else "$mainUrl/${href.trimStart('/')}"
+        val cfType = article?.attr("data-cf-type").orEmpty()
 
         val type = when {
             fixedUrl.contains("/anime/") -> TvType.Anime
             fixedUrl.contains("/dramas/") || fixedUrl.contains("/channel/") -> TvType.AsianDrama
-            fixedUrl.contains("/tv/") || fixedUrl.contains("/series/") || fixedUrl.contains("/universe") -> TvType.TvSeries
+            cfType.equals("tv", true) ||
+                fixedUrl.contains("/tv/") ||
+                fixedUrl.contains("/series/") ||
+                fixedUrl.contains("/universe") -> TvType.TvSeries
             else -> TvType.Movie
         }
 
@@ -159,25 +190,105 @@ class MovieFoxProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val document = app.get("$mainUrl/search?q=$query", interceptor = cfKiller).document
-        return document.select(
-            "a[href*=/movie/], a[href*=/tv/], a[href*=/dramas/], a[href*=/anime/], a[href*=/series/], a[href*=/universes/], a[href*=/universe/], a[href*=/channel/]"
-        ).mapNotNull { element ->
-            toSearchResult(element)
-        }.distinctBy { it.url }
+        val elements = document.select(
+            "article[data-cf] a[aria-label][href], a[href*=/universes/], a[href*=/universe/], a[href*=/channel/]"
+        ).ifEmpty {
+            document.select("a[href*=/movie/], a[href*=/tv/], a[href*=/dramas/], a[href*=/anime/], a[href*=/series/]")
+        }
+        return elements.mapNotNull { toSearchResult(it) }.distinctBy { it.url }
+    }
+
+    private fun extractSeriesId(url: String): String? {
+        return Regex("-(?:movie|tv|dramas|anime|series)-(\\d+)", RegexOption.IGNORE_CASE)
+            .find(url)?.groupValues?.get(1)
+            ?: Regex("/(?:movie|tv|dramas|anime|series)/(\\d+)", RegexOption.IGNORE_CASE)
+                .find(url)?.groupValues?.get(1)
+            ?: Regex("(?:movie|tv|dramas|anime|series)-(\\d+)", RegexOption.IGNORE_CASE)
+                .find(url)?.groupValues?.get(1)
+            ?: Regex("[?&]id=(\\d+)").find(url)?.groupValues?.get(1)
+    }
+
+    private fun extractUnescapedFlightText(rawHtml: String): String {
+        val sb = StringBuilder()
+        Regex("""self\.__next_f\.push\(\[\d+,"((?:\\.|[^"\\])*)"\]\)""").findAll(rawHtml).forEach { m ->
+            val unescaped = runCatching {
+                JSONObject("{\"v\":\"${m.groupValues[1]}\"}").getString("v")
+            }.getOrDefault(m.groupValues[1])
+            sb.append(unescaped).append('\n')
+        }
+        return if (sb.isNotEmpty()) sb.toString() else rawHtml
+    }
+
+    private fun extractJsonArrayAfterKey(text: String, key: String): String? {
+        val keyIdx = text.indexOf("\"$key\":")
+        if (keyIdx == -1) return null
+        val start = text.indexOf('[', keyIdx + key.length + 2)
+        if (start == -1) return null
+
+        var depth = 0
+        var inString = false
+        var escape = false
+        for (i in start until text.length) {
+            val c = text[i]
+            if (escape) {
+                escape = false
+                continue
+            }
+            if (c == '\\' && inString) {
+                escape = true
+                continue
+            }
+            if (c == '"') {
+                inString = !inString
+                continue
+            }
+            if (!inString) {
+                if (c == '[') depth++
+                else if (c == ']') {
+                    depth--
+                    if (depth == 0) return text.substring(start, i + 1)
+                }
+            }
+        }
+        return null
     }
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(url, interceptor = cfKiller).document
+        val responseText = app.get(url, interceptor = cfKiller).text
+        val document = org.jsoup.Jsoup.parse(responseText, mainUrl)
+        val flightText = extractUnescapedFlightText(responseText)
 
         val title = document.selectFirst("h1")?.text()?.trim()
             .orEmpty()
+            .ifEmpty {
+                Regex("\"title\":\"([^\"]+)\"").find(flightText)?.groupValues?.get(1).orEmpty()
+            }
             .ifEmpty { document.select("title").text().substringBefore("—").trim() }
 
-        val poster = document.select("img.object-cover, img[data-nimg='fill'], img").firstOrNull()?.let {
-            it.attr("src").ifEmpty { it.attr("data-src") }
+        val posterPath = Regex("\"posterPath\":\"(/[^\"\\\\]+)\"").find(flightText)?.groupValues?.get(1)
+        val poster = if (!posterPath.isNullOrBlank()) {
+            "https://image.tmdb.org/t/p/w500$posterPath"
+        } else {
+            document.select("main img, img.object-cover, img[data-nimg='fill']").firstOrNull()?.let {
+                it.attr("src").ifEmpty { it.attr("data-src") }
+            }
         }
 
-        val description = document.select("p.text-muted, .text-fg\\/80, p").text().trim()
+        val jsonOverview = Regex("\"overview\":\"((?:\\\\.|[^\"\\\\])*)\"")
+            .find(flightText)?.groupValues?.get(1)
+            ?.let { raw -> runCatching { JSONObject("{\"v\":\"$raw\"}").getString("v") }.getOrDefault(raw) }
+            ?.trim()
+            .orEmpty()
+
+        val description = jsonOverview.ifEmpty {
+            document.select("main p.max-w-3xl, main p")
+                .map { it.text().trim() }
+                .firstOrNull { text ->
+                    text.length > 30 &&
+                        !text.contains("MovieFox indexes third-party content", ignoreCase = true) &&
+                        !text.contains("All rights reserved", ignoreCase = true)
+                }.orEmpty()
+        }
 
         val type = when {
             url.contains("/anime/") -> TvType.Anime
@@ -189,48 +300,105 @@ class MovieFoxProvider : MainAPI() {
         val isTv = type != TvType.Movie
 
         return if (isTv) {
+            val baseSeriesId = extractSeriesId(url)
+            val baseUrlWithoutQuery = url.substringBefore("?")
             val episodes = mutableListOf<Episode>()
 
-            document.select("a[href*='/watch/'], a[href*='/season/'], a[href*=/movie/], a[href*=/tv/], a[href*=/dramas/], .episode-item")
-                .forEachIndexed { index, element ->
-                    val epUrl = element.attr("href")
-                    val epName = element.select(".ep-title, span").text()
-                        .ifEmpty { element.text() }
-                        .ifEmpty { "Episode ${index + 1}" }
+            extractJsonArrayAfterKey(flightText, "episodes")?.let { arrJson ->
+                runCatching {
+                    val arr = JSONArray(arrJson)
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.optJSONObject(i) ?: continue
+                        val sNum = obj.optInt("seasonNumber", -1)
+                        val eNum = obj.optInt("episodeNumber", -1)
+                        if (sNum <= 0 || eNum <= 0) continue
 
-                    val fixedEpUrl =
-                        if (epUrl.startsWith("http")) epUrl else "$mainUrl/${epUrl.trimStart('/')}"
+                        val epTitle = obj.optString("name").ifBlank { "Episode $eNum" }
+                        val epOverview = obj.optString("overview").takeIf { it.isNotBlank() }
+                        val stillPath = obj.optString("stillPath").takeIf { it.startsWith("/") }
+                        val epThumb = stillPath?.let { "https://image.tmdb.org/t/p/w500$it" }
 
-                    val seasonMatch = Regex("s(?:eason)?[-/]?(\\d+)", RegexOption.IGNORE_CASE)
-                        .find(epUrl)?.groupValues?.get(1)?.toIntOrNull() ?: 1
-                    val epMatch = Regex("e(?:pisode)?[-/]?(\\d+)", RegexOption.IGNORE_CASE)
-                        .find(epUrl)?.groupValues?.get(1)?.toIntOrNull() ?: (index + 1)
+                        episodes.add(
+                            newEpisode("$baseUrlWithoutQuery?season=$sNum&episode=$eNum") {
+                                this.name = epTitle
+                                this.season = sNum
+                                this.episode = eNum
+                                this.description = epOverview
+                                this.posterUrl = epThumb
+                            }
+                        )
+                    }
+                }
+            }
 
-                    val sep = if (fixedEpUrl.contains("?")) "&" else "?"
-                    val finalEpUrl =
-                        if (fixedEpUrl.contains("season=", true) || fixedEpUrl.contains("episode=", true)) {
-                            fixedEpUrl
-                        } else {
-                            "$fixedEpUrl${sep}season=$seasonMatch&episode=$epMatch"
+            extractJsonArrayAfterKey(flightText, "seasons")?.let { seasonsJson ->
+                runCatching {
+                    val arr = JSONArray(seasonsJson)
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.optJSONObject(i) ?: continue
+                        val sNum = obj.optInt("seasonNumber", -1)
+                        val epCount = obj.optInt("episodeCount", 0)
+                        if (sNum <= 0 || epCount <= 0) continue
+
+                        for (eNum in 1..epCount) {
+                            if (episodes.none { it.season == sNum && it.episode == eNum }) {
+                                episodes.add(
+                                    newEpisode("$baseUrlWithoutQuery?season=$sNum&episode=$eNum") {
+                                        this.name = "Episode $eNum"
+                                        this.season = sNum
+                                        this.episode = eNum
+                                    }
+                                )
+                            }
                         }
+                    }
+                }
+            }
+
+            document.select("a[href*='/watch/']").forEach { element ->
+                val epHref = element.attr("href").trim()
+                if (baseSeriesId != null) {
+                    val linkId = extractSeriesId(epHref)
+                    if (linkId != null && linkId != baseSeriesId) return@forEach
+                }
+
+                val sNum = Regex("[?&]s(?:eason)?=(\\d+)", RegexOption.IGNORE_CASE)
+                    .find(epHref)?.groupValues?.get(1)?.toIntOrNull() ?: return@forEach
+                val eNum = Regex("[?&]e(?:pisode)?=(\\d+)", RegexOption.IGNORE_CASE)
+                    .find(epHref)?.groupValues?.get(1)?.toIntOrNull() ?: return@forEach
+                if (sNum <= 0 || eNum <= 0) return@forEach
+
+                if (episodes.none { it.season == sNum && it.episode == eNum }) {
+                    val label = element.attr("aria-label")
+                        .replace(Regex("^Watch episode \\d+:\\s*", RegexOption.IGNORE_CASE), "")
+                        .trim()
+                        .ifEmpty {
+                            element.parent()?.selectFirst("p")?.text()
+                                ?.replace(Regex("^\\d+\\.\\s*"), "")
+                                ?.trim()
+                                .orEmpty()
+                        }
+                        .ifEmpty { "Episode $eNum" }
+
+                    val thumb = element.selectFirst("img")?.attr("src")?.takeIf { it.startsWith("http") }
 
                     episodes.add(
-                        newEpisode(finalEpUrl) {
-                            this.name = epName
-                            this.season = seasonMatch
-                            this.episode = epMatch
+                        newEpisode("$baseUrlWithoutQuery?season=$sNum&episode=$eNum") {
+                            this.name = label
+                            this.season = sNum
+                            this.episode = eNum
+                            this.posterUrl = thumb
                         }
                     )
                 }
+            }
 
             if (episodes.isEmpty()) {
-                val sep = if (url.contains("?")) "&" else "?"
                 for (s in 1..3) {
-                    val totalEps = 8
-                    for (e in 1..totalEps) {
+                    for (e in 1..8) {
                         episodes.add(
-                            newEpisode("$url${sep}season=$s&episode=$e") {
-                                this.name = "Season $s Episode $e"
+                            newEpisode("$baseUrlWithoutQuery?season=$s&episode=$e") {
+                                this.name = "Episode $e"
                                 this.season = s
                                 this.episode = e
                             }
@@ -239,7 +407,11 @@ class MovieFoxProvider : MainAPI() {
                 }
             }
 
-            newTvSeriesLoadResponse(title, url, type, episodes.distinctBy { Pair(it.season, it.episode) }) {
+            val sortedEpisodes = episodes
+                .distinctBy { Pair(it.season, it.episode) }
+                .sortedWith(compareBy({ it.season }, { it.episode }))
+
+            newTvSeriesLoadResponse(title, url, type, sortedEpisodes) {
                 this.posterUrl = poster
                 this.plot = description
             }
@@ -290,28 +462,27 @@ class MovieFoxProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
-            val doc = app.get(data, interceptor = cfKiller).document
-            val pageHtml = doc.html()
+            val cleanPageUrl = data.substringBefore("?")
+            val rawHtml = app.get(cleanPageUrl, interceptor = cfKiller).text
+            val flightText = extractUnescapedFlightText(rawHtml)
 
-            val matchId = Regex("-(?:movie|tv|dramas|anime|series)-(\\d+)").find(data)?.groupValues?.get(1)
-                ?: Regex("[?&]id=(\\d+)").find(data)?.groupValues?.get(1)
-                ?: Regex("(\\d+)(?:\\D*)$").find(data)?.groupValues?.get(1)
+            val matchId = extractSeriesId(cleanPageUrl)
+                ?: Regex("\"id\":(\\d+)").find(flightText)?.groupValues?.get(1)
+                ?: Regex("(\\d+)(?:\\D*)$").find(cleanPageUrl)?.groupValues?.get(1)
                 ?: return false
 
-            val imdbId = Regex("tt\\d+").find(pageHtml)?.value.orEmpty()
-            val isTv = data.contains("/tv/") ||
-                data.contains("/dramas/") ||
-                data.contains("/anime/") ||
-                data.contains("/series/") ||
-                data.contains("season", true)
+            val imdbId = Regex("\"imdbId\":\"(tt\\d+)\"").find(flightText)?.groupValues?.get(1)
+                ?: Regex("tt\\d+").find(rawHtml)?.value.orEmpty()
+
+            val isTv = cleanPageUrl.contains("/tv/") ||
+                cleanPageUrl.contains("/dramas/") ||
+                cleanPageUrl.contains("/anime/") ||
+                cleanPageUrl.contains("/series/") ||
+                data.contains("season=", true)
             val contentType = if (isTv) "tv" else "movie"
 
-            val season = Regex("[?&]season=(\\d+)", RegexOption.IGNORE_CASE).find(data)?.groupValues?.get(1)
-                ?: Regex("s(?:eason)?[-/]?(\\d+)", RegexOption.IGNORE_CASE).find(data)?.groupValues?.get(1)
-                ?: "1"
-            val episode = Regex("[?&]episode=(\\d+)", RegexOption.IGNORE_CASE).find(data)?.groupValues?.get(1)
-                ?: Regex("e(?:pisode)?[-/]?(\\d+)", RegexOption.IGNORE_CASE).find(data)?.groupValues?.get(1)
-                ?: "1"
+            val season = Regex("[?&]s(?:eason)?=(\\d+)", RegexOption.IGNORE_CASE).find(data)?.groupValues?.get(1) ?: "1"
+            val episode = Regex("[?&]e(?:pisode)?=(\\d+)", RegexOption.IGNORE_CASE).find(data)?.groupValues?.get(1) ?: "1"
 
             val tvQuery = if (isTv) "&season=$season&episode=$episode" else ""
             val imdbQuery = if (imdbId.isNotBlank()) "&imdbId=$imdbId" else ""
@@ -324,7 +495,7 @@ class MovieFoxProvider : MainAPI() {
             )
 
             val headers = mapOf(
-                "Referer" to data,
+                "Referer" to cleanPageUrl,
                 "Origin" to mainUrl,
                 "User-Agent" to USER_AGENT
             )
@@ -332,6 +503,7 @@ class MovieFoxProvider : MainAPI() {
             val seenUrls = mutableSetOf<String>()
             var found = false
 
+            // 1. Direct API streams (Purstream, Castle, Direct, Debrid)
             for ((endpointName, apiUrl) in endpoints) {
                 val rawText = runCatching {
                     app.get(apiUrl, headers = headers, interceptor = cfKiller).text
@@ -384,6 +556,40 @@ class MovieFoxProvider : MainAPI() {
                         }
                     )
                     found = true
+                }
+            }
+
+            // 2. Embed Servers from `/watch/{type}-{id}` page (`"sources":[{...}]`)
+            val watchUrl = if (isTv) {
+                "$mainUrl/watch/tv-$matchId?s=$season&e=$episode"
+            } else {
+                "$mainUrl/watch/movie-$matchId"
+            }
+
+            val watchHtml = runCatching {
+                app.get(watchUrl, interceptor = cfKiller).text
+            }.getOrNull().orEmpty()
+
+            if (watchHtml.isNotBlank()) {
+                val watchFlight = extractUnescapedFlightText(watchHtml)
+                extractJsonArrayAfterKey(watchFlight, "sources")?.let { sourcesJson ->
+                    runCatching {
+                        val arr = JSONArray(sourcesJson)
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.optJSONObject(i) ?: continue
+                            val embedUrl = obj.optString("url").trim()
+                            if (embedUrl.isBlank() || !embedUrl.startsWith("http")) continue
+                            if (!seenUrls.add(embedUrl)) continue
+
+                            val extracted = runCatching {
+                                loadExtractor(embedUrl, watchUrl, subtitleCallback, callback)
+                            }.getOrDefault(false)
+
+                            if (extracted) {
+                                found = true
+                            }
+                        }
+                    }
                 }
             }
 
