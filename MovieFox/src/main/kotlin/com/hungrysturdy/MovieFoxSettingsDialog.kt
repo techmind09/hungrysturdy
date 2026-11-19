@@ -19,11 +19,12 @@ import com.lagradost.cloudstream3.CloudStreamApp.Companion.getKey
 import com.lagradost.cloudstream3.CloudStreamApp.Companion.setKey
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URI
 
 object MovieFoxSettingsDialog {
 
     private const val PREF_SERVER_PREFIX = "mf_srv_"
-    private const val PREF_CUSTOM_SITES = "mf_custom_external_sites_json"
+    private const val PREF_CUSTOM_SITES = "mf_custom_external_sites_v2"
     private const val PREF_STREAM_ONLY = "mf_stream_only"
     private const val PREF_DOWNLOAD_ONLY = "mf_download_only"
     private const val PREF_CONCURRENCY = "mf_parallel_servers"
@@ -38,14 +39,14 @@ object MovieFoxSettingsDialog {
     data class CustomExternalSite(
         val id: String,
         val name: String,
-        val movieTemplate: String,
-        val tvTemplate: String,
+        val baseUrl: String,
         var enabled: Boolean = true
     )
 
     val BUILTIN_SERVERS = listOf(
         ServerConfig("purstream", "Purstream", "MovieFox Purstream API"),
         ServerConfig("castle", "Castle", "MovieFox Castle API"),
+        ServerConfig("watchout", "Watchout", "MovieFox Watchout API"),
         ServerConfig("direct", "Direct Server", "Direct MP4 / HLS API"),
         ServerConfig("debrid", "Debrid", "Debrid / Cached Streams"),
         ServerConfig("vidsrc", "VidSrc", "VidSrc Stream API"),
@@ -73,12 +74,13 @@ object MovieFoxSettingsDialog {
             val arr = JSONArray(raw)
             for (i in 0 until arr.length()) {
                 val obj = arr.optJSONObject(i) ?: continue
+                val url = obj.optString("baseUrl", "").trim()
+                if (url.isBlank()) continue
                 list.add(
                     CustomExternalSite(
                         id = obj.optString("id", System.currentTimeMillis().toString()),
-                        name = obj.optString("name", "Custom Site"),
-                        movieTemplate = obj.optString("movieTemplate", ""),
-                        tvTemplate = obj.optString("tvTemplate", ""),
+                        name = obj.optString("name", extractHostName(url)),
+                        baseUrl = url,
                         enabled = obj.optBoolean("enabled", true)
                     )
                 )
@@ -94,13 +96,22 @@ object MovieFoxSettingsDialog {
                 JSONObject().apply {
                     put("id", site.id)
                     put("name", site.name)
-                    put("movieTemplate", site.movieTemplate)
-                    put("tvTemplate", site.tvTemplate)
+                    put("baseUrl", site.baseUrl)
                     put("enabled", site.enabled)
                 }
             )
         }
         setKey(PREF_CUSTOM_SITES, arr.toString())
+    }
+
+    fun extractHostName(rawUrl: String): String {
+        return try {
+            val fixed = if (rawUrl.startsWith("http")) rawUrl else "https://$rawUrl"
+            val host = URI(fixed).host.orEmpty().removePrefix("www.")
+            host.replaceFirstChar { it.uppercase() }.ifBlank { "External Site" }
+        } catch (_: Exception) {
+            "External Site"
+        }
     }
 
     fun isStreamOnly(): Boolean = getKey(PREF_STREAM_ONLY, false) ?: false
@@ -109,7 +120,7 @@ object MovieFoxSettingsDialog {
     fun isDownloadOnly(): Boolean = getKey(PREF_DOWNLOAD_ONLY, false) ?: false
     fun setDownloadOnly(value: Boolean) = setKey(PREF_DOWNLOAD_ONLY, value)
 
-    fun getParallelServers(): Int = getKey(PREF_CONCURRENCY, 8) ?: 8
+    fun getParallelServers(): Int = getKey(PREF_CONCURRENCY, 10) ?: 10
     fun setParallelServers(value: Int) = setKey(PREF_CONCURRENCY, value.coerceIn(1, 25))
 
     private fun dp(ctx: Context, value: Int): Int =
@@ -214,7 +225,7 @@ object MovieFoxSettingsDialog {
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { bottomMargin = dp(ctx, 12) })
 
-        // Advanced 3-Tab Switcher
+        // 3-Tab Switcher
         val tabBar = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             background = cardBg(Color.parseColor("#13161F"), Color.parseColor("#242938"), 22f)
@@ -248,7 +259,6 @@ object MovieFoxSettingsDialog {
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { bottomMargin = dp(ctx, 12) })
 
-        // Scrollable Body Containers for 3 Tabs
         val scrollView = ScrollView(ctx).apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -264,9 +274,7 @@ object MovieFoxSettingsDialog {
         val externalContainer = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val engineContainer = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
 
-        // ------------------------------------------
         // TAB 1: BUILT-IN SERVERS
-        // ------------------------------------------
         BUILTIN_SERVERS.forEach { srv ->
             val card = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -306,9 +314,7 @@ object MovieFoxSettingsDialog {
             builtInContainer.addView(card)
         }
 
-        // ------------------------------------------
-        // TAB 2: EXTERNAL WEBSITE SERVER FETCHER
-        // ------------------------------------------
+        // TAB 2: SIMPLE SINGLE-BOX EXTERNAL WEBSITE FETCHER
         val addFormCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = cardBg(Color.parseColor("#151A24"), Color.parseColor("#2E3A52"))
@@ -320,52 +326,26 @@ object MovieFoxSettingsDialog {
         }
 
         addFormCard.addView(TextView(ctx).apply {
-            text = "+ Add External Website Source"
+            text = "+ Paste Any Website URL"
             textSize = 15f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.parseColor("#60A5FA"))
         })
 
         addFormCard.addView(TextView(ctx).apply {
-            text = "Placeholders: {id} = TMDB ID, {imdb} = IMDb ID, {season}, {episode}\nExample: https://vidlink.pro/movie/{id}  |  https://vidlink.pro/tv/{id}/{season}/{episode}"
-            textSize = 11f
+            text = "Bas kisi bhi website ka link paste karein (jaise https://sflix.film/ ya https://vidlink.pro). MovieFox khud us site se servers fetch kar lega."
+            textSize = 11.5f
             setTextColor(Color.parseColor("#8B93A7"))
             setPadding(0, dp(ctx, 4), 0, dp(ctx, 10))
         })
 
-        val nameInput = EditText(ctx).apply {
-            hint = "Server Name (e.g., VidLink / EmbedSu / CustomSite)"
+        val siteUrlInput = EditText(ctx).apply {
+            hint = "Paste Website URL (e.g., https://sflix.film/)"
             setHintTextColor(Color.parseColor("#64748B"))
             setTextColor(Color.WHITE)
-            textSize = 13f
+            textSize = 13.5f
             background = inputBg()
-            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(ctx, 8) }
-        }
-
-        val movieUrlInput = EditText(ctx).apply {
-            hint = "Movie URL Template (e.g., https://site.com/embed/movie/{id})"
-            setHintTextColor(Color.parseColor("#64748B"))
-            setTextColor(Color.WHITE)
-            textSize = 13f
-            background = inputBg()
-            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(ctx, 8) }
-        }
-
-        val tvUrlInput = EditText(ctx).apply {
-            hint = "TV URL Template (e.g., https://site.com/embed/tv/{id}/{season}/{episode})"
-            setHintTextColor(Color.parseColor("#64748B"))
-            setTextColor(Color.WHITE)
-            textSize = 13f
-            background = inputBg()
-            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+            setPadding(dp(ctx, 12), dp(ctx, 12), dp(ctx, 12), dp(ctx, 12))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -380,7 +360,7 @@ object MovieFoxSettingsDialog {
             externalListHolder.removeAllViews()
             if (customSites.isEmpty()) {
                 externalListHolder.addView(TextView(ctx).apply {
-                    text = "No external websites added yet. Add any site URL above to fetch its servers inside MovieFox."
+                    text = "No external websites added yet. Paste any site URL above and tap ADD WEBSITE SERVER."
                     textSize = 12f
                     setTextColor(Color.parseColor("#64748B"))
                     gravity = Gravity.CENTER
@@ -407,7 +387,7 @@ object MovieFoxSettingsDialog {
 
                 val siteTitle = TextView(ctx).apply {
                     text = site.name
-                    textSize = 14f
+                    textSize = 14.5f
                     setTypeface(typeface, Typeface.BOLD)
                     setTextColor(Color.WHITE)
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
@@ -443,15 +423,15 @@ object MovieFoxSettingsDialog {
                 topRow.addView(delBtn)
                 topRow.addView(siteSwitch)
 
-                val urlsPreview = TextView(ctx).apply {
-                    text = "Movie: ${site.movieTemplate.ifBlank { "N/A" }}\nTV: ${site.tvTemplate.ifBlank { "N/A" }}"
-                    textSize = 11f
+                val urlPreview = TextView(ctx).apply {
+                    text = site.baseUrl
+                    textSize = 11.5f
                     setTextColor(Color.parseColor("#8B93A7"))
                     setPadding(0, dp(ctx, 4), 0, 0)
                 }
 
                 itemCard.addView(topRow)
-                itemCard.addView(urlsPreview)
+                itemCard.addView(urlPreview)
                 externalListHolder.addView(itemCard)
             }
         }
@@ -464,48 +444,42 @@ object MovieFoxSettingsDialog {
             background = pillBg(Color.parseColor("#10B981"), 18f)
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(ctx, 42)
+                dp(ctx, 44)
             )
             setOnClickListener {
-                val sName = nameInput.text.toString().trim()
-                val mTpl = movieUrlInput.text.toString().trim()
-                val tTpl = tvUrlInput.text.toString().trim()
-
-                if (sName.isBlank() || (mTpl.isBlank() && tTpl.isBlank())) {
-                    Toast.makeText(ctx, "Enter Server Name and at least one URL template", Toast.LENGTH_SHORT).show()
+                var rawUrl = siteUrlInput.text.toString().trim()
+                if (rawUrl.isBlank()) {
+                    Toast.makeText(ctx, "Please paste a website URL first", Toast.LENGTH_SHORT).show()
                     return@setOnClickListener
                 }
+                if (!rawUrl.startsWith("http://") && !rawUrl.startsWith("https://")) {
+                    rawUrl = "https://$rawUrl"
+                }
 
+                val cleanSiteName = extractHostName(rawUrl)
                 customSites.add(
                     CustomExternalSite(
                         id = System.currentTimeMillis().toString(),
-                        name = sName,
-                        movieTemplate = mTpl,
-                        tvTemplate = tTpl,
+                        name = cleanSiteName,
+                        baseUrl = rawUrl,
                         enabled = true
                     )
                 )
-                nameInput.setText("")
-                movieUrlInput.setText("")
-                tvUrlInput.setText("")
+                siteUrlInput.setText("")
                 updateStats()
                 renderExternalSitesList()
-                Toast.makeText(ctx, "$sName added! Click SAVE to apply.", Toast.LENGTH_SHORT).show()
+                Toast.makeText(ctx, "$cleanSiteName added! Click SAVE SETTINGS.", Toast.LENGTH_SHORT).show()
             }
         }
 
-        addFormCard.addView(nameInput)
-        addFormCard.addView(movieUrlInput)
-        addFormCard.addView(tvUrlInput)
+        addFormCard.addView(siteUrlInput)
         addFormCard.addView(addSiteBtn)
 
         externalContainer.addView(addFormCard)
         externalContainer.addView(externalListHolder)
         renderExternalSitesList()
 
-        // ------------------------------------------
         // TAB 3: ENGINE & PERFORMANCE
-        // ------------------------------------------
         val streamOnlySwitch = Switch(ctx).apply { isChecked = isStreamOnly() }
         val downloadOnlySwitch = Switch(ctx).apply { isChecked = isDownloadOnly() }
 
@@ -611,7 +585,6 @@ object MovieFoxSettingsDialog {
         perfCard.addView(plusBtn)
         engineContainer.addView(perfCard)
 
-        // Tab Switching Styling Logic
         fun selectTab(activeIndex: Int) {
             builtInContainer.visibility = if (activeIndex == 0) View.VISIBLE else View.GONE
             externalContainer.visibility = if (activeIndex == 1) View.VISIBLE else View.GONE
@@ -632,7 +605,7 @@ object MovieFoxSettingsDialog {
         tabBuiltIn.setOnClickListener { selectTab(0) }
         tabExternal.setOnClickListener { selectTab(1) }
         tabSettings.setOnClickListener { selectTab(2) }
-        selectTab(0)
+        selectTab(1) // Opens directly on External Sites tab for quick paste
 
         containerWrapper.addView(builtInContainer)
         containerWrapper.addView(externalContainer)
@@ -644,7 +617,6 @@ object MovieFoxSettingsDialog {
             .setView(root)
             .create()
 
-        // Bottom Save & Close Bar
         val bottomRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
