@@ -39,7 +39,7 @@ class Plugin : Plugin() {
 
         // Ek hi jagah se poore plugin ke liye Donation Dialog
         openSettings = { ctx ->
-            PluginDonation.open(
+            MultiDonation.open(
                 context = ctx,
                 pluginName = "Hungrysturdy All-in-One"
             )
