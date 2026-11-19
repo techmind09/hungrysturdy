@@ -10,33 +10,6 @@ class Plugin : Plugin() {
         // Main Providers
         registerMainAPI(SflixProvider())
         registerMainAPI(HindiDramaProvider())
-        registerMainAPI(MovieFoxProvider())
-
-        // Voe Extractors
-        registerExtractorAPI(VoeExtractor())
-        registerExtractorAPI(VoeToExtractor())
-        registerExtractorAPI(VoeCoExtractor())
-
-        // Pixeldrain & GDrive Extractors
-        registerExtractorAPI(PixeldrainExtractor())
-        registerExtractorAPI(PixeldrainDevExtractor())
-        registerExtractorAPI(GDriveExtractor())
-
-        // VidPrime, Nitrox, NxStreamHub & Vibuxer Extractors
-        registerExtractorAPI(VidPrimeExtractor())
-        registerExtractorAPI(NitroxExtractor())
-        registerExtractorAPI(NxStreamHubExtractor())
-        registerExtractorAPI(VibuxerExtractor())
-
-        // SFlix / Rabbitstream / UpCloud / MegaCloud Extractors
-        registerExtractorAPI(RabbitstreamExtractor())
-        registerExtractorAPI(UpCloudExtractor())
-        registerExtractorAPI(MegaCloudExtractor())
-        registerExtractorAPI(MegaCloudClubExtractor())
-
-        // StreamWish & Filemoon Extractors
-        registerExtractorAPI(StreamWishExtractor())
-        registerExtractorAPI(FilemoonExtractor())
 
         // LuluStream Extractors
         registerExtractorAPI(LuluVidExtractor())
@@ -66,7 +39,7 @@ class Plugin : Plugin() {
         registerExtractorAPI(SwVidMolyExtractor())
         registerExtractorAPI(VidMolyToExtractor())
 
-        // StreamTape Extractors
+        // StreamTape Extractors (All Domains)
         registerExtractorAPI(StreamTapeExtractor())
         registerExtractorAPI(StreamTapeToExtractor())
         registerExtractorAPI(StreamTapeNetExtractor())
@@ -75,10 +48,5 @@ class Plugin : Plugin() {
         registerExtractorAPI(StrCloudExtractor())
         registerExtractorAPI(StrTapeTechExtractor())
         registerExtractorAPI(StapeFunExtractor())
-
-        // Custom Dark UI Settings (Sirf MovieFox ke servers manage karne ke liye)
-        openSettings = { ctx ->
-            MovieFoxSettingsDialog.show(ctx)
-        }
     }
 }
