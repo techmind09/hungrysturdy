@@ -507,7 +507,7 @@ class MovieFoxProvider : MainAPI() {
             val tvQuery = if (isTv) "&season=$season&episode=$episode" else ""
             val imdbQuery = if (imdbId.isNotBlank()) "&imdbId=$imdbId" else ""
 
-            // Aage chal kar FSL, FSL2, GDrive ya kisi bhi naye API endpoint ko bas is list mein add karein
+            // Sabhi servers (FSL, FSL2, GDrive sahit) — Aage naye servers bas yahan add karein
             val allEndpoints = listOf(
                 "purstream" to "$mainUrl/api/stream/purstream?type=$contentType&id=$matchId$tvQuery",
                 "castle" to "$mainUrl/api/stream/castle?type=$contentType&id=$matchId$tvQuery",
@@ -521,9 +521,9 @@ class MovieFoxProvider : MainAPI() {
                 "gdrive" to "$mainUrl/api/stream/gdrive?type=$contentType&id=$matchId$imdbQuery$tvQuery"
             )
 
-            // Settings mein jo servers enabled hain sirf unhi ko filter karein
+            // Plugin Settings mein jo servers enabled hain sirf unhi ko filter karein
             val activeEndpoints = allEndpoints.filter { (key, _) ->
-                MovieFoxPlugin.isServerEnabled(key)
+                Plugin.isServerEnabled(key)
             }
 
             val baseHeaders = mapOf(
@@ -608,14 +608,15 @@ class MovieFoxProvider : MainAPI() {
                     // Check if stream URL is a known embed host (Voe, StreamTape, Vidara, Lulu, Pixeldrain, GDrive, etc.)
                     val isKnownHost = listOf(
                         "voe.", "pixeldrain.", "streamtape.", "shavetape.", "strcloud.",
-                        "luluvid.", "lulustream.", "luluvdo.", "vidara.", "vidprime.",
-                        "upbolt.", "abyssplayer.", "abysscdn.", "short.icu", "lplaygo.",
-                        "vidmoly.", "earnvids.", "dingtezuni.", "rabbitstream.", "upcloud.",
-                        "megacloud.", "streamwish.", "filemoon.", "drive.google.com"
+                        "strtape.", "stape.fun", "luluvid.", "lulustream.", "luluvdo.",
+                        "vidara.", "vidprime.", "upbolt.", "abyssplayer.", "abysscdn.",
+                        "short.icu", "lplaygo.", "vidmoly.", "earnvids.", "dingtezuni.",
+                        "rabbitstream.", "upcloud.", "megacloud.", "streamwish.", "filemoon.",
+                        "drive.google.com"
                     ).any { streamUrl.contains(it, true) }
 
                     if (isKnownHost) {
-                        if (MovieFoxPlugin.isServerEnabled("embeds")) {
+                        if (Plugin.isServerEnabled("embeds")) {
                             val extracted = runCatching {
                                 loadExtractor(streamUrl, cleanPageUrl, subtitleCallback, callback)
                             }.getOrDefault(false)
@@ -656,7 +657,7 @@ class MovieFoxProvider : MainAPI() {
             }
 
             // 2. Embed Servers from `/watch/{type}-{id}` page (Agar "embeds" setting ON hai)
-            if (MovieFoxPlugin.isServerEnabled("embeds")) {
+            if (Plugin.isServerEnabled("embeds")) {
                 val watchUrl = if (isTv) {
                     "$mainUrl/watch/tv-$matchId?s=$season&e=$episode"
                 } else {
@@ -670,9 +671,8 @@ class MovieFoxProvider : MainAPI() {
                 if (watchHtml.isNotBlank()) {
                     val watchFlight = extractUnescapedFlightText(watchHtml)
 
-                    // Direct scan for supported embed hosts & worker URLs in watch page
                     val hostScanRegex = Regex(
-                        """https?://(?:[a-zA-Z0-9.-]+\.)?(?:voe\.(?:sx|to|co)|pixeldrain\.(?:com|dev)|streamtape\.(?:com|to|net|xyz)|shavetape\.cash|strcloud\.link|luluvid\.com|lulustream\.com|luluvdo\.com|vidara\.(?:to|so)|vidprime\.top|upbolt\.(?:to|tv)|abysscdn\.com|short\.icu|lplaygo\.com|vidmoly\.(?:me|to)|earnvids\.com|dingtezuni\.com|rabbitstream\.net|upcloud\.to|megacloud\.(?:tv|club)|streamwish\.to|filemoon\.sx|drive\.google\.com|workers\.dev)/[^\s"'\\]+""",
+                        """https?://(?:[a-zA-Z0-9.-]+\.)?(?:voe\.(?:sx|to|co)|pixeldrain\.(?:com|dev)|streamtape\.(?:com|to|net|xyz)|shavetape\.cash|strcloud\.link|strtape\.tech|stape\.fun|luluvid\.com|lulustream\.com|luluvdo\.com|vidara\.(?:to|so)|vidprime\.top|upbolt\.(?:to|tv)|abysscdn\.com|short\.icu|lplaygo\.com|vidmoly\.(?:me|to)|earnvids\.com|dingtezuni\.com|rabbitstream\.net|upcloud\.to|megacloud\.(?:tv|club)|streamwish\.to|filemoon\.sx|drive\.google\.com|workers\.dev)/[^\s"'\\]+""",
                         RegexOption.IGNORE_CASE
                     )
                     hostScanRegex.findAll(watchFlight).forEach { m ->
