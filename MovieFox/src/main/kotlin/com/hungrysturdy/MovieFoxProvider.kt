@@ -23,6 +23,7 @@ import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -43,7 +44,6 @@ object MovieFoxSettingsDialog {
     private const val KEY_CONCURRENCY = "mf_concurrency"
     private const val KEY_TIMEOUT_SEC = "mf_timeout_sec"
 
-    private val dialogScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var cachedPrefs: SharedPreferences? = null
     private var cachedManifests: MutableList<NuvioManifestConfig>? = null
 
@@ -271,6 +271,7 @@ object MovieFoxSettingsDialog {
         }
 
     fun show(ctx: Context) {
+        val dialogScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         val nuvioList = getNuvioManifests(ctx).toMutableList()
         val serverSwitches = mutableMapOf<String, Switch>()
         val serverCards = mutableMapOf<String, LinearLayout>()
@@ -1083,6 +1084,9 @@ object MovieFoxSettingsDialog {
         root.addView(scrollView)
 
         val dialog = AlertDialog.Builder(ctx).setView(root).create()
+        dialog.setOnDismissListener {
+            dialogScope.cancel()
+        }
 
         val footer = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
