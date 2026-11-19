@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.text.Editable
+import android.text.TextUtils
 import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
@@ -23,6 +24,8 @@ import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -33,13 +36,16 @@ import java.net.URL
 
 object MovieFoxSettingsDialog {
 
-    private const val PREFS_NAME = "moviefox_ultra_max_v5"
+    private const val PREFS_NAME = "moviefox_ultra_max_v7"
     private const val KEY_SRV_PREFIX = "mf_srv_"
     private const val KEY_AUDIO_PREFIX = "mf_audio_"
+    private const val KEY_FAIL_PREFIX = "mf_fail_"
+    private const val KEY_LAST_MS_PREFIX = "mf_ms_"
     private const val KEY_NUVIO_MANIFESTS = "mf_nuvio_manifests_json"
     private const val KEY_QUALITY = "mf_preferred_quality"
     private const val KEY_LOW_BUFFER = "mf_low_buffer_mode"
     private const val KEY_FAST_FETCH = "mf_fast_fetch_mode"
+    private const val KEY_AUTO_DISABLE_ERR = "mf_auto_disable_err"
     private const val KEY_CONCURRENCY = "mf_concurrency"
     private const val KEY_TIMEOUT_SEC = "mf_timeout_sec"
 
@@ -85,6 +91,18 @@ object MovieFoxSettingsDialog {
         ServerItem("vidsrc", "VidSrc", "EMBED", "https://moviefox.pro/api/stream/vidsrc", "#FBBF24"),
         ServerItem("autoembed", "AutoEmbed", "EMBED", "https://moviefox.pro/api/stream/autoembed", "#FB923C"),
         ServerItem("hls", "HLS / Workers", "M3U8", "https://moviefox.pro/api/stream/hls", "#22D3EE"),
+        ServerItem("fsl", "FSL Server", "DIRECT", "https://moviefox.pro/api/stream/fsl", "#10B981"),
+        ServerItem("fsl2", "FSL2 Server", "DIRECT", "https://moviefox.pro/api/stream/fsl2", "#059669"),
+        ServerItem("gdrive", "GDrive Server", "CLOUD", "https://drive.google.com/", "#60A5FA"),
+        ServerItem("prmovies", "Prmovies", "SITE", "https://prmovies.coupons/", "#F59E0B"),
+        ServerItem("vegamovies", "VegaMovies", "SITE", "https://vegamovies.lease/", "#EC4899"),
+        ServerItem("hindmoviez", "HindMoviez", "SITE", "https://v3.hindmovie.im/", "#14B8A6"),
+        ServerItem("sflix", "Sflix", "SITE", "https://sflix.film/", "#F97316"),
+        ServerItem("vcloud", "V-Cloud (Vega)", "SUB", "https://vcloud.lol/", "#A78BFA"),
+        ServerItem("hubcloud", "HubCloud (Vega)", "SUB", "https://hubcloud.dad/", "#C084FC"),
+        ServerItem("pixeldrain", "PixelDrain", "SUB", "https://pixeldrain.com/", "#38BDF8"),
+        ServerItem("gofile", "GoFile", "SUB", "https://api.gofile.io/", "#34D399"),
+        ServerItem("embeds", "Embed Hosts", "EXTRACTOR", "https://moviefox.pro/", "#F43F5E"),
         ServerItem("nuvio", "Nuvio Addon", "MANIFEST", "https://nuvio.app/", "#A855F7")
     )
 
@@ -111,10 +129,44 @@ object MovieFoxSettingsDialog {
             .also { cachedPrefs = it }
 
     fun isServerEnabled(ctx: Context, key: String): Boolean =
-        prefs(ctx).getBoolean("$KEY_SRV_PREFIX$key", true)
+        prefs(ctx).getBoolean("$KEY_SRV_PREFIX${key.lowercase()}", true)
 
     fun setServerEnabled(ctx: Context, key: String, enabled: Boolean) {
-        prefs(ctx).edit().putBoolean("$KEY_SRV_PREFIX$key", enabled).apply()
+        prefs(ctx).edit().putBoolean("$KEY_SRV_PREFIX${key.lowercase()}", enabled).apply()
+    }
+
+    fun reportServerResult(ctx: Context?, key: String, success: Boolean, latencyMs: Long = 0L) {
+        if (ctx == null) return
+        val k = key.lowercase().trim()
+        val p = prefs(ctx)
+        if (success) {
+            p.edit()
+                .putInt("$KEY_FAIL_PREFIX$k", 0)
+                .putLong("$KEY_LAST_MS_PREFIX$k", latencyMs)
+                .apply()
+        } else {
+            val fails = p.getInt("$KEY_FAIL_PREFIX$k", 0) + 1
+            val editor = p.edit().putInt("$KEY_FAIL_PREFIX$k", fails)
+            if (fails >= 2 && isAutoDisableErrorServers(ctx)) {
+                editor.putBoolean("$KEY_SRV_PREFIX$k", false)
+            }
+            editor.apply()
+        }
+    }
+
+    fun getServerFailCount(ctx: Context, key: String): Int =
+        prefs(ctx).getInt("$KEY_FAIL_PREFIX${key.lowercase()}", 0)
+
+    fun getServerLastMs(ctx: Context, key: String): Long =
+        prefs(ctx).getLong("$KEY_LAST_MS_PREFIX${key.lowercase()}", -1L)
+
+    fun resetAllHealthStats(ctx: Context) {
+        val editor = prefs(ctx).edit()
+        SERVERS.forEach { srv ->
+            editor.remove("$KEY_FAIL_PREFIX${srv.key}")
+            editor.remove("$KEY_LAST_MS_PREFIX${srv.key}")
+        }
+        editor.apply()
     }
 
     fun isAudioEnabled(ctx: Context, key: String): Boolean {
@@ -209,22 +261,30 @@ object MovieFoxSettingsDialog {
         prefs(ctx).edit().putBoolean(KEY_FAST_FETCH, enabled).apply()
     }
 
+    fun isAutoDisableErrorServers(ctx: Context): Boolean =
+        prefs(ctx).getBoolean(KEY_AUTO_DISABLE_ERR, true)
+
+    fun setAutoDisableErrorServers(ctx: Context, enabled: Boolean) {
+        prefs(ctx).edit().putBoolean(KEY_AUTO_DISABLE_ERR, enabled).apply()
+    }
+
+    // Compatibility helpers for MovieFoxProvider.kt
     fun isStreamOnly(ctx: Context): Boolean = isLowBufferMode(ctx)
     fun isDownloadOnly(ctx: Context): Boolean = false
     fun getParallelServers(ctx: Context): Int = getConcurrency(ctx)
 
     fun getConcurrency(ctx: Context): Int =
-        prefs(ctx).getInt(KEY_CONCURRENCY, 12)
+        prefs(ctx).getInt(KEY_CONCURRENCY, 14)
 
     fun setConcurrency(ctx: Context, value: Int) {
         prefs(ctx).edit().putInt(KEY_CONCURRENCY, value.coerceIn(2, 24)).apply()
     }
 
     fun getTimeoutSeconds(ctx: Context): Int =
-        prefs(ctx).getInt(KEY_TIMEOUT_SEC, 10)
+        prefs(ctx).getInt(KEY_TIMEOUT_SEC, 5)
 
     fun setTimeoutSeconds(ctx: Context, sec: Int) {
-        prefs(ctx).edit().putInt(KEY_TIMEOUT_SEC, sec.coerceIn(3, 30)).apply()
+        prefs(ctx).edit().putInt(KEY_TIMEOUT_SEC, sec.coerceIn(3, 20)).apply()
     }
 
     private fun dp(ctx: Context, px: Int): Int =
@@ -246,13 +306,13 @@ object MovieFoxSettingsDialog {
         cornerRadius = radius
     }
 
-    private suspend fun probeEndpoint(urlStr: String, timeoutMs: Int = 3500): Pair<Boolean, Long> =
+    private suspend fun probeEndpoint(urlStr: String, timeoutMs: Int = 2500): Pair<Boolean, Long> =
         withContext(Dispatchers.IO) {
             val start = System.currentTimeMillis()
             try {
                 val fixedUrl = if (urlStr.startsWith("http")) urlStr else "https://$urlStr"
                 val conn = (URL(fixedUrl).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "GET"
+                    requestMethod = "HEAD"
                     connectTimeout = timeoutMs
                     readTimeout = timeoutMs
                     instanceFollowRedirects = true
@@ -275,19 +335,22 @@ object MovieFoxSettingsDialog {
         val serverSwitches = mutableMapOf<String, Switch>()
         val serverCards = mutableMapOf<String, LinearLayout>()
         val serverStatusBadges = mutableMapOf<String, TextView>()
+        val failedServerKeys = mutableSetOf<String>()
         val audioSwitches = mutableMapOf<String, Switch>()
         val audioCards = mutableMapOf<String, LinearLayout>()
 
         var currentQuery = ""
         var selectedQuality = getPreferredQuality(ctx)
         var currentConcurrency = getConcurrency(ctx)
+        var autoDisableErrors = isAutoDisableErrorServers(ctx)
 
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = cardBg("#07090F", "#1E273B", 34f, 3)
-            setPadding(dp(ctx, 15), dp(ctx, 15), dp(ctx, 15), dp(ctx, 15))
+            setPadding(dp(ctx, 14), dp(ctx, 14), dp(ctx, 14), dp(ctx, 14))
         }
 
+        // Header
         val header = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable(
@@ -298,10 +361,10 @@ object MovieFoxSettingsDialog {
                     Color.parseColor("#08272E")
                 )
             ).apply {
-                cornerRadius = 26f
+                cornerRadius = 24f
                 setStroke(2, Color.parseColor("#2E3D59"))
             }
-            setPadding(dp(ctx, 15), dp(ctx, 13), dp(ctx, 15), dp(ctx, 13))
+            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
         }
 
         val topRow = LinearLayout(ctx).apply {
@@ -311,20 +374,21 @@ object MovieFoxSettingsDialog {
 
         topRow.addView(TextView(ctx).apply {
             text = "MOVIEFOX ULTRA MAX"
-            textSize = 18f
-            letterSpacing = 0.04f
+            textSize = 17f
+            isSingleLine = true
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
 
         topRow.addView(TextView(ctx).apply {
-            text = "⚡ ZERO BUFFER"
-            textSize = 10f
+            text = "⚡ TURBO FAST"
+            textSize = 9.5f
+            isSingleLine = true
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.parseColor("#34D399"))
             background = pillBg("#0D2B22", 14f)
-            setPadding(dp(ctx, 10), dp(ctx, 5), dp(ctx, 10), dp(ctx, 5))
+            setPadding(dp(ctx, 9), dp(ctx, 4), dp(ctx, 9), dp(ctx, 4))
         })
         header.addView(topRow)
 
@@ -339,21 +403,23 @@ object MovieFoxSettingsDialog {
         fun statChip(label: String, colorHex: String, marginEndDp: Int): Pair<LinearLayout, TextView> {
             val box = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
-                background = cardBg("#0A0E17", "#26324A", 15f, 2)
-                setPadding(dp(ctx, 9), dp(ctx, 7), dp(ctx, 9), dp(ctx, 7))
+                background = cardBg("#0A0E17", "#26324A", 14f, 2)
+                setPadding(dp(ctx, 9), dp(ctx, 6), dp(ctx, 9), dp(ctx, 6))
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                     if (marginEndDp > 0) marginEnd = dp(ctx, marginEndDp)
                 }
             }
             val valTv = TextView(ctx).apply {
                 text = "-"
-                textSize = 14f
+                textSize = 13.5f
+                isSingleLine = true
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.parseColor(colorHex))
             }
             val lblTv = TextView(ctx).apply {
                 text = label
-                textSize = 9.5f
+                textSize = 9f
+                isSingleLine = true
                 setTextColor(Color.parseColor("#94A3B8"))
             }
             box.addView(valTv)
@@ -388,12 +454,13 @@ object MovieFoxSettingsDialog {
         }
         refreshStats()
 
+        // 4-Tab Bar
         val tabScroll = HorizontalScrollView(ctx).apply {
             isHorizontalScrollBarEnabled = false
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(ctx, 10) }
+            ).apply { bottomMargin = dp(ctx, 8) }
         }
         val tabBar = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -407,46 +474,65 @@ object MovieFoxSettingsDialog {
                 text = title
                 textSize = 11.5f
                 isAllCaps = false
+                isSingleLine = true
                 setTypeface(typeface, Typeface.BOLD)
                 setPadding(dp(ctx, 12), 0, dp(ctx, 12), 0)
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 35))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 34))
             }
         }
         tabButtons.forEach { tabBar.addView(it) }
         tabScroll.addView(tabBar)
         root.addView(tabScroll)
 
-        val searchRow = LinearLayout(ctx).apply {
+        // Search + TEST ALL + OFF ERRORS Row
+        val actionRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(ctx, 10) }
+            ).apply { bottomMargin = dp(ctx, 8) }
         }
 
         val searchBox = EditText(ctx).apply {
-            hint = "🔍 Filter servers or audio..."
+            hint = "🔍 Filter..."
             setHintTextColor(Color.parseColor("#64748B"))
             setTextColor(Color.WHITE)
-            textSize = 12.5f
-            background = cardBg("#10141E", "#253046", 16f)
-            setPadding(dp(ctx, 12), dp(ctx, 8), dp(ctx, 12), dp(ctx, 8))
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1f).apply { marginEnd = dp(ctx, 8) }
+            textSize = 12f
+            isSingleLine = true
+            background = cardBg("#10141E", "#253046", 15f)
+            setPadding(dp(ctx, 10), dp(ctx, 7), dp(ctx, 10), dp(ctx, 7))
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 1f).apply { marginEnd = dp(ctx, 6) }
         }
 
         val testAllBtn = Button(ctx).apply {
             text = "TEST ALL"
-            textSize = 10.5f
+            textSize = 10f
+            isSingleLine = true
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
             background = pillBg("#0284C7", 14f)
-            layoutParams = LinearLayout.LayoutParams(dp(ctx, 86), dp(ctx, 38))
+            setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 36)).apply {
+                marginEnd = dp(ctx, 5)
+            }
         }
 
-        searchRow.addView(searchBox)
-        searchRow.addView(testAllBtn)
-        root.addView(searchRow)
+        val offErrorsBtn = Button(ctx).apply {
+            text = "OFF ERRORS"
+            textSize = 10f
+            isSingleLine = true
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            background = pillBg("#DC2626", 14f)
+            setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 36))
+        }
+
+        actionRow.addView(searchBox)
+        actionRow.addView(testAllBtn)
+        actionRow.addView(offErrorsBtn)
+        root.addView(actionRow)
 
         val scrollView = ScrollView(ctx).apply {
             isVerticalScrollBarEnabled = false
@@ -462,16 +548,44 @@ object MovieFoxSettingsDialog {
         val audioPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val speedPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
 
+        // ==========================================
+        // PANE 1: SERVERS (LIVE HEALTH + FAST PROBE)
+        // ==========================================
+        fun updateServerBadge(key: String, ok: Boolean, ms: Long) {
+            val statusTv = serverStatusBadges[key] ?: return
+            reportServerResult(ctx, key, ok, ms)
+            if (ok) {
+                failedServerKeys.remove(key)
+                statusTv.text = "OK ${ms}ms"
+                statusTv.setTextColor(Color.parseColor("#34D399"))
+                statusTv.background = pillBg("#0D2B22", 10f)
+            } else {
+                failedServerKeys.add(key)
+                statusTv.text = "ERROR"
+                statusTv.setTextColor(Color.parseColor("#F87171"))
+                statusTv.background = pillBg("#2B1216", 10f)
+                if (autoDisableErrors) {
+                    serverSwitches[key]?.isChecked = false
+                    setServerEnabled(ctx, key, false)
+                    refreshStats()
+                }
+            }
+        }
+
         SERVERS.forEach { srv ->
+            val fails = getServerFailCount(ctx, srv.key)
+            val lastMs = getServerLastMs(ctx, srv.key)
+            if (fails >= 1) failedServerKeys.add(srv.key)
+
             val card = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                background = cardBg("#121621", "#232C40", 22f)
-                setPadding(dp(ctx, 13), dp(ctx, 10), dp(ctx, 13), dp(ctx, 10))
+                background = cardBg("#121621", "#232C40", 20f)
+                setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { bottomMargin = dp(ctx, 8) }
+                ).apply { bottomMargin = dp(ctx, 7) }
             }
 
             val col = LinearLayout(ctx).apply {
@@ -486,30 +600,54 @@ object MovieFoxSettingsDialog {
 
             topLine.addView(TextView(ctx).apply {
                 text = srv.name
-                textSize = 14f
+                textSize = 13.5f
+                isSingleLine = true
+                ellipsize = TextUtils.TruncateAt.END
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.WHITE)
             })
 
             topLine.addView(TextView(ctx).apply {
                 text = srv.tag
-                textSize = 9f
+                textSize = 8.5f
+                isSingleLine = true
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.parseColor(srv.accentHex))
-                background = pillBg("#192236", 10f)
-                setPadding(dp(ctx, 6), dp(ctx, 2), dp(ctx, 6), dp(ctx, 2))
+                background = pillBg("#192236", 8f)
+                setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2))
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { marginStart = dp(ctx, 6) }
+                ).apply { marginStart = dp(ctx, 5) }
             })
 
             val statusTv = TextView(ctx).apply {
-                text = "READY"
-                textSize = 9f
+                text = when {
+                    fails >= 2 -> "ERROR (${fails}x)"
+                    fails == 1 -> "SLOW/ERR"
+                    lastMs >= 0L -> "OK ${lastMs}ms"
+                    else -> "READY"
+                }
+                textSize = 8.5f
+                isSingleLine = true
                 setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.parseColor("#94A3B8"))
-                background = pillBg("#1C2230", 10f)
+                setTextColor(
+                    Color.parseColor(
+                        when {
+                            fails >= 1 -> "#F87171"
+                            lastMs >= 0L -> "#34D399"
+                            else -> "#94A3B8"
+                        }
+                    )
+                )
+                background = pillBg(
+                    when {
+                        fails >= 1 -> "#2B1216"
+                        lastMs >= 0L -> "#0D2B22"
+                        else -> "#1C2230"
+                    },
+                    8f
+                )
                 setPadding(dp(ctx, 6), dp(ctx, 2), dp(ctx, 6), dp(ctx, 2))
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -522,14 +660,17 @@ object MovieFoxSettingsDialog {
             col.addView(topLine)
             col.addView(TextView(ctx).apply {
                 text = srv.probeUrl
-                textSize = 10.5f
+                textSize = 10f
+                isSingleLine = true
+                ellipsize = TextUtils.TruncateAt.END
                 setTextColor(Color.parseColor("#7C869C"))
-                setPadding(0, dp(ctx, 2), 0, 0)
+                setPadding(0, dp(ctx, 2), dp(ctx, 6), 0)
             })
 
             val pingBtn = TextView(ctx).apply {
                 text = "TEST"
-                textSize = 10f
+                textSize = 9.5f
+                isSingleLine = true
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.parseColor("#38BDF8"))
                 background = pillBg("#0D2338", 12f)
@@ -539,19 +680,11 @@ object MovieFoxSettingsDialog {
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply { marginEnd = dp(ctx, 6) }
                 setOnClickListener {
-                    statusTv.text = "TESTING..."
+                    statusTv.text = "..."
                     statusTv.setTextColor(Color.parseColor("#FBBF24"))
                     dialogScope.launch {
                         val (ok, ms) = probeEndpoint(srv.probeUrl)
-                        if (ok) {
-                            statusTv.text = "WORKING (${ms}ms)"
-                            statusTv.setTextColor(Color.parseColor("#34D399"))
-                            statusTv.background = pillBg("#0D2B22", 10f)
-                        } else {
-                            statusTv.text = "NOT WORKING"
-                            statusTv.setTextColor(Color.parseColor("#F87171"))
-                            statusTv.background = pillBg("#2B1216", 10f)
-                        }
+                        updateServerBadge(srv.key, ok, ms)
                     }
                 }
             }
@@ -573,62 +706,89 @@ object MovieFoxSettingsDialog {
             serversPane.addView(card)
         }
 
+        // Parallel TEST ALL
         testAllBtn.setOnClickListener {
-            Toast.makeText(ctx, "Checking all servers...", Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, "Fast testing all servers...", Toast.LENGTH_SHORT).show()
             SERVERS.forEach { srv ->
-                val badge = serverStatusBadges[srv.key] ?: return@forEach
-                badge.text = "TESTING..."
-                badge.setTextColor(Color.parseColor("#FBBF24"))
-                dialogScope.launch {
-                    val (ok, ms) = probeEndpoint(srv.probeUrl)
-                    if (ok) {
-                        badge.text = "WORKING (${ms}ms)"
-                        badge.setTextColor(Color.parseColor("#34D399"))
-                        badge.background = pillBg("#0D2B22", 10f)
-                    } else {
-                        badge.text = "NOT WORKING"
-                        badge.setTextColor(Color.parseColor("#F87171"))
-                        badge.background = pillBg("#2B1216", 10f)
+                serverStatusBadges[srv.key]?.apply {
+                    text = "..."
+                    setTextColor(Color.parseColor("#FBBF24"))
+                }
+            }
+            dialogScope.launch {
+                val jobs = SERVERS.map { srv ->
+                    async(Dispatchers.IO) {
+                        val (ok, ms) = probeEndpoint(srv.probeUrl)
+                        Triple(srv.key, ok, ms)
                     }
                 }
+                val results = jobs.awaitAll()
+                var okCount = 0
+                var errCount = 0
+                results.forEach { (key, ok, ms) ->
+                    updateServerBadge(key, ok, ms)
+                    if (ok) okCount++ else errCount++
+                }
+                Toast.makeText(
+                    ctx,
+                    "Done: $okCount Working, $errCount Error" + if (autoDisableErrors && errCount > 0) " (Auto-OFF)" else "",
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
 
+        // One-Tap OFF ERRORS
+        offErrorsBtn.setOnClickListener {
+            if (failedServerKeys.isEmpty()) {
+                Toast.makeText(ctx, "Pehle TEST ALL dabayein taaki error servers detect hon", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            var disabledCount = 0
+            failedServerKeys.forEach { key ->
+                serverSwitches[key]?.isChecked = false
+                setServerEnabled(ctx, key, false)
+                serverCards[key]?.visibility = View.GONE
+                disabledCount++
+            }
+            refreshStats()
+            Toast.makeText(ctx, "$disabledCount error servers OFF & hide kar diye!", Toast.LENGTH_SHORT).show()
+        }
+
+        // ==========================================
+        // PANE 2: NUVIO MANIFEST MANAGER
+        // ==========================================
         val nuvioAddBox = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            background = cardBg("#131826", "#314161", 24f)
-            setPadding(dp(ctx, 14), dp(ctx, 14), dp(ctx, 14), dp(ctx, 14))
+            background = cardBg("#131826", "#314161", 22f)
+            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(ctx, 12) }
+            ).apply { bottomMargin = dp(ctx, 10) }
         }
 
         nuvioAddBox.addView(TextView(ctx).apply {
             text = "+ Add Nuvio Manifest URL"
-            textSize = 15f
+            textSize = 14.5f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.parseColor("#C084FC"))
         })
 
-        nuvioAddBox.addView(TextView(ctx).apply {
-            text = "Apna Nuvio manifest.json ya addon endpoint URL paste karke save karein."
-            textSize = 11f
-            setTextColor(Color.parseColor("#94A3B8"))
-            setPadding(0, dp(ctx, 3), 0, dp(ctx, 8))
-        })
-
         val labelInput = EditText(ctx).apply {
-            hint = "Addon / Manifest Name (optional)"
+            hint = "Manifest Name (optional)"
             setHintTextColor(Color.parseColor("#64748B"))
             setTextColor(Color.WHITE)
             textSize = 12.5f
-            background = cardBg("#080B12", "#2B354B", 15f)
-            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+            isSingleLine = true
+            background = cardBg("#080B12", "#2B354B", 14f)
+            setPadding(dp(ctx, 11), dp(ctx, 9), dp(ctx, 11), dp(ctx, 9))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(ctx, 8) }
+            ).apply {
+                topMargin = dp(ctx, 8)
+                bottomMargin = dp(ctx, 8)
+            }
         }
 
         val manifestInputRow = LinearLayout(ctx).apply {
@@ -637,16 +797,17 @@ object MovieFoxSettingsDialog {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(ctx, 10) }
+            ).apply { bottomMargin = dp(ctx, 8) }
         }
 
         val manifestUrlInput = EditText(ctx).apply {
             hint = "https://.../manifest.json"
             setHintTextColor(Color.parseColor("#64748B"))
             setTextColor(Color.WHITE)
-            textSize = 13f
-            background = cardBg("#080B12", "#323E57", 15f)
-            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+            textSize = 12.5f
+            isSingleLine = true
+            background = cardBg("#080B12", "#323E57", 14f)
+            setPadding(dp(ctx, 11), dp(ctx, 9), dp(ctx, 11), dp(ctx, 9))
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                 marginEnd = dp(ctx, 6)
             }
@@ -654,12 +815,12 @@ object MovieFoxSettingsDialog {
 
         val pasteManifestBtn = Button(ctx).apply {
             text = "PASTE"
-            textSize = 11f
+            textSize = 10.5f
             isAllCaps = false
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.parseColor("#E9D5FF"))
             background = cardBg("#241738", "#9333EA", 14f)
-            layoutParams = LinearLayout.LayoutParams(dp(ctx, 68), dp(ctx, 42))
+            layoutParams = LinearLayout.LayoutParams(dp(ctx, 64), dp(ctx, 40))
             setOnClickListener {
                 val cb = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                 val clip = cb?.primaryClip?.getItemAt(0)?.text?.toString().orEmpty().trim()
@@ -681,11 +842,11 @@ object MovieFoxSettingsDialog {
             nuvioListHolder.removeAllViews()
             if (nuvioList.isEmpty()) {
                 nuvioListHolder.addView(TextView(ctx).apply {
-                    text = "Koi Nuvio manifest add nahi hai. Upar URL paste karke add karein."
+                    text = "Koi Nuvio manifest add nahi hai."
                     textSize = 12f
                     setTextColor(Color.parseColor("#64748B"))
                     gravity = Gravity.CENTER
-                    setPadding(dp(ctx, 12), dp(ctx, 18), dp(ctx, 12), dp(ctx, 18))
+                    setPadding(dp(ctx, 12), dp(ctx, 16), dp(ctx, 12), dp(ctx, 16))
                 })
                 return
             }
@@ -694,11 +855,11 @@ object MovieFoxSettingsDialog {
                 val card = LinearLayout(ctx).apply {
                     orientation = LinearLayout.VERTICAL
                     background = cardBg("#121621", "#232C40", 20f)
-                    setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
+                    setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT
-                    ).apply { bottomMargin = dp(ctx, 8) }
+                    ).apply { bottomMargin = dp(ctx, 7) }
                 }
 
                 val row = LinearLayout(ctx).apply {
@@ -708,7 +869,8 @@ object MovieFoxSettingsDialog {
 
                 row.addView(TextView(ctx).apply {
                     text = item.label
-                    textSize = 14f
+                    textSize = 13.5f
+                    isSingleLine = true
                     setTypeface(typeface, Typeface.BOLD)
                     setTextColor(Color.WHITE)
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
@@ -716,7 +878,8 @@ object MovieFoxSettingsDialog {
 
                 val delBtn = TextView(ctx).apply {
                     text = "DELETE"
-                    textSize = 10f
+                    textSize = 9.5f
+                    isSingleLine = true
                     setTypeface(typeface, Typeface.BOLD)
                     setTextColor(Color.parseColor("#F87171"))
                     background = pillBg("#2A1519", 12f)
@@ -748,7 +911,9 @@ object MovieFoxSettingsDialog {
 
                 card.addView(TextView(ctx).apply {
                     text = item.manifestUrl
-                    textSize = 11f
+                    textSize = 10.5f
+                    isSingleLine = true
+                    ellipsize = TextUtils.TruncateAt.END
                     setTextColor(Color.parseColor("#94A3B8"))
                     setPadding(0, dp(ctx, 4), 0, 0)
                 })
@@ -758,11 +923,11 @@ object MovieFoxSettingsDialog {
 
         val addManifestBtn = Button(ctx).apply {
             text = "SAVE NUVIO MANIFEST"
-            textSize = 12f
+            textSize = 11.5f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
-            background = pillBg("#9333EA", 16f)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 42))
+            background = pillBg("#9333EA", 15f)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 40))
             setOnClickListener {
                 var rawUrl = manifestUrlInput.text.toString().trim()
                 if (rawUrl.isBlank()) {
@@ -786,7 +951,7 @@ object MovieFoxSettingsDialog {
                 manifestUrlInput.setText("")
                 refreshStats()
                 renderNuvioList()
-                Toast.makeText(ctx, "$customName save ho gaya!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(ctx, "$customName saved!", Toast.LENGTH_SHORT).show()
             }
         }
 
@@ -797,19 +962,22 @@ object MovieFoxSettingsDialog {
         nuvioPane.addView(nuvioListHolder)
         renderNuvioList()
 
+        // ==========================================
+        // PANE 3: AUDIO & QUALITY
+        // ==========================================
         val qualityCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            background = cardBg("#121621", "#253046", 22f)
-            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
+            background = cardBg("#121621", "#253046", 20f)
+            setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(ctx, 10) }
+            ).apply { bottomMargin = dp(ctx, 8) }
         }
 
         qualityCard.addView(TextView(ctx).apply {
             text = "Preferred Quality"
-            textSize = 14.5f
+            textSize = 14f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
         })
@@ -839,9 +1007,10 @@ object MovieFoxSettingsDialog {
         QUALITIES.forEach { q ->
             val chip = TextView(ctx).apply {
                 text = q
-                textSize = 12f
+                textSize = 11.5f
+                isSingleLine = true
                 setTypeface(typeface, Typeface.BOLD)
-                setPadding(dp(ctx, 14), dp(ctx, 7), dp(ctx, 14), dp(ctx, 7))
+                setPadding(dp(ctx, 13), dp(ctx, 6), dp(ctx, 13), dp(ctx, 6))
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
@@ -865,12 +1034,12 @@ object MovieFoxSettingsDialog {
             val card = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                background = cardBg("#121621", "#232C40", 22f)
-                setPadding(dp(ctx, 14), dp(ctx, 11), dp(ctx, 14), dp(ctx, 11))
+                background = cardBg("#121621", "#232C40", 20f)
+                setPadding(dp(ctx, 13), dp(ctx, 10), dp(ctx, 13), dp(ctx, 10))
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { bottomMargin = dp(ctx, 8) }
+                ).apply { bottomMargin = dp(ctx, 7) }
             }
 
             val col = LinearLayout(ctx).apply {
@@ -879,13 +1048,13 @@ object MovieFoxSettingsDialog {
             }
             col.addView(TextView(ctx).apply {
                 text = aud.title
-                textSize = 14.5f
+                textSize = 14f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.WHITE)
             })
             col.addView(TextView(ctx).apply {
                 text = aud.subtitle
-                textSize = 11.5f
+                textSize = 11f
                 setTextColor(Color.parseColor("#8B93A7"))
             })
 
@@ -904,6 +1073,9 @@ object MovieFoxSettingsDialog {
             audioPane.addView(card)
         }
 
+        // ==========================================
+        // PANE 4: BUFFER & SPEED
+        // ==========================================
         val lowBufferSw = Switch(ctx).apply {
             isChecked = isLowBufferMode(ctx)
             setOnCheckedChangeListener { _, v -> setLowBufferMode(ctx, v) }
@@ -912,17 +1084,24 @@ object MovieFoxSettingsDialog {
             isChecked = isFastFetchMode(ctx)
             setOnCheckedChangeListener { _, v -> setFastFetchMode(ctx, v) }
         }
+        val autoDisableSw = Switch(ctx).apply {
+            isChecked = autoDisableErrors
+            setOnCheckedChangeListener { _, v ->
+                autoDisableErrors = v
+                setAutoDisableErrorServers(ctx, v)
+            }
+        }
 
         fun makeToggleCard(title: String, desc: String, sw: Switch) {
             val card = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                background = cardBg("#121621", "#232C40", 22f)
-                setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
+                background = cardBg("#121621", "#232C40", 20f)
+                setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { bottomMargin = dp(ctx, 8) }
+                ).apply { bottomMargin = dp(ctx, 7) }
             }
             val col = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
@@ -930,13 +1109,13 @@ object MovieFoxSettingsDialog {
             }
             col.addView(TextView(ctx).apply {
                 text = title
-                textSize = 14.5f
+                textSize = 14f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.WHITE)
             })
             col.addView(TextView(ctx).apply {
                 text = desc
-                textSize = 11.5f
+                textSize = 11f
                 setTextColor(Color.parseColor("#8B93A7"))
             })
             card.setOnClickListener { sw.isChecked = !sw.isChecked }
@@ -945,8 +1124,9 @@ object MovieFoxSettingsDialog {
             speedPane.addView(card)
         }
 
-        makeToggleCard("Zero-Buffer Mode", "Prioritize fast low-latency streams", lowBufferSw)
-        makeToggleCard("Turbo Fast Fetch", "Parallelize lookups & quick fallback", fastFetchSw)
+        makeToggleCard("Auto-Disable Error Servers", "Lagataar 2 baar fail hone par server auto OFF", autoDisableSw)
+        makeToggleCard("Zero-Buffer Mode", "Low-latency HLS/DASH streams pehle load hon", lowBufferSw)
+        makeToggleCard("Turbo Fast Fetch", "Parallel lookups & fast timeout", fastFetchSw)
 
         fun makeStepper(
             title: String,
@@ -962,12 +1142,12 @@ object MovieFoxSettingsDialog {
             val card = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                background = cardBg("#121621", "#232C40", 22f)
-                setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
+                background = cardBg("#121621", "#232C40", 20f)
+                setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { bottomMargin = dp(ctx, 8) }
+                ).apply { bottomMargin = dp(ctx, 7) }
             }
             val col = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
@@ -975,29 +1155,29 @@ object MovieFoxSettingsDialog {
             }
             col.addView(TextView(ctx).apply {
                 text = title
-                textSize = 14.5f
+                textSize = 14f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.WHITE)
             })
             col.addView(TextView(ctx).apply {
                 text = desc
-                textSize = 11.5f
+                textSize = 11f
                 setTextColor(Color.parseColor("#8B93A7"))
             })
 
             val valTv = TextView(ctx).apply {
                 text = "$v$suffix"
-                textSize = 15f
+                textSize = 14.5f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.parseColor("#38BDF8"))
-                setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
+                setPadding(dp(ctx, 9), 0, dp(ctx, 9), 0)
             }
 
             val minusBtn = Button(ctx).apply {
                 text = "−"
                 setTextColor(Color.WHITE)
                 background = pillBg("#1D263B", 14f)
-                layoutParams = LinearLayout.LayoutParams(dp(ctx, 36), dp(ctx, 36))
+                layoutParams = LinearLayout.LayoutParams(dp(ctx, 35), dp(ctx, 35))
                 setOnClickListener {
                     if (v - step >= minVal) {
                         v -= step
@@ -1010,7 +1190,7 @@ object MovieFoxSettingsDialog {
                 text = "+"
                 setTextColor(Color.WHITE)
                 background = pillBg("#1D263B", 14f)
-                layoutParams = LinearLayout.LayoutParams(dp(ctx, 36), dp(ctx, 36))
+                layoutParams = LinearLayout.LayoutParams(dp(ctx, 35), dp(ctx, 35))
                 setOnClickListener {
                     if (v + step <= maxVal) {
                         v += step
@@ -1031,9 +1211,38 @@ object MovieFoxSettingsDialog {
             setConcurrency(ctx, it)
             refreshStats()
         }
-        makeStepper("Request Timeout", "Per-request wait timeout", getTimeoutSeconds(ctx), 3, 30, 2, "s") {
+        makeStepper("Fast Timeout", "Dead server skip wait time (5s best)", getTimeoutSeconds(ctx), 3, 20, 1, "s") {
             setTimeoutSeconds(ctx, it)
         }
+
+        val resetHealthBtn = Button(ctx).apply {
+            text = "RESET ALL SERVER HEALTH & RE-ENABLE"
+            textSize = 11f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            background = pillBg("#334155", 14f)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(ctx, 40)
+            ).apply { topMargin = dp(ctx, 4) }
+            setOnClickListener {
+                resetAllHealthStats(ctx)
+                failedServerKeys.clear()
+                SERVERS.forEach { srv ->
+                    setServerEnabled(ctx, srv.key, true)
+                    serverSwitches[srv.key]?.isChecked = true
+                    serverCards[srv.key]?.visibility = View.VISIBLE
+                    serverStatusBadges[srv.key]?.apply {
+                        text = "READY"
+                        setTextColor(Color.parseColor("#94A3B8"))
+                        background = pillBg("#1C2230", 8f)
+                    }
+                }
+                refreshStats()
+                Toast.makeText(ctx, "Sabhi servers reset aur ON ho gaye!", Toast.LENGTH_SHORT).show()
+            }
+        }
+        speedPane.addView(resetHealthBtn)
 
         searchBox.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -1087,31 +1296,31 @@ object MovieFoxSettingsDialog {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(ctx, 12) }
+            ).apply { topMargin = dp(ctx, 10) }
         }
 
         val closeBtn = Button(ctx).apply {
             text = "CLOSE"
-            textSize = 12.5f
+            textSize = 12f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
-            background = pillBg("#1C2333", 18f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 44), 1f).apply { marginEnd = dp(ctx, 8) }
+            background = pillBg("#1C2333", 16f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 42), 1f).apply { marginEnd = dp(ctx, 8) }
             setOnClickListener { dialog.dismiss() }
         }
 
         val saveBtn = Button(ctx).apply {
             text = "SAVE & APPLY"
-            textSize = 12.5f
+            textSize = 12f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
-            background = pillBg("#2563EB", 18f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 44), 1.3f).apply { marginStart = dp(ctx, 8) }
+            background = pillBg("#2563EB", 16f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 42), 1.3f).apply { marginStart = dp(ctx, 8) }
             setOnClickListener {
                 saveNuvioManifests(ctx, nuvioList)
                 setPreferredQuality(ctx, selectedQuality)
                 setConcurrency(ctx, currentConcurrency)
-                Toast.makeText(ctx, "MovieFox Ultra Max settings saved!", Toast.LENGTH_SHORT).show()
+                Toast.makeText(ctx, "Settings applied!", Toast.LENGTH_SHORT).show()
                 dialog.dismiss()
             }
         }
