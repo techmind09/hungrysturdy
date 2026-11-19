@@ -25,29 +25,33 @@ class MovieFoxProvider : MainAPI() {
     )
 
     override val mainPage = mainPageOf(
-        "$mainUrl/" to "Top 10 Movies This Week",
-        "$mainUrl/" to "Trending Series",
-        "$mainUrl/" to "In Theaters Now",
-        "$mainUrl/" to "Superhero",
-        "$mainUrl/" to "Mind-Bending",
-        "$mainUrl/" to "Popular Movies",
-        "$mainUrl/" to "K-Drama",
-        "$mainUrl/" to "Indian Movies",
-        "$mainUrl/" to "Sci-Fi",
-        "$mainUrl/" to "Horror",
-        "$mainUrl/" to "Crime",
-        "$mainUrl/" to "Punjabi Movies",
-        "$mainUrl/" to "Pakistani Movies",
-        "$mainUrl/" to "Islamic History Epics - Urdu",
-        "$mainUrl/" to "Pakistani Dramas",
-        "$mainUrl/" to "Popular TV Shows",
-        "$mainUrl/" to "Anime Spotlight",
-        "$mainUrl/" to "Animated Feature Films",
-        "$mainUrl/movies?list=top_rated" to "Top Rated",
-        "$mainUrl/" to "Recommended For You",
-        "$mainUrl/universes" to "Universes",
+        "$mainUrl/trending" to "Trending Now",
+        "$mainUrl/movies?list=popular" to "Popular Movies",
+        "$mainUrl/movies?list=top_rated" to "Top Rated Movies",
+        "$mainUrl/movies?list=now_playing" to "In Theaters Now",
+        "$mainUrl/tv?list=popular" to "Popular TV Shows",
+        "$mainUrl/tv?list=top_rated" to "Top Rated TV Shows",
+        "$mainUrl/tv?lang=ko" to "K-Drama",
+        "$mainUrl/movies?lang=ko" to "Korean Movies",
+        "$mainUrl/movies?lang=hi" to "Indian Movies (Hindi)",
+        "$mainUrl/tv?lang=hi" to "Indian TV Shows",
+        "$mainUrl/movies?lang=pa" to "Punjabi Movies",
+        "$mainUrl/movies?lang=ta" to "Tamil Movies",
+        "$mainUrl/movies?lang=te" to "Telugu Movies",
+        "$mainUrl/movies?lang=en" to "American / Hollywood Movies",
+        "$mainUrl/tv?lang=en" to "American / English TV Shows",
+        "$mainUrl/movies?lang=ur" to "Pakistani / Urdu Movies",
+        "$mainUrl/tv?lang=ur" to "Pakistani Dramas",
+        "$mainUrl/tv?lang=tr" to "Turkish Dramas",
+        "$mainUrl/tv?lang=zh" to "Chinese Dramas (C-Drama)",
+        "$mainUrl/anime" to "Anime",
+        "$mainUrl/tv?lang=ja" to "Japanese Series",
+        "$mainUrl/movies?lang=ja" to "Japanese Movies",
+        "$mainUrl/movies?lang=es" to "Spanish Movies",
+        "$mainUrl/tv?lang=es" to "Spanish TV Shows",
         "$mainUrl/dramas" to "Dramas",
-        "$mainUrl/dramas?category=classics" to "Classic Dramas"
+        "$mainUrl/dramas?category=classics" to "Classic Dramas",
+        "$mainUrl/universes" to "Cinematic Universes"
     )
 
     private val ignoredLinkTexts = setOf(
@@ -63,14 +67,6 @@ class MovieFoxProvider : MainAPI() {
         "search"
     )
 
-    private fun cleanHeading(text: String): String {
-        return text
-            .replace(Regex("View\\s*all.*", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("[›»>]+$"), "")
-            .replace(Regex("\\s+"), " ")
-            .trim()
-    }
-
     override suspend fun getMainPage(
         page: Int,
         request: MainPageRequest
@@ -82,7 +78,8 @@ class MovieFoxProvider : MainAPI() {
             request.data
         }
 
-        val document = app.get(targetUrl, interceptor = cfKiller).document
+        val rawHtml = app.get(targetUrl, interceptor = cfKiller).text
+        val document = org.jsoup.Jsoup.parse(rawHtml, mainUrl)
         val home = mutableListOf<HomePageList>()
 
         val cardSelector =
@@ -90,47 +87,16 @@ class MovieFoxProvider : MainAPI() {
         val fallbackLinkSelector =
             "a[href*=/movie/], a[href*=/tv/], a[href*=/dramas/], a[href*=/anime/], a[href*=/series/]"
 
-        val sections = document.select("section")
-            .ifEmpty { document.select("main > div, div:has(h2):has(a[href])") }
+        val elements = document.select(cardSelector).ifEmpty { document.select(fallbackLinkSelector) }
+        val items = elements
+            .mapNotNull { element -> toSearchResult(element) }
+            .distinctBy { it.url }
 
-        val targetName = request.name.trim()
-        var matchedSection = false
-
-        sections.forEach { row ->
-            val rawHeading = row.selectFirst("h2, h3")?.text().orEmpty()
-            val title = cleanHeading(rawHeading)
-            if (title.isEmpty()) return@forEach
-
-            val isTarget = title.equals(targetName, ignoreCase = true) ||
-                title.contains(targetName, ignoreCase = true) ||
-                targetName.contains(title, ignoreCase = true)
-
-            if (!isTarget) return@forEach
-
-            val elements = row.select(cardSelector).ifEmpty { row.select(fallbackLinkSelector) }
-            val items = elements
-                .mapNotNull { element -> toSearchResult(element) }
-                .distinctBy { it.url }
-
-            if (items.isNotEmpty()) {
-                home.add(HomePageList(targetName, items))
-                matchedSection = true
-            }
+        if (items.isNotEmpty()) {
+            home.add(HomePageList(request.name, items))
         }
 
-        if (!matchedSection) {
-            val elements = document.select(cardSelector).ifEmpty { document.select(fallbackLinkSelector) }
-            val gridItems = elements
-                .mapNotNull { element -> toSearchResult(element) }
-                .distinctBy { it.url }
-
-            if (gridItems.isNotEmpty()) {
-                home.add(HomePageList(targetName, gridItems))
-            }
-        }
-
-        val isPaginatedCategory = request.data.contains("?")
-        return newHomePageResponse(home, hasNext = isPaginatedCategory && home.isNotEmpty())
+        return newHomePageResponse(home, hasNext = items.isNotEmpty())
     }
 
     private fun toSearchResult(element: Element): SearchResponse? {
