@@ -48,5 +48,13 @@ class Plugin : Plugin() {
         registerExtractorAPI(StrCloudExtractor())
         registerExtractorAPI(StrTapeTechExtractor())
         registerExtractorAPI(StapeFunExtractor())
+
+        // Plugin Settings / Donation Dialog
+        openSettings = { ctx ->
+            PluginDonation.open(
+                context = ctx,
+                pluginName = "Sflix & HindiDrama"
+            )
+        }
     }
 }
