@@ -520,9 +520,11 @@ class MovieFoxProvider : MainAPI() {
                 "gdrive" to "$mainUrl/api/stream/gdrive?type=$contentType&id=$matchId$imdbQuery$tvQuery"
             )
 
-            val activeEndpoints = allEndpoints.filter { (key, _) ->
-                Plugin.isServerEnabled(key)
-            }
+            val activeEndpoints = allEndpoints
+                .filter { (key, _) -> MovieFoxSettingsDialog.isServerEnabled(key) }
+                .take(MovieFoxSettingsDialog.getParallelServers())
+
+            val downloadOnly = MovieFoxSettingsDialog.isDownloadOnly()
 
             val baseHeaders = mapOf(
                 "Referer" to "$mainUrl/",
@@ -533,6 +535,31 @@ class MovieFoxProvider : MainAPI() {
 
             val seenUrls = mutableSetOf<String>()
             var found = false
+
+            suspend fun emitServerLink(
+                serverName: String,
+                streamUrl: String,
+                isHls: Boolean,
+                qualityStr: String? = null,
+                customHeaders: Map<String, String> = baseHeaders
+            ) {
+                if (isAdUrl(streamUrl) || !seenUrls.add(streamUrl)) return
+                if (downloadOnly && isHls) return
+
+                callback(
+                    newExtractorLink(
+                        source = serverName,
+                        name = serverName,
+                        url = streamUrl,
+                        type = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = customHeaders["Referer"] ?: "$mainUrl/"
+                        this.quality = getQuality(qualityStr)
+                        this.headers = customHeaders
+                    }
+                )
+                found = true
+            }
 
             for ((endpointName, apiUrl) in activeEndpoints) {
                 val response = runCatching {
@@ -547,21 +574,12 @@ class MovieFoxProvider : MainAPI() {
                     contentTypeHeader.contains("mpegurl", true) ||
                     rawText.trimStart().startsWith("#EXTM3U")
                 ) {
-                    if (seenUrls.add(apiUrl)) {
-                        callback(
-                            newExtractorLink(
-                                source = endpointName.uppercase(),
-                                name = "MovieFox (${endpointName.uppercase()}) - HLS",
-                                url = apiUrl,
-                                type = ExtractorLinkType.M3U8
-                            ) {
-                                this.referer = "$mainUrl/"
-                                this.quality = Qualities.P1080.value
-                                this.headers = baseHeaders
-                            }
-                        )
-                        found = true
-                    }
+                    emitServerLink(
+                        serverName = "MovieFox ${endpointName.uppercase()} HLS",
+                        streamUrl = apiUrl,
+                        isHls = true,
+                        customHeaders = baseHeaders
+                    )
                     continue
                 }
 
@@ -584,7 +602,7 @@ class MovieFoxProvider : MainAPI() {
                     if (rawStreamUrl.isBlank()) continue
 
                     val streamUrl = normalizeUrl(rawStreamUrl)
-                    if (isAdUrl(streamUrl) || !seenUrls.add(streamUrl)) continue
+                    if (isAdUrl(streamUrl)) continue
 
                     stream.subtitles?.forEach { sub ->
                         val rawSubUrl = sub.url.ifBlank { sub.file }.trim()
@@ -612,7 +630,7 @@ class MovieFoxProvider : MainAPI() {
                     ).any { streamUrl.contains(it, true) }
 
                     if (isKnownHost) {
-                        if (Plugin.isServerEnabled("embeds")) {
+                        if (MovieFoxSettingsDialog.isServerEnabled("embeds") && seenUrls.add(streamUrl)) {
                             val extracted = runCatching {
                                 loadExtractor(streamUrl, cleanPageUrl, subtitleCallback, callback)
                             }.getOrDefault(false)
@@ -624,35 +642,29 @@ class MovieFoxProvider : MainAPI() {
                     val mergedHeaders = baseHeaders + (stream.headers ?: emptyMap())
                     val isHls = isM3u8Stream(streamUrl, stream.type, mergedHeaders)
 
-                    val sourceLabel = when {
+                    val serverTitle = when {
                         !stream.provider.isNullOrBlank() -> stream.provider
-                        streamUrl.contains("itsnitrox.tech", true) -> "Nitrox (${endpointName.uppercase()})"
-                        streamUrl.contains("nxstreamhub", true) -> "NxStream (${endpointName.uppercase()})"
-                        streamUrl.contains("vibuxer.com", true) -> "Vibuxer (${endpointName.uppercase()})"
-                        streamUrl.contains("workers.dev", true) -> "WorkerHLS (${endpointName.uppercase()})"
-                        else -> endpointName.uppercase()
+                        streamUrl.contains("itsnitrox.tech", true) -> "Nitrox"
+                        streamUrl.contains("nxstreamhub", true) -> "NxStreamHub"
+                        streamUrl.contains("vibuxer.com", true) -> "Vibuxer"
+                        streamUrl.contains("workers.dev", true) -> "WorkerHLS"
+                        else -> "MovieFox ${endpointName.uppercase()}"
                     }
 
-                    val displayName = stream.label?.takeIf { it.isNotBlank() }
-                        ?: "MovieFox ($sourceLabel) - ${stream.quality ?: "HD"}"
+                    val finalLabel = stream.label?.takeIf { it.isNotBlank() }
+                        ?: "$serverTitle (${stream.quality ?: "HD"})"
 
-                    callback(
-                        newExtractorLink(
-                            source = sourceLabel,
-                            name = displayName,
-                            url = streamUrl,
-                            type = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
-                        ) {
-                            this.referer = mergedHeaders["Referer"] ?: "$mainUrl/"
-                            this.quality = getQuality(stream.quality)
-                            this.headers = mergedHeaders
-                        }
+                    emitServerLink(
+                        serverName = finalLabel,
+                        streamUrl = streamUrl,
+                        isHls = isHls,
+                        qualityStr = stream.quality,
+                        customHeaders = mergedHeaders
                     )
-                    found = true
                 }
             }
 
-            if (Plugin.isServerEnabled("embeds")) {
+            if (MovieFoxSettingsDialog.isServerEnabled("embeds")) {
                 val watchUrl = if (isTv) {
                     "$mainUrl/watch/tv-$matchId?s=$season&e=$episode"
                 } else {
@@ -663,87 +675,84 @@ class MovieFoxProvider : MainAPI() {
                     app.get(watchUrl, interceptor = cfKiller).text
                 }.getOrNull().orEmpty()
 
-                if (watchHtml.isNotBlank()) {
-                    val watchFlight = extractUnescapedFlightText(watchHtml)
+                val watchFlight = if (watchHtml.isNotBlank()) {
+                    extractUnescapedFlightText(watchHtml)
+                } else {
+                    ""
+                }
 
-                    val hostScanRegex = Regex(
-                        """https?://(?:[a-zA-Z0-9.-]+\.)?(?:voe\.(?:sx|to|co)|pixeldrain\.(?:com|dev)|streamtape\.(?:com|to|net|xyz)|shavetape\.cash|strcloud\.link|strtape\.tech|stape\.fun|luluvid\.com|lulustream\.com|luluvdo\.com|vidara\.(?:to|so)|vidprime\.top|upbolt\.(?:to|tv)|abysscdn\.com|short\.icu|lplaygo\.com|vidmoly\.(?:me|to)|earnvids\.com|dingtezuni\.com|rabbitstream\.net|upcloud\.to|megacloud\.(?:tv|club)|streamwish\.to|filemoon\.sx|drive\.google\.com|workers\.dev)/[^\s"'\\]+""",
-                        RegexOption.IGNORE_CASE
-                    )
-                    hostScanRegex.findAll(watchFlight).forEach { m ->
-                        val hostUrl = normalizeUrl(m.value)
-                        if (!isAdUrl(hostUrl) && seenUrls.add(hostUrl)) {
-                            if (hostUrl.contains("workers.dev", true)) {
-                                callback(
-                                    newExtractorLink(
-                                        source = "WorkerHLS",
-                                        name = "MovieFox (Worker HLS)",
-                                        url = hostUrl,
-                                        type = ExtractorLinkType.M3U8
-                                    ) {
-                                        this.referer = watchUrl
-                                        this.quality = Qualities.P1080.value
-                                        this.headers = baseHeaders + mapOf("Referer" to watchUrl)
-                                    }
-                                )
-                                found = true
-                            } else {
-                                val extracted = runCatching {
-                                    loadExtractor(hostUrl, watchUrl, subtitleCallback, callback)
-                                }.getOrDefault(false)
-                                if (extracted) found = true
-                            }
-                        }
+                val combinedScanText = "$flightText\n$watchFlight"
+
+                val hostScanRegex = Regex(
+                    """https?://(?:[a-zA-Z0-9.-]+\.)?(?:voe\.(?:sx|to|co)|pixeldrain\.(?:com|dev)|streamtape\.(?:com|to|net|xyz)|shavetape\.cash|strcloud\.link|strtape\.tech|stape\.fun|luluvid\.com|lulustream\.com|luluvdo\.com|vidara\.(?:to|so)|vidprime\.top|upbolt\.(?:to|tv)|abysscdn\.com|short\.icu|lplaygo\.com|vidmoly\.(?:me|to)|earnvids\.com|dingtezuni\.com|rabbitstream\.net|upcloud\.to|megacloud\.(?:tv|club)|streamwish\.to|filemoon\.sx|drive\.google\.com|workers\.dev)/[^\s"'\\]+""",
+                    RegexOption.IGNORE_CASE
+                )
+
+                hostScanRegex.findAll(combinedScanText).forEach { m ->
+                    val hostUrl = normalizeUrl(m.value)
+                    if (isAdUrl(hostUrl) || !seenUrls.add(hostUrl)) return@forEach
+
+                    if (hostUrl.contains("workers.dev", true)) {
+                        emitServerLink(
+                            serverName = "WorkerHLS",
+                            streamUrl = hostUrl,
+                            isHls = true,
+                            qualityStr = "1080p",
+                            customHeaders = baseHeaders + mapOf("Referer" to watchUrl)
+                        )
+                    } else {
+                        val extracted = runCatching {
+                            loadExtractor(hostUrl, watchUrl, subtitleCallback, callback)
+                        }.getOrDefault(false)
+                        if (extracted) found = true
                     }
+                }
 
-                    extractJsonArrayAfterKey(watchFlight, "sources")?.let { sourcesJson ->
-                        runCatching {
-                            val arr = JSONArray(sourcesJson)
-                            for (i in 0 until arr.length()) {
-                                val obj = arr.optJSONObject(i) ?: continue
-                                val embedUrl = normalizeUrl(obj.optString("url"))
-                                if (embedUrl.isBlank() || !embedUrl.startsWith("http") || isAdUrl(embedUrl)) continue
-                                if (!seenUrls.add(embedUrl)) continue
+                extractJsonArrayAfterKey(combinedScanText, "sources")?.let { sourcesJson ->
+                    runCatching {
+                        val arr = JSONArray(sourcesJson)
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.optJSONObject(i) ?: continue
+                            val embedUrl = normalizeUrl(obj.optString("url"))
+                            if (embedUrl.isBlank() || !embedUrl.startsWith("http") || isAdUrl(embedUrl)) continue
+                            if (!seenUrls.add(embedUrl)) continue
 
-                                if (
-                                    embedUrl.contains(".m3u8", true) ||
-                                    embedUrl.contains("type=hls", true) ||
+                            val rawServerName = obj.optString("name")
+                                .ifBlank { obj.optString("label") }
+                                .ifBlank { "Embed Server" }
+
+                            if (
+                                embedUrl.contains(".m3u8", true) ||
+                                embedUrl.contains("type=hls", true) ||
+                                embedUrl.contains("itsnitrox.tech", true) ||
+                                embedUrl.contains("nxstreamhub", true) ||
+                                embedUrl.contains("stream_proxy.php", true) ||
+                                embedUrl.contains("vibuxer.com", true) ||
+                                embedUrl.contains("workers.dev", true) ||
+                                obj.optString("type").equals("hls", true)
+                            ) {
+                                val customHeaders = if (
                                     embedUrl.contains("itsnitrox.tech", true) ||
                                     embedUrl.contains("nxstreamhub", true) ||
-                                    embedUrl.contains("stream_proxy.php", true) ||
-                                    embedUrl.contains("vibuxer.com", true) ||
-                                    embedUrl.contains("workers.dev", true) ||
-                                    obj.optString("type").equals("hls", true)
+                                    embedUrl.contains("vibuxer.com", true)
                                 ) {
-                                    val customHeaders = if (
-                                        embedUrl.contains("itsnitrox.tech", true) ||
-                                        embedUrl.contains("nxstreamhub", true) ||
-                                        embedUrl.contains("vibuxer.com", true)
-                                    ) {
-                                        baseHeaders + mapOf("Referer" to "https://vidprime.top/", "Origin" to "https://vidprime.top")
-                                    } else {
-                                        baseHeaders + mapOf("Referer" to watchUrl)
-                                    }
-
-                                    callback(
-                                        newExtractorLink(
-                                            source = obj.optString("name").ifBlank { "MovieFox" },
-                                            name = obj.optString("label").ifBlank { "MovieFox HLS" },
-                                            url = embedUrl,
-                                            type = ExtractorLinkType.M3U8
-                                        ) {
-                                            this.referer = customHeaders["Referer"] ?: watchUrl
-                                            this.quality = getQuality(obj.optString("quality"))
-                                            this.headers = customHeaders
-                                        }
-                                    )
-                                    found = true
+                                    baseHeaders + mapOf("Referer" to "https://vidprime.top/", "Origin" to "https://vidprime.top")
                                 } else {
-                                    val extracted = runCatching {
-                                        loadExtractor(embedUrl, watchUrl, subtitleCallback, callback)
-                                    }.getOrDefault(false)
-                                    if (extracted) found = true
+                                    baseHeaders + mapOf("Referer" to watchUrl)
                                 }
+
+                                emitServerLink(
+                                    serverName = rawServerName,
+                                    streamUrl = embedUrl,
+                                    isHls = true,
+                                    qualityStr = obj.optString("quality"),
+                                    customHeaders = customHeaders
+                                )
+                            } else {
+                                val extracted = runCatching {
+                                    loadExtractor(embedUrl, watchUrl, subtitleCallback, callback)
+                                }.getOrDefault(false)
+                                if (extracted) found = true
                             }
                         }
                     }
