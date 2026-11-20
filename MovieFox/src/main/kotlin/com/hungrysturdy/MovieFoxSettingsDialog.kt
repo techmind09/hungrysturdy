@@ -1,5 +1,6 @@
 package com.hungrysturdy
 
+import android.app.Activity
 import android.app.AlertDialog
 import android.content.ClipboardManager
 import android.content.Context
@@ -42,6 +43,8 @@ object MovieFoxSettingsDialog {
     private const val KEY_FAIL_PREFIX = "mf_fail_"
     private const val KEY_LAST_MS_PREFIX = "mf_ms_"
     private const val KEY_NUVIO_MANIFESTS = "mf_nuvio_manifests_json"
+    private const val KEY_CS3_REPOS = "mf_cs3_repos_json"
+    private const val KEY_CS3_SERVERS = "mf_cs3_servers_json"
     private const val KEY_QUALITY = "mf_preferred_quality"
     private const val KEY_LOW_BUFFER = "mf_low_buffer_mode"
     private const val KEY_FAST_FETCH = "mf_fast_fetch_mode"
@@ -52,13 +55,16 @@ object MovieFoxSettingsDialog {
     private val dialogScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var cachedPrefs: SharedPreferences? = null
     private var cachedManifests: MutableList<NuvioManifestConfig>? = null
+    private var cachedCs3Repos: MutableList<Cs3RepoConfig>? = null
+    private var cachedCs3Servers: MutableList<ServerItem>? = null
 
     data class ServerItem(
         val key: String,
         val name: String,
         val tag: String,
         val probeUrl: String,
-        val accentHex: String
+        val accentHex: String,
+        val isCustom: Boolean = false
     )
 
     data class AudioOption(
@@ -75,6 +81,14 @@ object MovieFoxSettingsDialog {
         var enabled: Boolean = true
     )
 
+    data class Cs3RepoConfig(
+        val id: String,
+        val name: String,
+        val repoUrl: String,
+        var enabled: Boolean = true,
+        var serverCount: Int = 0
+    )
+
     data class CustomExternalSite(
         val id: String,
         val name: String,
@@ -82,7 +96,7 @@ object MovieFoxSettingsDialog {
         var enabled: Boolean = true
     )
 
-    val SERVERS = listOf(
+    val BASE_SERVERS = listOf(
         ServerItem("purstream", "Purstream", "API", "https://moviefox.pro/api/stream/purstream", "#38BDF8"),
         ServerItem("castle", "Castle", "API", "https://moviefox.pro/api/stream/castle", "#818CF8"),
         ServerItem("watchout", "Watchout", "API", "https://moviefox.pro/api/stream/watchout", "#2DD4BF"),
@@ -94,6 +108,9 @@ object MovieFoxSettingsDialog {
         ServerItem("moviebox", "MovieBox", "BFF", "https://netnaija.film/", "#34D399"),
         ServerItem("netnaija", "NetNaija", "SITE", "https://www.thenetnaija.net/", "#FACC15")
     )
+
+    val SERVERS: List<ServerItem>
+        get() = BASE_SERVERS + (cachedCs3Servers ?: emptyList())
 
     val AUDIO_TRACKS = listOf(
         AudioOption("hindi", "Hindi", "Primary language • Hindi audio / dub", true),
@@ -111,10 +128,212 @@ object MovieFoxSettingsDialog {
 
     val QUALITIES = listOf("AUTO", "2160p", "1080p", "720p", "480p")
 
+    private fun isContextAlive(ctx: Context?): Boolean {
+        if (ctx == null) return false
+        if (ctx is Activity) {
+            if (ctx.isFinishing || ctx.isDestroyed) return false
+        }
+        return true
+    }
+
+    private fun safeColor(hex: String, fallback: String = "#94A3B8"): Int =
+        runCatching { Color.parseColor(hex) }.getOrElse { Color.parseColor(fallback) }
+
+    private fun safeToast(ctx: Context?, msg: String, duration: Int = Toast.LENGTH_SHORT) {
+        if (!isContextAlive(ctx)) return
+        runCatching { Toast.makeText(ctx, msg, duration).show() }
+    }
+
     private fun prefs(ctx: Context): SharedPreferences =
         cachedPrefs ?: ctx.applicationContext
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .also { cachedPrefs = it }
+            .also {
+                cachedPrefs = it
+                if (cachedCs3Servers == null) {
+                    cachedCs3Servers = loadCs3ServersInternal(it)
+                }
+            }
+
+    private fun loadCs3ServersInternal(p: SharedPreferences): MutableList<ServerItem> {
+        val out = mutableListOf<ServerItem>()
+        val raw = p.getString(KEY_CS3_SERVERS, "[]") ?: "[]"
+        runCatching {
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val key = obj.optString("key", "").trim()
+                val name = obj.optString("name", "").trim()
+                val probeUrl = obj.optString("probeUrl", "").trim()
+                if (key.isNotBlank() && name.isNotBlank() && probeUrl.isNotBlank()) {
+                    out.add(
+                        ServerItem(
+                            key = key,
+                            name = name,
+                            tag = obj.optString("tag", "CS3").ifBlank { "CS3" },
+                            probeUrl = probeUrl,
+                            accentHex = obj.optString("accentHex", "#38BDF8").ifBlank { "#38BDF8" },
+                            isCustom = true
+                        )
+                    )
+                }
+            }
+        }
+        return out
+    }
+
+    private fun saveCs3Servers(ctx: Context, list: List<ServerItem>) {
+        cachedCs3Servers = list.toMutableList()
+        val arr = JSONArray()
+        list.forEach { srv ->
+            arr.put(
+                JSONObject().apply {
+                    put("key", srv.key)
+                    put("name", srv.name)
+                    put("tag", srv.tag)
+                    put("probeUrl", srv.probeUrl)
+                    put("accentHex", srv.accentHex)
+                }
+            )
+        }
+        prefs(ctx).edit().putString(KEY_CS3_SERVERS, arr.toString()).apply()
+    }
+
+    fun getCs3Repos(ctx: Context): MutableList<Cs3RepoConfig> {
+        cachedCs3Repos?.let { return it }
+        val raw = prefs(ctx).getString(KEY_CS3_REPOS, "[]") ?: "[]"
+        val list = mutableListOf<Cs3RepoConfig>()
+        runCatching {
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val url = obj.optString("repoUrl", "").trim()
+                if (url.isNotBlank()) {
+                    list.add(
+                        Cs3RepoConfig(
+                            id = obj.optString("id", System.currentTimeMillis().toString()),
+                            name = obj.optString("name", deriveManifestLabel(url)),
+                            repoUrl = url,
+                            enabled = obj.optBoolean("enabled", true),
+                            serverCount = obj.optInt("serverCount", 0)
+                        )
+                    )
+                }
+            }
+        }
+        cachedCs3Repos = list
+        return list
+    }
+
+    fun saveCs3Repos(ctx: Context, list: List<Cs3RepoConfig>) {
+        cachedCs3Repos = list.toMutableList()
+        val arr = JSONArray()
+        list.forEach { repo ->
+            arr.put(
+                JSONObject().apply {
+                    put("id", repo.id)
+                    put("name", repo.name)
+                    put("repoUrl", repo.repoUrl)
+                    put("enabled", repo.enabled)
+                    put("serverCount", repo.serverCount)
+                }
+            )
+        }
+        prefs(ctx).edit().putString(KEY_CS3_REPOS, arr.toString()).apply()
+    }
+
+    fun getEnabledCs3Servers(ctx: Context): List<ServerItem> {
+        prefs(ctx)
+        return (cachedCs3Servers ?: emptyList()).filter { isServerEnabled(ctx, it.key) }
+    }
+
+    private suspend fun fetchServersFromCs3Repo(
+        repo: Cs3RepoConfig,
+        timeoutMs: Int = 3500
+    ): List<ServerItem> = withContext(Dispatchers.IO) {
+        val out = mutableListOf<ServerItem>()
+        runCatching {
+            val fixedUrl = if (repo.repoUrl.startsWith("http")) repo.repoUrl else "https://${repo.repoUrl}"
+            val conn = (URL(fixedUrl).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = timeoutMs
+                readTimeout = timeoutMs
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36")
+            }
+            val code = conn.responseCode
+            val body = if (code in 200..299) {
+                conn.inputStream.bufferedReader().use { it.readText() }
+            } else {
+                ""
+            }
+            conn.disconnect()
+            if (body.isBlank()) return@runCatching
+
+            val rootJson = JSONObject(body)
+            val pluginsArr = rootJson.optJSONArray("plugins") ?: JSONArray()
+            val manifestListUrl = rootJson.optString("manifestList", "").trim()
+
+            val entries = mutableListOf<JSONObject>()
+            for (i in 0 until pluginsArr.length()) {
+                pluginsArr.optJSONObject(i)?.let { entries.add(it) }
+            }
+
+            if (entries.isEmpty() && manifestListUrl.isNotBlank()) {
+                val listUrl = if (manifestListUrl.startsWith("http")) {
+                    manifestListUrl
+                } else {
+                    val base = fixedUrl.substringBeforeLast('/')
+                    "$base/${manifestListUrl.trimStart('/')}"
+                }
+                val listConn = (URL(listUrl).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    connectTimeout = timeoutMs
+                    readTimeout = timeoutMs
+                    instanceFollowRedirects = true
+                    setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36")
+                }
+                val listBody = if (listConn.responseCode in 200..299) {
+                    listConn.inputStream.bufferedReader().use { it.readText() }
+                } else {
+                    ""
+                }
+                listConn.disconnect()
+                if (listBody.isNotBlank()) {
+                    val subArr = JSONArray(listBody)
+                    for (j in 0 until subArr.length()) {
+                        subArr.optJSONObject(j)?.let { entries.add(it) }
+                    }
+                }
+            }
+
+            entries.forEachIndexed { idx, pObj ->
+                val rawName = pObj.optString("name", "").trim()
+                val internalName = pObj.optString("internalName", "").trim()
+                val probe = pObj.optString("url", "")
+                    .ifBlank { pObj.optString("status", "") }
+                    .ifBlank { fixedUrl }
+                    .trim()
+                if (rawName.isBlank() && internalName.isBlank()) return@forEachIndexed
+                val finalName = rawName.ifBlank { internalName }
+                val slug = (internalName.ifBlank { finalName })
+                    .lowercase()
+                    .replace(Regex("[^a-z0-9]+"), "_")
+                    .trim('_')
+                val uniqueKey = "cs3_${repo.id.takeLast(6)}_${slug.ifBlank { "srv$idx" }}"
+                out.add(
+                    ServerItem(
+                        key = uniqueKey,
+                        name = finalName,
+                        tag = "CS3",
+                        probeUrl = probe,
+                        accentHex = "#38BDF8",
+                        isCustom = true
+                    )
+                )
+            }
+        }
+        out.distinctBy { it.key }
+    }
 
     fun isServerEnabled(ctx: Context, key: String): Boolean =
         prefs(ctx).getBoolean("$KEY_SRV_PREFIX${key.lowercase()}", true)
@@ -135,7 +354,7 @@ object MovieFoxSettingsDialog {
         } else {
             val fails = p.getInt("$KEY_FAIL_PREFIX$k", 0) + 1
             val editor = p.edit().putInt("$KEY_FAIL_PREFIX$k", fails)
-            if (fails >= 2 && isAutoDisableErrorServers(ctx)) {
+            if (isAutoDisableErrorServers(ctx)) {
                 editor.putBoolean("$KEY_SRV_PREFIX$k", false)
             }
             editor.apply()
@@ -283,13 +502,13 @@ object MovieFoxSettingsDialog {
         radius: Float = 22f,
         strokeWidth: Int = 2
     ): GradientDrawable = GradientDrawable().apply {
-        setColor(Color.parseColor(bgHex))
+        setColor(safeColor(bgHex, "#141822"))
         cornerRadius = radius
-        setStroke(strokeWidth, Color.parseColor(strokeHex))
+        setStroke(strokeWidth, safeColor(strokeHex, "#252E42"))
     }
 
     private fun pillBg(bgHex: String, radius: Float = 16f): GradientDrawable = GradientDrawable().apply {
-        setColor(Color.parseColor(bgHex))
+        setColor(safeColor(bgHex, "#1C2230"))
         cornerRadius = radius
     }
 
@@ -318,7 +537,10 @@ object MovieFoxSettingsDialog {
         }
 
     fun show(ctx: Context) {
+        if (!isContextAlive(ctx)) return
+        prefs(ctx)
         val nuvioList = getNuvioManifests(ctx).toMutableList()
+        val cs3RepoList = getCs3Repos(ctx).toMutableList()
         val serverSwitches = mutableMapOf<String, Switch>()
         val serverCards = mutableMapOf<String, LinearLayout>()
         val serverStatusBadges = mutableMapOf<String, TextView>()
@@ -342,13 +564,13 @@ object MovieFoxSettingsDialog {
             background = GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
                 intArrayOf(
-                    Color.parseColor("#0B192C"),
-                    Color.parseColor("#1E153D"),
-                    Color.parseColor("#08272E")
+                    safeColor("#0B192C"),
+                    safeColor("#1E153D"),
+                    safeColor("#08272E")
                 )
             ).apply {
                 cornerRadius = 24f
-                setStroke(2, Color.parseColor("#2E3D59"))
+                setStroke(2, safeColor("#2E3D59"))
             }
             setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
         }
@@ -372,7 +594,7 @@ object MovieFoxSettingsDialog {
             textSize = 9.5f
             isSingleLine = true
             setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.parseColor("#34D399"))
+            setTextColor(safeColor("#34D399"))
             background = pillBg("#0D2B22", 14f)
             setPadding(dp(ctx, 9), dp(ctx, 4), dp(ctx, 9), dp(ctx, 4))
         })
@@ -400,13 +622,13 @@ object MovieFoxSettingsDialog {
                 textSize = 13.5f
                 isSingleLine = true
                 setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.parseColor(colorHex))
+                setTextColor(safeColor(colorHex))
             }
             val lblTv = TextView(ctx).apply {
                 text = label
                 textSize = 9f
                 isSingleLine = true
-                setTextColor(Color.parseColor("#94A3B8"))
+                setTextColor(safeColor("#94A3B8"))
             }
             box.addView(valTv)
             box.addView(lblTv)
@@ -431,10 +653,11 @@ object MovieFoxSettingsDialog {
         )
 
         fun refreshStats() {
-            val srvOn = if (serverSwitches.isEmpty()) SERVERS.count { isServerEnabled(ctx, it.key) }
-            else serverSwitches.values.count { it.isChecked }
+            val allSrvs = SERVERS
+            val srvOn = if (serverSwitches.isEmpty()) allSrvs.count { isServerEnabled(ctx, it.key) }
+            else allSrvs.count { serverSwitches[it.key]?.isChecked == true }
             val nuvioOn = nuvioList.count { it.enabled }
-            srvValTv.text = "$srvOn/${SERVERS.size}"
+            srvValTv.text = "$srvOn/${allSrvs.size}"
             nuvioValTv.text = "$nuvioOn/${nuvioList.size}"
             spdValTv.text = "${currentConcurrency}x • $selectedQuality"
         }
@@ -453,7 +676,7 @@ object MovieFoxSettingsDialog {
             setPadding(dp(ctx, 4), dp(ctx, 4), dp(ctx, 4), dp(ctx, 4))
         }
 
-        val tabTitles = listOf("Servers", "Nuvio Manifest", "Audio & Quality", "Buffer & Speed")
+        val tabTitles = listOf("Servers", "CS3 Repos", "Nuvio Manifest", "Audio & Quality", "Buffer & Speed")
         val tabButtons = tabTitles.map { title ->
             Button(ctx).apply {
                 text = title
@@ -480,7 +703,7 @@ object MovieFoxSettingsDialog {
 
         val searchBox = EditText(ctx).apply {
             hint = "🔍 Filter..."
-            setHintTextColor(Color.parseColor("#64748B"))
+            setHintTextColor(safeColor("#64748B"))
             setTextColor(Color.WHITE)
             textSize = 12f
             isSingleLine = true
@@ -528,6 +751,7 @@ object MovieFoxSettingsDialog {
 
         val wrapper = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         val serversPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        val cs3Pane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val nuvioPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val audioPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val speedPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
@@ -540,12 +764,13 @@ object MovieFoxSettingsDialog {
             if (ok) {
                 failedServerKeys.remove(key)
                 statusTv.text = "OK ${ms}ms"
-                statusTv.setTextColor(Color.parseColor("#34D399"))
+                statusTv.setTextColor(safeColor("#34D399"))
                 statusTv.background = pillBg("#0D2B22", 10f)
             } else {
                 failedServerKeys.add(key)
-                statusTv.text = "ERROR"
-                statusTv.setTextColor(Color.parseColor("#F87171"))
+                val fails = getServerFailCount(ctx, key)
+                statusTv.text = if (fails > 1) "ERROR (${fails}x)" else "ERROR"
+                statusTv.setTextColor(safeColor("#F87171"))
                 statusTv.background = pillBg("#2B1216", 10f)
                 if (autoDisableErrors) {
                     serverSwitches[key]?.isChecked = false
@@ -555,154 +780,164 @@ object MovieFoxSettingsDialog {
             }
         }
 
-        SERVERS.forEach { srv ->
-            val fails = getServerFailCount(ctx, srv.key)
-            val lastMs = getServerLastMs(ctx, srv.key)
-            if (fails >= 1) failedServerKeys.add(srv.key)
+        fun rebuildServersList() {
+            serversPane.removeAllViews()
+            serverSwitches.clear()
+            serverCards.clear()
+            serverStatusBadges.clear()
 
-            val card = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                background = cardBg("#121621", "#232C40", 20f)
-                setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { bottomMargin = dp(ctx, 7) }
-            }
+            SERVERS.forEach { srv ->
+                val fails = getServerFailCount(ctx, srv.key)
+                val lastMs = getServerLastMs(ctx, srv.key)
+                if (fails >= 1) failedServerKeys.add(srv.key)
 
-            val col = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            }
-
-            val topLine = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-
-            topLine.addView(TextView(ctx).apply {
-                text = srv.name
-                textSize = 13.5f
-                isSingleLine = true
-                ellipsize = TextUtils.TruncateAt.END
-                setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.WHITE)
-            })
-
-            topLine.addView(TextView(ctx).apply {
-                text = srv.tag
-                textSize = 8.5f
-                isSingleLine = true
-                setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.parseColor(srv.accentHex))
-                background = pillBg("#192236", 8f)
-                setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2))
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { marginStart = dp(ctx, 5) }
-            })
-
-            val statusTv = TextView(ctx).apply {
-                text = when {
-                    fails >= 2 -> "ERROR (${fails}x)"
-                    fails == 1 -> "ERROR (1x)"
-                    lastMs >= 0L -> "OK ${lastMs}ms"
-                    else -> "READY"
+                val card = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    background = cardBg("#121621", "#232C40", 20f)
+                    setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = dp(ctx, 7) }
                 }
-                textSize = 8.5f
-                isSingleLine = true
-                setTypeface(typeface, Typeface.BOLD)
-                setTextColor(
-                    Color.parseColor(
-                        when {
-                            fails >= 1 -> "#F87171"
-                            lastMs >= 0L -> "#34D399"
-                            else -> "#94A3B8"
-                        }
+
+                val col = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                }
+
+                val topLine = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+
+                topLine.addView(TextView(ctx).apply {
+                    text = srv.name
+                    textSize = 13.5f
+                    isSingleLine = true
+                    ellipsize = TextUtils.TruncateAt.END
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.WHITE)
+                })
+
+                topLine.addView(TextView(ctx).apply {
+                    text = srv.tag
+                    textSize = 8.5f
+                    isSingleLine = true
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(safeColor(srv.accentHex, "#38BDF8"))
+                    background = pillBg("#192236", 8f)
+                    setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2))
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { marginStart = dp(ctx, 5) }
+                })
+
+                val statusTv = TextView(ctx).apply {
+                    text = when {
+                        fails >= 2 -> "ERROR (${fails}x)"
+                        fails == 1 -> "ERROR (1x)"
+                        lastMs >= 0L -> "OK ${lastMs}ms"
+                        else -> "READY"
+                    }
+                    textSize = 8.5f
+                    isSingleLine = true
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(
+                        safeColor(
+                            when {
+                                fails >= 1 -> "#F87171"
+                                lastMs >= 0L -> "#34D399"
+                                else -> "#94A3B8"
+                            }
+                        )
                     )
-                )
-                background = pillBg(
-                    when {
-                        fails >= 1 -> "#2B1216"
-                        lastMs >= 0L -> "#0D2B22"
-                        else -> "#1C2230"
-                    },
-                    8f
-                )
-                setPadding(dp(ctx, 6), dp(ctx, 2), dp(ctx, 6), dp(ctx, 2))
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { marginStart = dp(ctx, 5) }
-            }
-            topLine.addView(statusTv)
-            serverStatusBadges[srv.key] = statusTv
+                    background = pillBg(
+                        when {
+                            fails >= 1 -> "#2B1216"
+                            lastMs >= 0L -> "#0D2B22"
+                            else -> "#1C2230"
+                        },
+                        8f
+                    )
+                    setPadding(dp(ctx, 6), dp(ctx, 2), dp(ctx, 6), dp(ctx, 2))
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { marginStart = dp(ctx, 5) }
+                }
+                topLine.addView(statusTv)
+                serverStatusBadges[srv.key] = statusTv
 
-            col.addView(topLine)
-            col.addView(TextView(ctx).apply {
-                text = srv.probeUrl
-                textSize = 10f
-                isSingleLine = true
-                ellipsize = TextUtils.TruncateAt.END
-                setTextColor(Color.parseColor("#7C869C"))
-                setPadding(0, dp(ctx, 2), dp(ctx, 6), 0)
-            })
+                col.addView(topLine)
+                col.addView(TextView(ctx).apply {
+                    text = srv.probeUrl
+                    textSize = 10f
+                    isSingleLine = true
+                    ellipsize = TextUtils.TruncateAt.END
+                    setTextColor(safeColor("#7C869C"))
+                    setPadding(0, dp(ctx, 2), dp(ctx, 6), 0)
+                })
 
-            val pingBtn = TextView(ctx).apply {
-                text = "TEST"
-                textSize = 9.5f
-                isSingleLine = true
-                setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.parseColor("#38BDF8"))
-                background = pillBg("#0D2338", 12f)
-                setPadding(dp(ctx, 8), dp(ctx, 5), dp(ctx, 8), dp(ctx, 5))
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { marginEnd = dp(ctx, 6) }
-                setOnClickListener {
-                    statusTv.text = "..."
-                    statusTv.setTextColor(Color.parseColor("#FBBF24"))
-                    dialogScope.launch {
-                        val (ok, ms) = probeEndpoint(srv.probeUrl)
-                        if (dialog.isShowing) {
-                            updateServerBadge(srv.key, ok, ms)
-                        } else {
+                val pingBtn = TextView(ctx).apply {
+                    text = "TEST"
+                    textSize = 9.5f
+                    isSingleLine = true
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(safeColor("#38BDF8"))
+                    background = pillBg("#0D2338", 12f)
+                    setPadding(dp(ctx, 8), dp(ctx, 5), dp(ctx, 8), dp(ctx, 5))
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { marginEnd = dp(ctx, 6) }
+                    setOnClickListener {
+                        statusTv.text = "..."
+                        statusTv.setTextColor(safeColor("#FBBF24"))
+                        dialogScope.launch {
+                            val (ok, ms) = probeEndpoint(srv.probeUrl)
                             reportServerResult(ctx, srv.key, ok, ms)
+                            if (dialog.isShowing && isContextAlive(ctx)) {
+                                updateServerBadge(srv.key, ok, ms)
+                            }
                         }
                     }
                 }
-            }
 
-            val sw = Switch(ctx).apply {
-                isChecked = isServerEnabled(ctx, srv.key)
-                setOnCheckedChangeListener { _, checked ->
-                    setServerEnabled(ctx, srv.key, checked)
-                    refreshStats()
+                val sw = Switch(ctx).apply {
+                    isChecked = isServerEnabled(ctx, srv.key)
+                    setOnCheckedChangeListener { _, checked ->
+                        setServerEnabled(ctx, srv.key, checked)
+                        refreshStats()
+                    }
                 }
-            }
-            serverSwitches[srv.key] = sw
-            serverCards[srv.key] = card
+                serverSwitches[srv.key] = sw
+                serverCards[srv.key] = card
 
-            card.setOnClickListener { sw.isChecked = !sw.isChecked }
-            card.addView(col)
-            card.addView(pingBtn)
-            card.addView(sw)
-            serversPane.addView(card)
+                card.setOnClickListener { sw.isChecked = !sw.isChecked }
+                card.addView(col)
+                card.addView(pingBtn)
+                card.addView(sw)
+                serversPane.addView(card)
+            }
+            refreshStats()
         }
 
+        rebuildServersList()
+
         testAllBtn.setOnClickListener {
-            Toast.makeText(ctx, "Fast testing all servers...", Toast.LENGTH_SHORT).show()
-            SERVERS.forEach { srv ->
+            safeToast(ctx, "Testing all servers (Fast / Slow / Error)...")
+            val snapshot = SERVERS
+            snapshot.forEach { srv ->
                 serverStatusBadges[srv.key]?.apply {
                     text = "..."
-                    setTextColor(Color.parseColor("#FBBF24"))
+                    setTextColor(safeColor("#FBBF24"))
                 }
             }
             dialogScope.launch {
-                val jobs = SERVERS.map { srv ->
+                val jobs = snapshot.map { srv ->
                     async(Dispatchers.IO) {
                         val (ok, ms) = probeEndpoint(srv.probeUrl)
                         Triple(srv.key, ok, ms)
@@ -712,39 +947,306 @@ object MovieFoxSettingsDialog {
                 var okCount = 0
                 var errCount = 0
                 results.forEach { (key, ok, ms) ->
-                    if (dialog.isShowing) {
+                    reportServerResult(ctx, key, ok, ms)
+                    if (dialog.isShowing && isContextAlive(ctx)) {
                         updateServerBadge(key, ok, ms)
-                    } else {
-                        reportServerResult(ctx, key, ok, ms)
                     }
                     if (ok) okCount++ else errCount++
                 }
-                if (dialog.isShowing) {
-                    Toast.makeText(
-                        ctx,
-                        "Done: $okCount Working, $errCount Error",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                if (dialog.isShowing && isContextAlive(ctx)) {
+                    safeToast(ctx, "Done: $okCount OK, $errCount Error (All shown)")
                 }
             }
         }
 
         offErrorsBtn.setOnClickListener {
-            if (failedServerKeys.isEmpty()) {
-                Toast.makeText(ctx, "Koi error server nahi mila", Toast.LENGTH_SHORT).show()
+            val errKeys = SERVERS.filter { getServerFailCount(ctx, it.key) > 0 || failedServerKeys.contains(it.key) }
+                .map { it.key }
+            if (errKeys.isEmpty()) {
+                safeToast(ctx, "Koi error server nahi mila")
                 return@setOnClickListener
             }
-            var disabledCount = 0
-            failedServerKeys.forEach { key ->
+            errKeys.forEach { key ->
                 serverSwitches[key]?.isChecked = false
                 setServerEnabled(ctx, key, false)
-                serverCards[key]?.visibility = View.GONE
-                disabledCount++
             }
             refreshStats()
-            Toast.makeText(ctx, "$disabledCount error servers OFF & hide kar diye!", Toast.LENGTH_SHORT).show()
+            safeToast(ctx, "${errKeys.size} error servers OFF kar diye!")
         }
 
+        // CS3 Repository Servers Tab
+        val cs3AddBox = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardBg("#131826", "#2563EB", 22f)
+            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(ctx, 10) }
+        }
+
+        cs3AddBox.addView(TextView(ctx).apply {
+            text = "+ Add CS3 Repository & Fetch Servers"
+            textSize = 14.5f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(safeColor("#38BDF8"))
+        })
+
+        val cs3NameInput = EditText(ctx).apply {
+            hint = "Repo Name (optional)"
+            setHintTextColor(safeColor("#64748B"))
+            setTextColor(Color.WHITE)
+            textSize = 12.5f
+            isSingleLine = true
+            background = cardBg("#080B12", "#2B354B", 14f)
+            setPadding(dp(ctx, 11), dp(ctx, 9), dp(ctx, 11), dp(ctx, 9))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(ctx, 8)
+                bottomMargin = dp(ctx, 8)
+            }
+        }
+
+        val cs3UrlRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(ctx, 8) }
+        }
+
+        val cs3UrlInput = EditText(ctx).apply {
+            hint = "https://.../repo.json"
+            setHintTextColor(safeColor("#64748B"))
+            setTextColor(Color.WHITE)
+            textSize = 12.5f
+            isSingleLine = true
+            background = cardBg("#080B12", "#323E57", 14f)
+            setPadding(dp(ctx, 11), dp(ctx, 9), dp(ctx, 11), dp(ctx, 9))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = dp(ctx, 6)
+            }
+        }
+
+        val pasteCs3Btn = Button(ctx).apply {
+            text = "PASTE"
+            textSize = 10.5f
+            isAllCaps = false
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(safeColor("#BAE6FD"))
+            background = cardBg("#0D2338", "#0284C7", 14f)
+            layoutParams = LinearLayout.LayoutParams(dp(ctx, 64), dp(ctx, 40))
+            setOnClickListener {
+                val cb = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                val clip = cb?.primaryClip?.getItemAt(0)?.text?.toString().orEmpty().trim()
+                if (clip.isNotBlank()) {
+                    cs3UrlInput.setText(clip)
+                    cs3UrlInput.setSelection(clip.length)
+                } else {
+                    safeToast(ctx, "Clipboard khali hai")
+                }
+            }
+        }
+
+        cs3UrlRow.addView(cs3UrlInput)
+        cs3UrlRow.addView(pasteCs3Btn)
+
+        val cs3RepoListHolder = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+
+        fun syncCs3ServersIntoList(repos: List<Cs3RepoConfig>) {
+            val existingByKey = (cachedCs3Servers ?: mutableListOf()).associateBy { it.key }
+            val mergedCustom = mutableListOf<ServerItem>()
+            repos.filter { it.enabled }.forEach { repo ->
+                for (i in 0 until repo.serverCount.coerceAtLeast(1)) {
+                    val key = "cs3_${repo.id.takeLast(6)}_srv$i"
+                    existingByKey[key]?.let { mergedCustom.add(it) }
+                }
+            }
+            val actualCustom = (cachedCs3Servers ?: mutableListOf()).filter { srv ->
+                repos.any { it.enabled && srv.key.startsWith("cs3_${it.id.takeLast(6)}_") }
+            }
+            saveCs3Servers(ctx, actualCustom.ifEmpty { mergedCustom })
+            rebuildServersList()
+        }
+
+        fun renderCs3Repos() {
+            cs3RepoListHolder.removeAllViews()
+            if (cs3RepoList.isEmpty()) {
+                cs3RepoListHolder.addView(TextView(ctx).apply {
+                    text = "Koi CS3 repository add nahi hai."
+                    textSize = 12f
+                    setTextColor(safeColor("#64748B"))
+                    gravity = Gravity.CENTER
+                    setPadding(dp(ctx, 12), dp(ctx, 16), dp(ctx, 12), dp(ctx, 16))
+                })
+                return
+            }
+
+            cs3RepoList.forEachIndexed { idx, repo ->
+                val card = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    background = cardBg("#121621", "#232C40", 20f)
+                    setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { bottomMargin = dp(ctx, 7) }
+                }
+
+                val row = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+
+                row.addView(TextView(ctx).apply {
+                    text = "${repo.name} (${repo.serverCount})"
+                    textSize = 13.5f
+                    isSingleLine = true
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.WHITE)
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                })
+
+                val fetchBtn = TextView(ctx).apply {
+                    text = "FETCH"
+                    textSize = 9.5f
+                    isSingleLine = true
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(safeColor("#38BDF8"))
+                    background = pillBg("#0D2338", 12f)
+                    setPadding(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4))
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { marginEnd = dp(ctx, 6) }
+                    setOnClickListener {
+                        safeToast(ctx, "Fetching CS3 servers...")
+                        dialogScope.launch {
+                            val fetched = fetchServersFromCs3Repo(repo)
+                            val prefix = "cs3_${repo.id.takeLast(6)}_"
+                            val updatedCustom = ((cachedCs3Servers ?: mutableListOf())
+                                .filterNot { it.key.startsWith(prefix) } + fetched)
+                                .distinctBy { it.key }
+                            saveCs3Servers(ctx, updatedCustom)
+                            repo.serverCount = fetched.size
+                            saveCs3Repos(ctx, cs3RepoList)
+                            if (dialog.isShowing && isContextAlive(ctx)) {
+                                renderCs3Repos()
+                                rebuildServersList()
+                                safeToast(ctx, "${fetched.size} CS3 servers loaded!")
+                            }
+                        }
+                    }
+                }
+
+                val delBtn = TextView(ctx).apply {
+                    text = "DELETE"
+                    textSize = 9.5f
+                    isSingleLine = true
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(safeColor("#F87171"))
+                    background = pillBg("#2A1519", 12f)
+                    setPadding(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4))
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { marginEnd = dp(ctx, 8) }
+                    setOnClickListener {
+                        val removed = cs3RepoList.removeAt(idx)
+                        val prefix = "cs3_${removed.id.takeLast(6)}_"
+                        val remaining = (cachedCs3Servers ?: mutableListOf()).filterNot { it.key.startsWith(prefix) }
+                        saveCs3Servers(ctx, remaining)
+                        saveCs3Repos(ctx, cs3RepoList)
+                        renderCs3Repos()
+                        rebuildServersList()
+                    }
+                }
+
+                val sw = Switch(ctx).apply {
+                    isChecked = repo.enabled
+                    setOnCheckedChangeListener { _, checked ->
+                        repo.enabled = checked
+                        saveCs3Repos(ctx, cs3RepoList)
+                        syncCs3ServersIntoList(cs3RepoList)
+                    }
+                }
+
+                row.addView(fetchBtn)
+                row.addView(delBtn)
+                row.addView(sw)
+                card.addView(row)
+
+                card.addView(TextView(ctx).apply {
+                    text = repo.repoUrl
+                    textSize = 10.5f
+                    isSingleLine = true
+                    ellipsize = TextUtils.TruncateAt.END
+                    setTextColor(safeColor("#94A3B8"))
+                    setPadding(0, dp(ctx, 4), 0, 0)
+                })
+                cs3RepoListHolder.addView(card)
+            }
+        }
+
+        val addCs3RepoBtn = Button(ctx).apply {
+            text = "ADD & FETCH CS3 SERVERS"
+            textSize = 11.5f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            background = pillBg("#0284C7", 15f)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 40))
+            setOnClickListener {
+                var rawUrl = cs3UrlInput.text.toString().trim()
+                if (rawUrl.isBlank()) {
+                    safeToast(ctx, "Pehle CS3 repo URL dalein")
+                    return@setOnClickListener
+                }
+                if (!rawUrl.startsWith("http://") && !rawUrl.startsWith("https://")) {
+                    rawUrl = "https://$rawUrl"
+                }
+                val repoName = cs3NameInput.text.toString().trim().ifEmpty { deriveManifestLabel(rawUrl) }
+                val newRepo = Cs3RepoConfig(
+                    id = System.currentTimeMillis().toString(),
+                    name = repoName,
+                    repoUrl = rawUrl,
+                    enabled = true,
+                    serverCount = 0
+                )
+                cs3RepoList.add(newRepo)
+                saveCs3Repos(ctx, cs3RepoList)
+                cs3NameInput.setText("")
+                cs3UrlInput.setText("")
+                renderCs3Repos()
+
+                dialogScope.launch {
+                    val fetched = fetchServersFromCs3Repo(newRepo)
+                    val prefix = "cs3_${newRepo.id.takeLast(6)}_"
+                    val updatedCustom = ((cachedCs3Servers ?: mutableListOf())
+                        .filterNot { it.key.startsWith(prefix) } + fetched)
+                        .distinctBy { it.key }
+                    saveCs3Servers(ctx, updatedCustom)
+                    newRepo.serverCount = fetched.size
+                    saveCs3Repos(ctx, cs3RepoList)
+                    if (dialog.isShowing && isContextAlive(ctx)) {
+                        renderCs3Repos()
+                        rebuildServersList()
+                        safeToast(ctx, "$repoName: ${fetched.size} CS3 servers fetched!")
+                    }
+                }
+            }
+        }
+
+        cs3AddBox.addView(cs3NameInput)
+        cs3AddBox.addView(cs3UrlRow)
+        cs3AddBox.addView(addCs3RepoBtn)
+        cs3Pane.addView(cs3AddBox)
+        cs3Pane.addView(cs3RepoListHolder)
+        renderCs3Repos()
+
+        // Nuvio Manifest Tab
         val nuvioAddBox = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = cardBg("#131826", "#314161", 22f)
@@ -759,12 +1261,12 @@ object MovieFoxSettingsDialog {
             text = "+ Add Nuvio Manifest URL"
             textSize = 14.5f
             setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.parseColor("#C084FC"))
+            setTextColor(safeColor("#C084FC"))
         })
 
         val labelInput = EditText(ctx).apply {
             hint = "Manifest Name (optional)"
-            setHintTextColor(Color.parseColor("#64748B"))
+            setHintTextColor(safeColor("#64748B"))
             setTextColor(Color.WHITE)
             textSize = 12.5f
             isSingleLine = true
@@ -790,7 +1292,7 @@ object MovieFoxSettingsDialog {
 
         val manifestUrlInput = EditText(ctx).apply {
             hint = "https://.../manifest.json"
-            setHintTextColor(Color.parseColor("#64748B"))
+            setHintTextColor(safeColor("#64748B"))
             setTextColor(Color.WHITE)
             textSize = 12.5f
             isSingleLine = true
@@ -806,7 +1308,7 @@ object MovieFoxSettingsDialog {
             textSize = 10.5f
             isAllCaps = false
             setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.parseColor("#E9D5FF"))
+            setTextColor(safeColor("#E9D5FF"))
             background = cardBg("#241738", "#9333EA", 14f)
             layoutParams = LinearLayout.LayoutParams(dp(ctx, 64), dp(ctx, 40))
             setOnClickListener {
@@ -816,7 +1318,7 @@ object MovieFoxSettingsDialog {
                     manifestUrlInput.setText(clip)
                     manifestUrlInput.setSelection(clip.length)
                 } else {
-                    Toast.makeText(ctx, "Clipboard khali hai", Toast.LENGTH_SHORT).show()
+                    safeToast(ctx, "Clipboard khali hai")
                 }
             }
         }
@@ -832,7 +1334,7 @@ object MovieFoxSettingsDialog {
                 nuvioListHolder.addView(TextView(ctx).apply {
                     text = "Koi Nuvio manifest add nahi hai."
                     textSize = 12f
-                    setTextColor(Color.parseColor("#64748B"))
+                    setTextColor(safeColor("#64748B"))
                     gravity = Gravity.CENTER
                     setPadding(dp(ctx, 12), dp(ctx, 16), dp(ctx, 12), dp(ctx, 16))
                 })
@@ -869,7 +1371,7 @@ object MovieFoxSettingsDialog {
                     textSize = 9.5f
                     isSingleLine = true
                     setTypeface(typeface, Typeface.BOLD)
-                    setTextColor(Color.parseColor("#F87171"))
+                    setTextColor(safeColor("#F87171"))
                     background = pillBg("#2A1519", 12f)
                     setPadding(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4))
                     layoutParams = LinearLayout.LayoutParams(
@@ -902,7 +1404,7 @@ object MovieFoxSettingsDialog {
                     textSize = 10.5f
                     isSingleLine = true
                     ellipsize = TextUtils.TruncateAt.END
-                    setTextColor(Color.parseColor("#94A3B8"))
+                    setTextColor(safeColor("#94A3B8"))
                     setPadding(0, dp(ctx, 4), 0, 0)
                 })
                 nuvioListHolder.addView(card)
@@ -919,7 +1421,7 @@ object MovieFoxSettingsDialog {
             setOnClickListener {
                 var rawUrl = manifestUrlInput.text.toString().trim()
                 if (rawUrl.isBlank()) {
-                    Toast.makeText(ctx, "Pehle Nuvio manifest URL dalein", Toast.LENGTH_SHORT).show()
+                    safeToast(ctx, "Pehle Nuvio manifest URL dalein")
                     return@setOnClickListener
                 }
                 if (!rawUrl.startsWith("http://") && !rawUrl.startsWith("https://")) {
@@ -939,7 +1441,7 @@ object MovieFoxSettingsDialog {
                 manifestUrlInput.setText("")
                 refreshStats()
                 renderNuvioList()
-                Toast.makeText(ctx, "$customName saved!", Toast.LENGTH_SHORT).show()
+                safeToast(ctx, "$customName saved!")
             }
         }
 
@@ -950,6 +1452,7 @@ object MovieFoxSettingsDialog {
         nuvioPane.addView(nuvioListHolder)
         renderNuvioList()
 
+        // Audio & Quality Tab
         val qualityCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = cardBg("#121621", "#253046", 20f)
@@ -984,7 +1487,7 @@ object MovieFoxSettingsDialog {
                     tv.setTextColor(Color.WHITE)
                 } else {
                     tv.background = cardBg("#0B0E16", "#232C40", 14f)
-                    tv.setTextColor(Color.parseColor("#94A3B8"))
+                    tv.setTextColor(safeColor("#94A3B8"))
                 }
             }
         }
@@ -1024,7 +1527,7 @@ object MovieFoxSettingsDialog {
                     textSize = 12f
                     isSingleLine = true
                     setTypeface(typeface, Typeface.BOLD)
-                    setTextColor(Color.parseColor("#94A3B8"))
+                    setTextColor(safeColor("#94A3B8"))
                     setPadding(dp(ctx, 4), dp(ctx, 6), dp(ctx, 4), dp(ctx, 4))
                 })
             }
@@ -1053,7 +1556,7 @@ object MovieFoxSettingsDialog {
             col.addView(TextView(ctx).apply {
                 text = aud.subtitle
                 textSize = 11f
-                setTextColor(Color.parseColor("#8B93A7"))
+                setTextColor(safeColor("#8B93A7"))
             })
 
             val sw = Switch(ctx).apply {
@@ -1071,6 +1574,7 @@ object MovieFoxSettingsDialog {
             audioPane.addView(card)
         }
 
+        // Buffer & Speed Tab
         val lowBufferSw = Switch(ctx).apply {
             isChecked = isLowBufferMode(ctx)
             setOnCheckedChangeListener { _, v -> setLowBufferMode(ctx, v) }
@@ -1111,7 +1615,7 @@ object MovieFoxSettingsDialog {
             col.addView(TextView(ctx).apply {
                 text = desc
                 textSize = 11f
-                setTextColor(Color.parseColor("#8B93A7"))
+                setTextColor(safeColor("#8B93A7"))
             })
             card.setOnClickListener { sw.isChecked = !sw.isChecked }
             card.addView(col)
@@ -1119,7 +1623,7 @@ object MovieFoxSettingsDialog {
             speedPane.addView(card)
         }
 
-        makeToggleCard("Auto-Disable Error Servers", "Error dene wale servers auto OFF karein", autoDisableSw)
+        makeToggleCard("Auto-Disable Error Servers", "Error aane par server khud OFF ho jayega", autoDisableSw)
         makeToggleCard("Zero-Buffer Mode", "Fast HLS/DASH streams pehle load hon", lowBufferSw)
         makeToggleCard("Turbo Fast Fetch", "Parallel fast timeout (4-5s max)", fastFetchSw)
 
@@ -1157,14 +1661,14 @@ object MovieFoxSettingsDialog {
             col.addView(TextView(ctx).apply {
                 text = desc
                 textSize = 11f
-                setTextColor(Color.parseColor("#8B93A7"))
+                setTextColor(safeColor("#8B93A7"))
             })
 
             val valTv = TextView(ctx).apply {
                 text = "$v$suffix"
                 textSize = 14.5f
                 setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.parseColor("#38BDF8"))
+                setTextColor(safeColor("#38BDF8"))
                 setPadding(dp(ctx, 9), 0, dp(ctx, 9), 0)
             }
 
@@ -1229,12 +1733,12 @@ object MovieFoxSettingsDialog {
                     serverCards[srv.key]?.visibility = View.VISIBLE
                     serverStatusBadges[srv.key]?.apply {
                         text = "READY"
-                        setTextColor(Color.parseColor("#94A3B8"))
+                        setTextColor(safeColor("#94A3B8"))
                         background = pillBg("#1C2230", 8f)
                     }
                 }
                 refreshStats()
-                Toast.makeText(ctx, "Sabhi servers reset aur ON ho gaye!", Toast.LENGTH_SHORT).show()
+                safeToast(ctx, "Sabhi servers reset aur ON ho gaye!")
             }
         }
         speedPane.addView(resetHealthBtn)
@@ -1259,7 +1763,7 @@ object MovieFoxSettingsDialog {
             override fun afterTextChanged(s: Editable?) {}
         })
 
-        val panes = listOf(serversPane, nuvioPane, audioPane, speedPane)
+        val panes = listOf(serversPane, cs3Pane, nuvioPane, audioPane, speedPane)
         fun selectTab(idx: Int) {
             panes.forEachIndexed { i, pane ->
                 pane.visibility = if (i == idx) View.VISIBLE else View.GONE
@@ -1270,7 +1774,7 @@ object MovieFoxSettingsDialog {
                     btn.setTextColor(Color.WHITE)
                 } else {
                     btn.setBackgroundColor(Color.TRANSPARENT)
-                    btn.setTextColor(Color.parseColor("#8B93A7"))
+                    btn.setTextColor(safeColor("#8B93A7"))
                 }
             }
         }
@@ -1299,7 +1803,7 @@ object MovieFoxSettingsDialog {
             setTextColor(Color.WHITE)
             background = pillBg("#1C2333", 16f)
             layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 42), 1f).apply { marginEnd = dp(ctx, 8) }
-            setOnClickListener { dialog.dismiss() }
+            setOnClickListener { runCatching { dialog.dismiss() } }
         }
 
         val saveBtn = Button(ctx).apply {
@@ -1311,10 +1815,11 @@ object MovieFoxSettingsDialog {
             layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 42), 1.3f).apply { marginStart = dp(ctx, 8) }
             setOnClickListener {
                 saveNuvioManifests(ctx, nuvioList)
+                saveCs3Repos(ctx, cs3RepoList)
                 setPreferredQuality(ctx, selectedQuality)
                 setConcurrency(ctx, currentConcurrency)
-                Toast.makeText(ctx, "Settings applied!", Toast.LENGTH_SHORT).show()
-                dialog.dismiss()
+                safeToast(ctx, "Settings applied!")
+                runCatching { dialog.dismiss() }
             }
         }
 
@@ -1322,7 +1827,9 @@ object MovieFoxSettingsDialog {
         footer.addView(saveBtn)
         root.addView(footer)
 
-        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
-        dialog.show()
+        runCatching {
+            dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+            dialog.show()
+        }
     }
 }
