@@ -36,7 +36,7 @@ import java.net.URL
 
 object MovieFoxSettingsDialog {
 
-    private const val PREFS_NAME = "moviefox_ultra_max_v7"
+    private const val PREFS_NAME = "moviefox_ultra_max_v9"
     private const val KEY_SRV_PREFIX = "mf_srv_"
     private const val KEY_AUDIO_PREFIX = "mf_audio_"
     private const val KEY_FAIL_PREFIX = "mf_fail_"
@@ -83,27 +83,32 @@ object MovieFoxSettingsDialog {
     )
 
     val SERVERS = listOf(
+        // Existing MovieFox & provider servers
         ServerItem("purstream", "Purstream", "API", "https://moviefox.pro/api/stream/purstream", "#38BDF8"),
+        ServerItem("vegamovies", "VegaMovies", "SITE", "https://vegamovies.lease/", "#EC4899"),
+        ServerItem("sflix", "Sflix", "SITE", "https://sflix.film/", "#F97316"),
         ServerItem("castle", "Castle", "API", "https://moviefox.pro/api/stream/castle", "#818CF8"),
         ServerItem("watchout", "Watchout", "API", "https://moviefox.pro/api/stream/watchout", "#2DD4BF"),
-        ServerItem("direct", "Direct Media", "MP4/HLS", "https://moviefox.pro/api/stream/direct", "#34D399"),
-        ServerItem("debrid", "Debrid", "CACHE", "https://moviefox.pro/api/stream/debrid", "#C084FC"),
-        ServerItem("vidsrc", "VidSrc", "EMBED", "https://moviefox.pro/api/stream/vidsrc", "#FBBF24"),
-        ServerItem("autoembed", "AutoEmbed", "EMBED", "https://moviefox.pro/api/stream/autoembed", "#FB923C"),
-        ServerItem("hls", "HLS / Workers", "M3U8", "https://moviefox.pro/api/stream/hls", "#22D3EE"),
-        ServerItem("fsl", "FSL Server", "DIRECT", "https://moviefox.pro/api/stream/fsl", "#10B981"),
-        ServerItem("fsl2", "FSL2 Server", "DIRECT", "https://moviefox.pro/api/stream/fsl2", "#059669"),
-        ServerItem("gdrive", "GDrive Server", "CLOUD", "https://drive.google.com/", "#60A5FA"),
         ServerItem("prmovies", "Prmovies", "SITE", "https://prmovies.coupons/", "#F59E0B"),
-        ServerItem("vegamovies", "VegaMovies", "SITE", "https://vegamovies.lease/", "#EC4899"),
         ServerItem("hindmoviez", "HindMoviez", "SITE", "https://v3.hindmovie.im/", "#14B8A6"),
-        ServerItem("sflix", "Sflix", "SITE", "https://sflix.film/", "#F97316"),
-        ServerItem("vcloud", "V-Cloud (Vega)", "SUB", "https://vcloud.lol/", "#A78BFA"),
-        ServerItem("hubcloud", "HubCloud (Vega)", "SUB", "https://hubcloud.dad/", "#C084FC"),
-        ServerItem("pixeldrain", "PixelDrain", "SUB", "https://pixeldrain.com/", "#38BDF8"),
-        ServerItem("gofile", "GoFile", "SUB", "https://api.gofile.io/", "#34D399"),
-        ServerItem("embeds", "Embed Hosts", "EXTRACTOR", "https://moviefox.pro/", "#F43F5E"),
-        ServerItem("nuvio", "Nuvio Addon", "MANIFEST", "https://nuvio.app/", "#A855F7")
+        ServerItem("play4u", "Play4u", "HLS", "https://play4u.org/", "#FB7185"),
+        ServerItem("nuvio", "Nuvio Addon", "MANIFEST", "https://nuvio.app/", "#A855F7"),
+        ServerItem("moviesdrive", "MoviesDrive", "DRIVE", "https://new3.moviesdrive.cyou/", "#34D399"),
+
+        // MovieBox API servers
+        ServerItem("mb_apig", "MovieBox APIG", "API", "https://apig.inmoviebox.com", "#38BDF8"),
+        ServerItem("mb_apii", "MovieBox APII", "API", "https://apii.inmoviebox.com", "#60A5FA"),
+        ServerItem("mb_api3", "MovieBox API 3", "API", "https://api3.aoneroom.com", "#818CF8"),
+        ServerItem("mb_api4", "MovieBox API 4", "API", "https://api4.aoneroom.com", "#A78BFA"),
+        ServerItem("mb_api4sg", "MovieBox API 4 SG", "API", "https://api4sg.aoneroom.com", "#C084FC"),
+        ServerItem("mb_api5", "MovieBox API 5", "API", "https://api5.aoneroom.com", "#F472B6"),
+        ServerItem("mb_api6", "MovieBox API 6", "API", "https://api6.aoneroom.com", "#FB7185"),
+        ServerItem("mb_api7", "MovieBox API 7", "API", "https://api7.aoneroom.com", "#F59E0B"),
+
+        // MovieBox player and supporting services
+        ServerItem("mb_player", "MovieBox Player", "PLAYER", "https://play.88player.top/", "#34D399"),
+        ServerItem("mb_gslb", "MovieBox GSLB", "API", "https://gslb.shalltry.com/", "#2DD4BF"),
+        ServerItem("mb_sport", "MovieBox Sport API", "API", "https://h5-sport-api.aoneroom.com/wefeed-h5api-bff", "#FBBF24")
     )
 
     val AUDIO_TRACKS = listOf(
@@ -268,7 +273,6 @@ object MovieFoxSettingsDialog {
         prefs(ctx).edit().putBoolean(KEY_AUTO_DISABLE_ERR, enabled).apply()
     }
 
-    // Compatibility helpers for MovieFoxProvider.kt
     fun isStreamOnly(ctx: Context): Boolean = isLowBufferMode(ctx)
     fun isDownloadOnly(ctx: Context): Boolean = false
     fun getParallelServers(ctx: Context): Int = getConcurrency(ctx)
@@ -312,7 +316,7 @@ object MovieFoxSettingsDialog {
             try {
                 val fixedUrl = if (urlStr.startsWith("http")) urlStr else "https://$urlStr"
                 val conn = (URL(fixedUrl).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "HEAD"
+                    requestMethod = "GET"
                     connectTimeout = timeoutMs
                     readTimeout = timeoutMs
                     instanceFollowRedirects = true
@@ -350,7 +354,6 @@ object MovieFoxSettingsDialog {
             setPadding(dp(ctx, 14), dp(ctx, 14), dp(ctx, 14), dp(ctx, 14))
         }
 
-        // Header
         val header = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable(
@@ -454,7 +457,6 @@ object MovieFoxSettingsDialog {
         }
         refreshStats()
 
-        // 4-Tab Bar
         val tabScroll = HorizontalScrollView(ctx).apply {
             isHorizontalScrollBarEnabled = false
             layoutParams = LinearLayout.LayoutParams(
@@ -484,7 +486,6 @@ object MovieFoxSettingsDialog {
         tabScroll.addView(tabBar)
         root.addView(tabScroll)
 
-        // Search + TEST ALL + OFF ERRORS Row
         val actionRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -548,9 +549,6 @@ object MovieFoxSettingsDialog {
         val audioPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val speedPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
 
-        // ==========================================
-        // PANE 1: SERVERS (LIVE HEALTH + FAST PROBE)
-        // ==========================================
         fun updateServerBadge(key: String, ok: Boolean, ms: Long) {
             val statusTv = serverStatusBadges[key] ?: return
             reportServerResult(ctx, key, ok, ms)
@@ -706,7 +704,6 @@ object MovieFoxSettingsDialog {
             serversPane.addView(card)
         }
 
-        // Parallel TEST ALL
         testAllBtn.setOnClickListener {
             Toast.makeText(ctx, "Fast testing all servers...", Toast.LENGTH_SHORT).show()
             SERVERS.forEach { srv ->
@@ -737,7 +734,6 @@ object MovieFoxSettingsDialog {
             }
         }
 
-        // One-Tap OFF ERRORS
         offErrorsBtn.setOnClickListener {
             if (failedServerKeys.isEmpty()) {
                 Toast.makeText(ctx, "Pehle TEST ALL dabayein taaki error servers detect hon", Toast.LENGTH_SHORT).show()
@@ -754,9 +750,6 @@ object MovieFoxSettingsDialog {
             Toast.makeText(ctx, "$disabledCount error servers OFF & hide kar diye!", Toast.LENGTH_SHORT).show()
         }
 
-        // ==========================================
-        // PANE 2: NUVIO MANIFEST MANAGER
-        // ==========================================
         val nuvioAddBox = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = cardBg("#131826", "#314161", 22f)
@@ -962,9 +955,6 @@ object MovieFoxSettingsDialog {
         nuvioPane.addView(nuvioListHolder)
         renderNuvioList()
 
-        // ==========================================
-        // PANE 3: AUDIO & QUALITY
-        // ==========================================
         val qualityCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = cardBg("#121621", "#253046", 20f)
@@ -1073,9 +1063,6 @@ object MovieFoxSettingsDialog {
             audioPane.addView(card)
         }
 
-        // ==========================================
-        // PANE 4: BUFFER & SPEED
-        // ==========================================
         val lowBufferSw = Switch(ctx).apply {
             isChecked = isLowBufferMode(ctx)
             setOnCheckedChangeListener { _, v -> setLowBufferMode(ctx, v) }
