@@ -1,5 +1,7 @@
 package com.hungrysturdy
 
+import android.content.Context
+import com.hungrysturdy.donation.DonationDialogFragment
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
@@ -14,6 +16,13 @@ class DramaVerseProvider : MainAPI() {
     override val supportedTypes = setOf(TvType.AsianDrama, TvType.Movie)
     override var lang = "hi"
     override val hasMainPage = true
+
+    fun openSupportDialog(context: Context) {
+        DonationDialogFragment.show(
+            context = context,
+            pluginName = name
+        )
+    }
 
     private val defaultHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 15; Infinix X6851) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
