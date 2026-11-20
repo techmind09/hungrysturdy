@@ -35,7 +35,7 @@ class MovieFoxPlugin : Plugin() {
         registerExtractorAPI(Vivibebe())
         registerExtractorAPI(Playmogo())
         registerExtractorAPI(Otakuvid())
-        registerExtractorAPI(Otakuhg())
+        registerExtractorAPI(Otakhug())
         registerExtractorAPI(MegaPlay())
         registerExtractorAPI(Vidtube())
         registerExtractorAPI(Vidwish())
@@ -46,10 +46,8 @@ class MovieFoxPlugin : Plugin() {
         registerExtractorAPI(HdStream4u())
         registerExtractorAPI(Hubstream())
 
-
         openSettings = { ctx ->
             MovieFoxSettingsDialog.show(ctx)
-            MainActivity.reloadHomeEvent.invoke(true)
         }
     }
 }
