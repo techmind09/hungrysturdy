@@ -78,8 +78,8 @@ object MovieFoxSettingsDialog {
 
     data class NuvioManifestConfig(
         val id: String,
-        val label: String,
-        val manifestUrl: String,
+        var label: String,
+        var manifestUrl: String,
         var enabled: Boolean = true
     )
 
@@ -335,7 +335,6 @@ object MovieFoxSettingsDialog {
         val bytes = readHttpBytes(rawUrl, timeoutMs) ?: return@withContext emptyList()
         if (bytes.isEmpty()) return@withContext emptyList()
 
-        // Case 1: Direct .cs3 file URL (e.g. MovieBox.cs3)
         if (rawUrl.substringBefore("?").endsWith(".cs3", ignoreCase = true)) {
             val mObj = extractManifestJsonFromCs3Zip(bytes)
             val pName = mObj?.optString("name", "")?.trim().orEmpty()
@@ -355,7 +354,6 @@ object MovieFoxSettingsDialog {
             return@withContext out.distinctBy { it.key }
         }
 
-        // Case 2: repo.json (or plugins.json array/object)
         val body = runCatching { String(bytes, Charsets.UTF_8).trim() }.getOrDefault("")
         if (body.isBlank()) return@withContext emptyList()
 
@@ -1169,6 +1167,8 @@ object MovieFoxSettingsDialog {
             rebuildServersList()
         }
 
+        lateinit var renderCs3Repos: () -> Unit
+
         fun fetchAndApplyCs3Repo(repo: Cs3RepoConfig) {
             safeToast(ctx, "Fetching CS3 servers...")
             dialogScope.launch {
@@ -1188,7 +1188,7 @@ object MovieFoxSettingsDialog {
             }
         }
 
-        fun renderCs3Repos() {
+        renderCs3Repos = {
             cs3RepoListHolder.removeAllViews()
             if (cs3RepoList.isEmpty()) {
                 cs3RepoListHolder.addView(TextView(ctx).apply {
@@ -1198,95 +1198,94 @@ object MovieFoxSettingsDialog {
                     gravity = Gravity.CENTER
                     setPadding(dp(ctx, 12), dp(ctx, 16), dp(ctx, 12), dp(ctx, 16))
                 })
-                return
-            }
-
-            cs3RepoList.forEachIndexed { idx, repo ->
-                val card = LinearLayout(ctx).apply {
-                    orientation = LinearLayout.VERTICAL
-                    background = cardBg("#121621", "#232C40", 20f)
-                    setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-                    layoutParams = LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                    ).apply { bottomMargin = dp(ctx, 7) }
-                }
-
-                val row = LinearLayout(ctx).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                }
-
-                row.addView(TextView(ctx).apply {
-                    text = "${repo.name} (${repo.serverCount})"
-                    textSize = 13.5f
-                    isSingleLine = true
-                    setTypeface(typeface, Typeface.BOLD)
-                    setTextColor(Color.WHITE)
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                })
-
-                val fetchBtn = TextView(ctx).apply {
-                    text = "FETCH"
-                    textSize = 9.5f
-                    isSingleLine = true
-                    setTypeface(typeface, Typeface.BOLD)
-                    setTextColor(safeColor("#38BDF8"))
-                    background = pillBg("#0D2338", 12f)
-                    setPadding(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4))
-                    layoutParams = LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                    ).apply { marginEnd = dp(ctx, 6) }
-                    setOnClickListener { fetchAndApplyCs3Repo(repo) }
-                }
-
-                val delBtn = TextView(ctx).apply {
-                    text = "DELETE"
-                    textSize = 9.5f
-                    isSingleLine = true
-                    setTypeface(typeface, Typeface.BOLD)
-                    setTextColor(safeColor("#F87171"))
-                    background = pillBg("#2A1519", 12f)
-                    setPadding(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4))
-                    layoutParams = LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.WRAP_CONTENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                    ).apply { marginEnd = dp(ctx, 8) }
-                    setOnClickListener {
-                        val removed = cs3RepoList.removeAt(idx)
-                        val prefix = "cs3_${removed.id.takeLast(6)}_"
-                        val remaining = (cachedCs3Servers ?: mutableListOf()).filterNot { it.key.startsWith(prefix) }
-                        saveCs3Servers(ctx, remaining)
-                        saveCs3Repos(ctx, cs3RepoList)
-                        renderCs3Repos()
-                        rebuildServersList()
+            } else {
+                cs3RepoList.forEachIndexed { idx, repo ->
+                    val card = LinearLayout(ctx).apply {
+                        orientation = LinearLayout.VERTICAL
+                        background = cardBg("#121621", "#232C40", 20f)
+                        setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply { bottomMargin = dp(ctx, 7) }
                     }
-                }
 
-                val sw = Switch(ctx).apply {
-                    isChecked = repo.enabled
-                    setOnCheckedChangeListener { _, checked ->
-                        repo.enabled = checked
-                        saveCs3Repos(ctx, cs3RepoList)
-                        syncCs3ServersIntoList(cs3RepoList)
+                    val row = LinearLayout(ctx).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
                     }
+
+                    row.addView(TextView(ctx).apply {
+                        text = "${repo.name} (${repo.serverCount})"
+                        textSize = 13.5f
+                        isSingleLine = true
+                        setTypeface(typeface, Typeface.BOLD)
+                        setTextColor(Color.WHITE)
+                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    })
+
+                    val fetchBtn = TextView(ctx).apply {
+                        text = "FETCH"
+                        textSize = 9.5f
+                        isSingleLine = true
+                        setTypeface(typeface, Typeface.BOLD)
+                        setTextColor(safeColor("#38BDF8"))
+                        background = pillBg("#0D2338", 12f)
+                        setPadding(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4))
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply { marginEnd = dp(ctx, 6) }
+                        setOnClickListener { fetchAndApplyCs3Repo(repo) }
+                    }
+
+                    val delBtn = TextView(ctx).apply {
+                        text = "DELETE"
+                        textSize = 9.5f
+                        isSingleLine = true
+                        setTypeface(typeface, Typeface.BOLD)
+                        setTextColor(safeColor("#F87171"))
+                        background = pillBg("#2A1519", 12f)
+                        setPadding(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4))
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).apply { marginEnd = dp(ctx, 8) }
+                        setOnClickListener {
+                            val removed = cs3RepoList.removeAt(idx)
+                            val prefix = "cs3_${removed.id.takeLast(6)}_"
+                            val remaining = (cachedCs3Servers ?: mutableListOf()).filterNot { it.key.startsWith(prefix) }
+                            saveCs3Servers(ctx, remaining)
+                            saveCs3Repos(ctx, cs3RepoList)
+                            renderCs3Repos()
+                            rebuildServersList()
+                        }
+                    }
+
+                    val sw = Switch(ctx).apply {
+                        isChecked = repo.enabled
+                        setOnCheckedChangeListener { _, checked ->
+                            repo.enabled = checked
+                            saveCs3Repos(ctx, cs3RepoList)
+                            syncCs3ServersIntoList(cs3RepoList)
+                        }
+                    }
+
+                    row.addView(fetchBtn)
+                    row.addView(delBtn)
+                    row.addView(sw)
+                    card.addView(row)
+
+                    card.addView(TextView(ctx).apply {
+                        text = repo.repoUrl
+                        textSize = 10.5f
+                        isSingleLine = true
+                        ellipsize = TextUtils.TruncateAt.END
+                        setTextColor(safeColor("#94A3B8"))
+                        setPadding(0, dp(ctx, 4), 0, 0)
+                    })
+                    cs3RepoListHolder.addView(card)
                 }
-
-                row.addView(fetchBtn)
-                row.addView(delBtn)
-                row.addView(sw)
-                card.addView(row)
-
-                card.addView(TextView(ctx).apply {
-                    text = repo.repoUrl
-                    textSize = 10.5f
-                    isSingleLine = true
-                    ellipsize = TextUtils.TruncateAt.END
-                    setTextColor(safeColor("#94A3B8"))
-                    setPadding(0, dp(ctx, 4), 0, 0)
-                })
-                cs3RepoListHolder.addView(card)
             }
         }
 
