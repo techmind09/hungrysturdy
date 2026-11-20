@@ -36,7 +36,7 @@ import java.net.URL
 
 object MovieFoxSettingsDialog {
 
-    private const val PREFS_NAME = "moviefox_ultra_max_v9"
+    private const val PREFS_NAME = "moviefox_ultra_max_v10"
     private const val KEY_SRV_PREFIX = "mf_srv_"
     private const val KEY_AUDIO_PREFIX = "mf_audio_"
     private const val KEY_FAIL_PREFIX = "mf_fail_"
@@ -82,48 +82,31 @@ object MovieFoxSettingsDialog {
         var enabled: Boolean = true
     )
 
+    // Vegamovies, MoviesDrive, HindMoviez removed; MovieBox added
     val SERVERS = listOf(
-        // Existing MovieFox & provider servers
         ServerItem("purstream", "Purstream", "API", "https://moviefox.pro/api/stream/purstream", "#38BDF8"),
-        ServerItem("vegamovies", "VegaMovies", "SITE", "https://vegamovies.lease/", "#EC4899"),
         ServerItem("sflix", "Sflix", "SITE", "https://sflix.film/", "#F97316"),
         ServerItem("castle", "Castle", "API", "https://moviefox.pro/api/stream/castle", "#818CF8"),
         ServerItem("watchout", "Watchout", "API", "https://moviefox.pro/api/stream/watchout", "#2DD4BF"),
         ServerItem("prmovies", "Prmovies", "SITE", "https://prmovies.coupons/", "#F59E0B"),
-        ServerItem("hindmoviez", "HindMoviez", "SITE", "https://v3.hindmovie.im/", "#14B8A6"),
         ServerItem("play4u", "Play4u", "HLS", "https://play4u.org/", "#FB7185"),
         ServerItem("nuvio", "Nuvio Addon", "MANIFEST", "https://nuvio.app/", "#A855F7"),
-        ServerItem("moviesdrive", "MoviesDrive", "DRIVE", "https://new3.moviesdrive.cyou/", "#34D399"),
-
-        // MovieBox API servers
-        ServerItem("mb_apig", "MovieBox APIG", "API", "https://apig.inmoviebox.com", "#38BDF8"),
-        ServerItem("mb_apii", "MovieBox APII", "API", "https://apii.inmoviebox.com", "#60A5FA"),
-        ServerItem("mb_api3", "MovieBox API 3", "API", "https://api3.aoneroom.com", "#818CF8"),
-        ServerItem("mb_api4", "MovieBox API 4", "API", "https://api4.aoneroom.com", "#A78BFA"),
-        ServerItem("mb_api4sg", "MovieBox API 4 SG", "API", "https://api4sg.aoneroom.com", "#C084FC"),
-        ServerItem("mb_api5", "MovieBox API 5", "API", "https://api5.aoneroom.com", "#F472B6"),
-        ServerItem("mb_api6", "MovieBox API 6", "API", "https://api6.aoneroom.com", "#FB7185"),
-        ServerItem("mb_api7", "MovieBox API 7", "API", "https://api7.aoneroom.com", "#F59E0B"),
-
-        // MovieBox player and supporting services
-        ServerItem("mb_player", "MovieBox Player", "PLAYER", "https://play.88player.top/", "#34D399"),
-        ServerItem("mb_gslb", "MovieBox GSLB", "API", "https://gslb.shalltry.com/", "#2DD4BF"),
-        ServerItem("mb_sport", "MovieBox Sport API", "API", "https://h5-sport-api.aoneroom.com/wefeed-h5api-bff", "#FBBF24")
+        ServerItem("moviebox", "MovieBox", "BFF", "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/trending?page=1&perPage=1", "#34D399")
     )
 
+    // Primary: Hindi, English, Tamil | Other Languages below
     val AUDIO_TRACKS = listOf(
-        AudioOption("original", "Original", "Original audio track", true),
-        AudioOption("hindi", "Hindi Dub", "Hindi dubbed audio", true),
-        AudioOption("english", "English Dub", "English audio track", true),
-        AudioOption("korean", "Korean Dub", "Korean audio / dub", true),
-        AudioOption("japanese", "Japanese Dub", "Japanese audio / dub", true),
-        AudioOption("tamil", "Tamil Dub", "Tamil dubbed audio", true),
-        AudioOption("telugu", "Telugu Dub", "Telugu dubbed audio", true),
-        AudioOption("punjabi", "Punjabi Dub", "Punjabi dubbed audio", true),
-        AudioOption("spanish", "Spanish Dub", "Spanish dubbed audio", false),
-        AudioOption("french", "French Dub", "French dubbed audio", false),
-        AudioOption("arabic", "Arabic Dub", "Arabic dubbed audio", false),
-        AudioOption("bengali", "Bengali Dub", "Bengali dubbed audio", false)
+        AudioOption("hindi", "Hindi", "Primary language • Hindi audio / dub", true),
+        AudioOption("english", "English", "Primary language • English audio", true),
+        AudioOption("tamil", "Tamil", "Primary language • Tamil audio / dub", true),
+        AudioOption("telugu", "Telugu", "Other language • Telugu audio / dub", false),
+        AudioOption("korean", "Korean", "Other language • Korean audio / dub", false),
+        AudioOption("japanese", "Japanese", "Other language • Japanese audio / dub", false),
+        AudioOption("punjabi", "Punjabi", "Other language • Punjabi audio / dub", false),
+        AudioOption("spanish", "Spanish", "Other language • Spanish audio / dub", false),
+        AudioOption("french", "French", "Other language • French audio / dub", false),
+        AudioOption("arabic", "Arabic", "Other language • Arabic audio / dub", false),
+        AudioOption("bengali", "Bengali", "Other language • Bengali audio / dub", false)
     )
 
     val QUALITIES = listOf("AUTO", "2160p", "1080p", "720p", "480p")
@@ -175,7 +158,7 @@ object MovieFoxSettingsDialog {
     }
 
     fun isAudioEnabled(ctx: Context, key: String): Boolean {
-        val def = AUDIO_TRACKS.find { it.key == key }?.defaultOn ?: true
+        val def = AUDIO_TRACKS.find { it.key == key }?.defaultOn ?: false
         return prefs(ctx).getBoolean("$KEY_AUDIO_PREFIX$key", def)
     }
 
@@ -1020,7 +1003,20 @@ object MovieFoxSettingsDialog {
         qualityCard.addView(qScroll)
         audioPane.addView(qualityCard)
 
+        var addedOtherHeader = false
         AUDIO_TRACKS.forEach { aud ->
+            if (!aud.defaultOn && !addedOtherHeader) {
+                addedOtherHeader = true
+                audioPane.addView(TextView(ctx).apply {
+                    text = "Other Languages"
+                    textSize = 12f
+                    isSingleLine = true
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.parseColor("#94A3B8"))
+                    setPadding(dp(ctx, 4), dp(ctx, 6), dp(ctx, 4), dp(ctx, 4))
+                })
+            }
+
             val card = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
