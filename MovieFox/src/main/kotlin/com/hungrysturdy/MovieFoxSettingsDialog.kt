@@ -36,7 +36,7 @@ import java.net.URL
 
 object MovieFoxSettingsDialog {
 
-    private const val PREFS_NAME = "moviefox_ultra_max_v10"
+    private const val PREFS_NAME = "moviefox_ultra_max_v11"
     private const val KEY_SRV_PREFIX = "mf_srv_"
     private const val KEY_AUDIO_PREFIX = "mf_audio_"
     private const val KEY_FAIL_PREFIX = "mf_fail_"
@@ -82,19 +82,18 @@ object MovieFoxSettingsDialog {
         var enabled: Boolean = true
     )
 
-    // Vegamovies, MoviesDrive, HindMoviez removed; MovieBox added
     val SERVERS = listOf(
         ServerItem("purstream", "Purstream", "API", "https://moviefox.pro/api/stream/purstream", "#38BDF8"),
-        ServerItem("sflix", "Sflix", "SITE", "https://sflix.film/", "#F97316"),
         ServerItem("castle", "Castle", "API", "https://moviefox.pro/api/stream/castle", "#818CF8"),
         ServerItem("watchout", "Watchout", "API", "https://moviefox.pro/api/stream/watchout", "#2DD4BF"),
+        ServerItem("vegamovies", "VegaMovies", "FSL/PXL", "https://vegamovies.lease/", "#EC4899"),
+        ServerItem("sflix", "Sflix", "SITE", "https://sflix.film/", "#F97316"),
         ServerItem("prmovies", "Prmovies", "SITE", "https://prmovies.coupons/", "#F59E0B"),
         ServerItem("play4u", "Play4u", "HLS", "https://play4u.org/", "#FB7185"),
         ServerItem("nuvio", "Nuvio Addon", "MANIFEST", "https://nuvio.app/", "#A855F7"),
-        ServerItem("moviebox", "MovieBox", "BFF", "https://h5-api.aoneroom.com/wefeed-h5api-bff/subject/trending?page=1&perPage=1", "#34D399")
+        ServerItem("moviebox", "MovieBox", "BFF", "https://netnaija.film/", "#34D399")
     )
 
-    // Primary: Hindi, English, Tamil | Other Languages below
     val AUDIO_TRACKS = listOf(
         AudioOption("hindi", "Hindi", "Primary language • Hindi audio / dub", true),
         AudioOption("english", "English", "Primary language • English audio", true),
@@ -261,17 +260,17 @@ object MovieFoxSettingsDialog {
     fun getParallelServers(ctx: Context): Int = getConcurrency(ctx)
 
     fun getConcurrency(ctx: Context): Int =
-        prefs(ctx).getInt(KEY_CONCURRENCY, 14)
+        prefs(ctx).getInt(KEY_CONCURRENCY, 16)
 
     fun setConcurrency(ctx: Context, value: Int) {
         prefs(ctx).edit().putInt(KEY_CONCURRENCY, value.coerceIn(2, 24)).apply()
     }
 
     fun getTimeoutSeconds(ctx: Context): Int =
-        prefs(ctx).getInt(KEY_TIMEOUT_SEC, 5)
+        prefs(ctx).getInt(KEY_TIMEOUT_SEC, 4)
 
     fun setTimeoutSeconds(ctx: Context, sec: Int) {
-        prefs(ctx).edit().putInt(KEY_TIMEOUT_SEC, sec.coerceIn(3, 20)).apply()
+        prefs(ctx).edit().putInt(KEY_TIMEOUT_SEC, sec.coerceIn(3, 15)).apply()
     }
 
     private fun dp(ctx: Context, px: Int): Int =
@@ -293,7 +292,7 @@ object MovieFoxSettingsDialog {
         cornerRadius = radius
     }
 
-    private suspend fun probeEndpoint(urlStr: String, timeoutMs: Int = 2500): Pair<Boolean, Long> =
+    private suspend fun probeEndpoint(urlStr: String, timeoutMs: Int = 2200): Pair<Boolean, Long> =
         withContext(Dispatchers.IO) {
             val start = System.currentTimeMillis()
             try {
@@ -605,7 +604,7 @@ object MovieFoxSettingsDialog {
             val statusTv = TextView(ctx).apply {
                 text = when {
                     fails >= 2 -> "ERROR (${fails}x)"
-                    fails == 1 -> "SLOW/ERR"
+                    fails == 1 -> "ERROR (1x)"
                     lastMs >= 0L -> "OK ${lastMs}ms"
                     else -> "READY"
                 }
@@ -711,7 +710,7 @@ object MovieFoxSettingsDialog {
                 }
                 Toast.makeText(
                     ctx,
-                    "Done: $okCount Working, $errCount Error" + if (autoDisableErrors && errCount > 0) " (Auto-OFF)" else "",
+                    "Done: $okCount Working, $errCount Error",
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -719,7 +718,7 @@ object MovieFoxSettingsDialog {
 
         offErrorsBtn.setOnClickListener {
             if (failedServerKeys.isEmpty()) {
-                Toast.makeText(ctx, "Pehle TEST ALL dabayein taaki error servers detect hon", Toast.LENGTH_SHORT).show()
+                Toast.makeText(ctx, "Koi error server nahi mila", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
             var disabledCount = 0
@@ -1107,9 +1106,9 @@ object MovieFoxSettingsDialog {
             speedPane.addView(card)
         }
 
-        makeToggleCard("Auto-Disable Error Servers", "Lagataar 2 baar fail hone par server auto OFF", autoDisableSw)
-        makeToggleCard("Zero-Buffer Mode", "Low-latency HLS/DASH streams pehle load hon", lowBufferSw)
-        makeToggleCard("Turbo Fast Fetch", "Parallel lookups & fast timeout", fastFetchSw)
+        makeToggleCard("Auto-Disable Error Servers", "Error dene wale servers auto OFF karein", autoDisableSw)
+        makeToggleCard("Zero-Buffer Mode", "Fast HLS/DASH streams pehle load hon", lowBufferSw)
+        makeToggleCard("Turbo Fast Fetch", "Parallel fast timeout (4-5s max)", fastFetchSw)
 
         fun makeStepper(
             title: String,
@@ -1194,7 +1193,7 @@ object MovieFoxSettingsDialog {
             setConcurrency(ctx, it)
             refreshStats()
         }
-        makeStepper("Fast Timeout", "Dead server skip wait time (5s best)", getTimeoutSeconds(ctx), 3, 20, 1, "s") {
+        makeStepper("Fast Timeout", "Dead server skip wait time (4s best)", getTimeoutSeconds(ctx), 3, 15, 1, "s") {
             setTimeoutSeconds(ctx, it)
         }
 
