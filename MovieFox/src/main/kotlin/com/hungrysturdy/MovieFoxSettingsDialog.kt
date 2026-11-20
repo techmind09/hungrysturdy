@@ -50,7 +50,6 @@ object MovieFoxSettingsDialog {
     private const val KEY_QUALITY = "mf_preferred_quality"
     private const val KEY_LOW_BUFFER = "mf_low_buffer_mode"
     private const val KEY_FAST_FETCH = "mf_fast_fetch_mode"
-    private const val KEY_AUTO_DISABLE_ERR = "mf_auto_disable_err"
     private const val KEY_CONCURRENCY = "mf_concurrency"
     private const val KEY_TIMEOUT_SEC = "mf_timeout_sec"
 
@@ -458,11 +457,7 @@ object MovieFoxSettingsDialog {
                 .apply()
         } else {
             val fails = p.getInt("$KEY_FAIL_PREFIX$k", 0) + 1
-            val editor = p.edit().putInt("$KEY_FAIL_PREFIX$k", fails)
-            if (isAutoDisableErrorServers(ctx)) {
-                editor.putBoolean("$KEY_SRV_PREFIX$k", false)
-            }
-            editor.apply()
+            p.edit().putInt("$KEY_FAIL_PREFIX$k", fails).apply()
         }
     }
 
@@ -573,11 +568,10 @@ object MovieFoxSettingsDialog {
         prefs(ctx).edit().putBoolean(KEY_FAST_FETCH, enabled).apply()
     }
 
-    fun isAutoDisableErrorServers(ctx: Context): Boolean =
-        prefs(ctx).getBoolean(KEY_AUTO_DISABLE_ERR, true)
+    fun isAutoDisableErrorServers(ctx: Context): Boolean = false
 
     fun setAutoDisableErrorServers(ctx: Context, enabled: Boolean) {
-        prefs(ctx).edit().putBoolean(KEY_AUTO_DISABLE_ERR, enabled).apply()
+        // Auto-disable intentionally disabled; users manually turn off error servers via OFF ERRORS or switch
     }
 
     fun isStreamOnly(ctx: Context): Boolean = isLowBufferMode(ctx)
@@ -633,7 +627,6 @@ object MovieFoxSettingsDialog {
             val code = conn.responseCode
             conn.disconnect()
             val elapsed = (System.currentTimeMillis() - start).coerceAtLeast(1L)
-            // 200..499 or Cloudflare 503 means the host/endpoint is reachable
             val alive = code in 200..499 || code == 503
             alive to elapsed
         } catch (_: Exception) {
@@ -646,7 +639,6 @@ object MovieFoxSettingsDialog {
             val start = System.currentTimeMillis()
             val fixedUrl = toRawGithubUrl(urlStr)
             trySingleProbe(fixedUrl, timeoutMs)?.let { return@withContext it }
-            // Retry once with slightly relaxed timeout before marking error
             trySingleProbe(fixedUrl, (timeoutMs + 2000).coerceAtMost(7500))?.let { return@withContext it }
             false to (System.currentTimeMillis() - start).coerceAtLeast(1L)
         }
@@ -666,7 +658,6 @@ object MovieFoxSettingsDialog {
         var currentQuery = ""
         var selectedQuality = getPreferredQuality(ctx)
         var currentConcurrency = getConcurrency(ctx)
-        var autoDisableErrors = isAutoDisableErrorServers(ctx)
 
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
@@ -887,11 +878,6 @@ object MovieFoxSettingsDialog {
                 statusTv.text = if (fails > 1) "ERROR (${fails}x)" else "ERROR"
                 statusTv.setTextColor(safeColor("#F87171"))
                 statusTv.background = pillBg("#2B1216", 10f)
-                if (autoDisableErrors) {
-                    serverSwitches[key]?.isChecked = false
-                    setServerEnabled(ctx, key, false)
-                    refreshStats()
-                }
             }
         }
 
@@ -1689,13 +1675,6 @@ object MovieFoxSettingsDialog {
             isChecked = isFastFetchMode(ctx)
             setOnCheckedChangeListener { _, v -> setFastFetchMode(ctx, v) }
         }
-        val autoDisableSw = Switch(ctx).apply {
-            isChecked = autoDisableErrors
-            setOnCheckedChangeListener { _, v ->
-                autoDisableErrors = v
-                setAutoDisableErrorServers(ctx, v)
-            }
-        }
 
         fun makeToggleCard(title: String, desc: String, sw: Switch) {
             val card = LinearLayout(ctx).apply {
@@ -1729,7 +1708,6 @@ object MovieFoxSettingsDialog {
             speedPane.addView(card)
         }
 
-        makeToggleCard("Auto-Disable Error Servers", "Error aane par server khud OFF ho jayega", autoDisableSw)
         makeToggleCard("Zero-Buffer Mode", "Fast HLS/DASH streams pehle load hon", lowBufferSw)
         makeToggleCard("Turbo Fast Fetch", "Parallel fast timeout (4-5s max)", fastFetchSw)
 
