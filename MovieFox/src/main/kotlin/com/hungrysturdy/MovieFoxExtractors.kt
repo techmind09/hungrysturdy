@@ -6,10 +6,12 @@ import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
-import com.lagradost.cloudstream3.utils.USER_AGENT
 import com.lagradost.cloudstream3.utils.getAndUnpack
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.Jsoup
+
+private const val MF_USER_AGENT =
+    "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
 
 open class CineStreamGenericExtractor(
     override val name: String,
@@ -38,7 +40,7 @@ open class CineStreamGenericExtractor(
                     this.referer = referer ?: "$mainUrl/"
                     this.quality = Qualities.P1080.value
                     this.headers = mapOf(
-                        "User-Agent" to USER_AGENT,
+                        "User-Agent" to MF_USER_AGENT,
                         "Referer" to (referer ?: "$mainUrl/")
                     )
                 }
@@ -50,7 +52,7 @@ open class CineStreamGenericExtractor(
             app.get(
                 cleanUrl,
                 headers = mapOf(
-                    "User-Agent" to USER_AGENT,
+                    "User-Agent" to MF_USER_AGENT,
                     "Referer" to (referer ?: "$mainUrl/")
                 ),
                 timeout = 5L
@@ -84,7 +86,7 @@ open class CineStreamGenericExtractor(
                     this.referer = cleanUrl
                     this.quality = Qualities.P1080.value
                     this.headers = mapOf(
-                        "User-Agent" to USER_AGENT,
+                        "User-Agent" to MF_USER_AGENT,
                         "Referer" to cleanUrl
                     )
                 }
