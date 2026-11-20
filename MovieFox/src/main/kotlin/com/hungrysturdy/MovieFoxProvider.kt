@@ -1437,7 +1437,7 @@ class MovieFoxProvider : MainAPI() {
                                     ).text
                                 }.getOrNull().orEmpty()
 
-                                val detail = if (postHtml.isNotBlank()) parseVegaPost(postHtml) else null
+                                val detail: VegaPostDetail = if (postHtml.isNotBlank()) parseVegaPost(postHtml) else null
                                     ?: return@runCatching
 
                                 val groups = if (isTv) {
