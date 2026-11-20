@@ -543,11 +543,8 @@ class MovieFoxProvider : MainAPI() {
             url.contains("/proxy", true)
     }
 
-    private suspend fun isM3u8Stream(url: String, typeHint: String, headers: Map<String, String>, timeoutSec: Long): Boolean {
-        if (isStreamOrHlsLink(url, ExtractorLinkType.M3U8, typeHint)) {
-            return true
-        }
-        return false
+    private fun isM3u8Stream(url: String, typeHint: String): Boolean {
+        return isStreamOrHlsLink(url, ExtractorLinkType.M3U8, typeHint)
     }
 
     // MovieBox BFF Helpers
@@ -1339,7 +1336,6 @@ class MovieFoxProvider : MainAPI() {
                 emitNow(link, isStream = isHls)
             }
 
-            // Run all enabled server groups in parallel with per-provider timeout cap
             coroutineScope {
                 val tasks = mutableListOf<kotlinx.coroutines.Deferred<Unit>>()
 
@@ -1404,13 +1400,14 @@ class MovieFoxProvider : MainAPI() {
                                 }
 
                                 val mergedHeaders = baseHeaders + (stream.headers ?: emptyMap())
-                                val isHls = isM3u8Stream(streamUrl, stream.type, mergedHeaders, timeoutSec)
+                                val isHls = isM3u8Stream(streamUrl, stream.type)
                                 val finalLabel = stream.label?.takeIf { it.isNotBlank() }
                                     ?: "${endpointName.uppercase()} (${stream.quality ?: "HD"})"
 
                                 emitServerLink(finalLabel, streamUrl, isHls, stream.quality, mergedHeaders)
                             }
                         }
+                        Unit
                     })
                 }
 
@@ -1440,7 +1437,9 @@ class MovieFoxProvider : MainAPI() {
                                     ).text
                                 }.getOrNull().orEmpty()
 
-                                val detail = if (postHtml.isNotBlank()) parseVegaPost(postHtml) else null ?: return@runCatching
+                                val detail = if (postHtml.isNotBlank()) parseVegaPost(postHtml) else null
+                                    ?: return@runCatching
+
                                 val groups = if (isTv) {
                                     detail.seasons.filter { it.number == targetSeason }.flatMap { it.groups }.ifEmpty {
                                         detail.seasons.filter { seasonsInText(it.title) == null }.flatMap { it.groups }
@@ -1497,6 +1496,7 @@ class MovieFoxProvider : MainAPI() {
                             }
                             MovieFoxSettingsDialog.reportServerResult(appCtx, "vegamovies", vSuccess, System.currentTimeMillis() - vStart)
                         }
+                        Unit
                     })
                 }
 
@@ -1572,6 +1572,7 @@ class MovieFoxProvider : MainAPI() {
                             }
                             MovieFoxSettingsDialog.reportServerResult(appCtx, "sflix", sSuccess, System.currentTimeMillis() - sStart)
                         }
+                        Unit
                     })
                 }
 
@@ -1623,6 +1624,7 @@ class MovieFoxProvider : MainAPI() {
                             }
                             MovieFoxSettingsDialog.reportServerResult(appCtx, "prmovies", prSuccess, System.currentTimeMillis() - prStart)
                         }
+                        Unit
                     })
                 }
 
@@ -1728,6 +1730,7 @@ class MovieFoxProvider : MainAPI() {
                             }
                             MovieFoxSettingsDialog.reportServerResult(appCtx, "play4u", p4Success, System.currentTimeMillis() - p4Start)
                         }
+                        Unit
                     })
                 }
 
@@ -1842,6 +1845,7 @@ class MovieFoxProvider : MainAPI() {
                             }
                             MovieFoxSettingsDialog.reportServerResult(appCtx, "moviebox", mbSuccess, System.currentTimeMillis() - mbStart)
                         }
+                        Unit
                     })
                 }
 
