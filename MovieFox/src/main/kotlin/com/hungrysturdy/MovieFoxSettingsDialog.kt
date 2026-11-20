@@ -54,6 +54,9 @@ object MovieFoxSettingsDialog {
     private const val KEY_CONCURRENCY = "mf_concurrency"
     private const val KEY_TIMEOUT_SEC = "mf_timeout_sec"
 
+    private const val DEFAULT_UA =
+        "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+
     private val dialogScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var cachedPrefs: SharedPreferences? = null
     private var cachedManifests: MutableList<NuvioManifestConfig>? = null
@@ -288,7 +291,7 @@ object MovieFoxSettingsDialog {
         return (cachedCs3Servers ?: emptyList()).filter { isServerEnabled(ctx, it.key) }
     }
 
-    private fun readHttpBytes(urlStr: String, timeoutMs: Int = 5000): ByteArray? {
+    private fun readHttpBytes(urlStr: String, timeoutMs: Int = 5500): ByteArray? {
         return runCatching {
             val fixedUrl = toRawGithubUrl(urlStr)
             val conn = (URL(fixedUrl).openConnection() as HttpURLConnection).apply {
@@ -296,8 +299,8 @@ object MovieFoxSettingsDialog {
                 connectTimeout = timeoutMs
                 readTimeout = timeoutMs
                 instanceFollowRedirects = true
-                setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36")
-                setRequestProperty("Accept", "application/json, application/octet-stream, */*")
+                setRequestProperty("User-Agent", DEFAULT_UA)
+                setRequestProperty("Accept", "application/json, application/octet-stream, text/html, */*")
             }
             val code = conn.responseCode
             val bytes = if (code in 200..299) {
@@ -328,7 +331,7 @@ object MovieFoxSettingsDialog {
 
     private suspend fun fetchServersFromCs3Repo(
         repo: Cs3RepoConfig,
-        timeoutMs: Int = 5000
+        timeoutMs: Int = 5500
     ): List<ServerItem> = withContext(Dispatchers.IO) {
         val out = mutableListOf<ServerItem>()
         val rawUrl = toRawGithubUrl(repo.repoUrl)
@@ -424,7 +427,7 @@ object MovieFoxSettingsDialog {
 
     private suspend fun verifyNuvioManifest(
         rawUrl: String,
-        timeoutMs: Int = 4500
+        timeoutMs: Int = 5500
     ): Pair<String, String?> = withContext(Dispatchers.IO) {
         val normalized = normalizeNuvioManifestUrl(rawUrl)
         val bytes = readHttpBytes(normalized, timeoutMs) ?: return@withContext normalized to null
@@ -614,28 +617,38 @@ object MovieFoxSettingsDialog {
         cornerRadius = radius
     }
 
-    private suspend fun probeEndpoint(urlStr: String, timeoutMs: Int = 2200): Pair<Boolean, Long> =
+    private fun trySingleProbe(fixedUrl: String, timeoutMs: Int): Pair<Boolean, Long>? {
+        val start = System.currentTimeMillis()
+        return try {
+            val conn = (URL(fixedUrl).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = timeoutMs
+                readTimeout = timeoutMs
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", DEFAULT_UA)
+                setRequestProperty("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,application/json,*/*;q=0.8")
+                setRequestProperty("Accept-Language", "en-US,en;q=0.9")
+                setRequestProperty("Referer", fixedUrl)
+            }
+            val code = conn.responseCode
+            conn.disconnect()
+            val elapsed = (System.currentTimeMillis() - start).coerceAtLeast(1L)
+            // 200..499 or Cloudflare 503 means the host/endpoint is reachable
+            val alive = code in 200..499 || code == 503
+            alive to elapsed
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private suspend fun probeEndpoint(urlStr: String, timeoutMs: Int = 4500): Pair<Boolean, Long> =
         withContext(Dispatchers.IO) {
             val start = System.currentTimeMillis()
-            try {
-                val fixedUrl = toRawGithubUrl(urlStr)
-                val conn = (URL(fixedUrl).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "GET"
-                    connectTimeout = timeoutMs
-                    readTimeout = timeoutMs
-                    instanceFollowRedirects = true
-                    setRequestProperty(
-                        "User-Agent",
-                        "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 Chrome/124.0.0.0 Mobile Safari/537.36"
-                    )
-                }
-                val code = conn.responseCode
-                conn.disconnect()
-                val elapsed = System.currentTimeMillis() - start
-                (code in 200..499) to elapsed
-            } catch (_: Exception) {
-                false to (System.currentTimeMillis() - start)
-            }
+            val fixedUrl = toRawGithubUrl(urlStr)
+            trySingleProbe(fixedUrl, timeoutMs)?.let { return@withContext it }
+            // Retry once with slightly relaxed timeout before marking error
+            trySingleProbe(fixedUrl, (timeoutMs + 2000).coerceAtMost(7500))?.let { return@withContext it }
+            false to (System.currentTimeMillis() - start).coerceAtLeast(1L)
         }
 
     fun show(ctx: Context) {
@@ -1000,7 +1013,6 @@ object MovieFoxSettingsDialog {
                         statusTv.setTextColor(safeColor("#FBBF24"))
                         dialogScope.launch {
                             val (ok, ms) = probeEndpoint(srv.probeUrl)
-                            reportServerResult(ctx, srv.key, ok, ms)
                             if (dialog.isShowing && isContextAlive(ctx)) {
                                 updateServerBadge(srv.key, ok, ms)
                             }
@@ -1030,7 +1042,7 @@ object MovieFoxSettingsDialog {
         rebuildServersList()
 
         testAllBtn.setOnClickListener {
-            safeToast(ctx, "Testing all servers (Fast / Slow / Error)...")
+            safeToast(ctx, "Testing all servers...")
             val snapshot = SERVERS
             snapshot.forEach { srv ->
                 serverStatusBadges[srv.key]?.apply {
@@ -1049,14 +1061,13 @@ object MovieFoxSettingsDialog {
                 var okCount = 0
                 var errCount = 0
                 results.forEach { (key, ok, ms) ->
-                    reportServerResult(ctx, key, ok, ms)
                     if (dialog.isShowing && isContextAlive(ctx)) {
                         updateServerBadge(key, ok, ms)
                     }
                     if (ok) okCount++ else errCount++
                 }
                 if (dialog.isShowing && isContextAlive(ctx)) {
-                    safeToast(ctx, "Done: $okCount OK, $errCount Error (All shown)")
+                    safeToast(ctx, "Done: $okCount OK, $errCount Error")
                 }
             }
         }
