@@ -101,6 +101,11 @@ object MovieFoxSettingsDialog {
     )
 
     val BASE_SERVERS = listOf(
+        ServerItem("cinestream", "CineStream", "HUB", "https://moviefox.pro/", "#38BDF8"),
+        ServerItem("4khdhub", "4KHDHub", "4K/HDR", "https://4khdhub.dad/", "#F43F5E"),
+        ServerItem("hdhub4u", "HDHub4u", "SITE", "https://hdhub4u.tv/", "#FB923C"),
+        ServerItem("moviesmod", "MoviesMod", "SITE", "https://moviesmod.ltd/", "#A855F7"),
+        ServerItem("moviesdrive", "MoviesDrive", "DRIVE", "https://moviesdrive.cv/", "#22D3EE"),
         ServerItem("purstream", "Purstream", "API", "https://moviefox.pro/api/stream/purstream", "#38BDF8"),
         ServerItem("castle", "Castle", "API", "https://moviefox.pro/api/stream/castle", "#818CF8"),
         ServerItem("watchout", "Watchout", "API", "https://moviefox.pro/api/stream/watchout", "#2DD4BF"),
@@ -571,7 +576,7 @@ object MovieFoxSettingsDialog {
     fun isAutoDisableErrorServers(ctx: Context): Boolean = false
 
     fun setAutoDisableErrorServers(ctx: Context, enabled: Boolean) {
-        // Auto-disable intentionally disabled; users manually turn off error servers via OFF ERRORS or switch
+        // Manual disable via OFF ERRORS button or switch
     }
 
     fun isStreamOnly(ctx: Context): Boolean = isLowBufferMode(ctx)
