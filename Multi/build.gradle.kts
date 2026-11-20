@@ -1,4 +1,4 @@
-version = 5
+version = 6
 cloudstream {
     description = "Multi - Indian Hindi+English Movies&Web Series"
     authors = listOf("sturdyfishstick1")
@@ -17,7 +17,7 @@ cloudstream {
     // You can find a list of available types here:
     // https://recloudstream.github.io/cloudstream/html/app/com.lagradost.cloudstream3/-tv-type/index.html
     tvTypes = listOf(
-        "Movies"
+        "Movies&Series"
     )
     language = "hi"
 
