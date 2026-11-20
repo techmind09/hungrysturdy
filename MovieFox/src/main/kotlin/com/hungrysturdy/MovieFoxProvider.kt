@@ -21,7 +21,6 @@ import org.json.JSONObject
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URI
-import java.net.URLDecoder
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
@@ -76,6 +75,14 @@ class MovieFoxProvider : MainAPI() {
     private val movieBoxSiteUrl = "https://netnaija.film"
     private val movieBoxUa =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+
+    // NetNaija State
+    private val netnaijaDomains = listOf(
+        "https://www.thenetnaija.net",
+        "https://netnaija.xyz",
+        "https://netnaija.com.ng"
+    )
+    private var activeNetnaijaBase = "https://www.thenetnaija.net"
 
     // Play4u State
     private val play4uBaseUrl = "https://play4u.org"
@@ -582,6 +589,122 @@ class MovieFoxProvider : MainAPI() {
             else -> base.replaceFirstChar { it.uppercase() }
         }
         return if (dub.optInt("type", 0) == 1) "$pretty Hardsub" else "$pretty Dub"
+    }
+
+    // NetNaija Helpers
+    private suspend fun getNetnaijaDoc(pathOrUrl: String, timeoutSec: Long): org.jsoup.nodes.Document? {
+        val candidates = (listOf(activeNetnaijaBase.trimEnd('/')) + netnaijaDomains).distinct()
+        val suffix = if (pathOrUrl.startsWith("http")) {
+            val matched = candidates.firstOrNull { pathOrUrl.startsWith(it, ignoreCase = true) }
+            if (matched != null) {
+                pathOrUrl.substring(matched.length)
+            } else {
+                val res = runCatching {
+                    app.get(
+                        pathOrUrl,
+                        headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$activeNetnaijaBase/"),
+                        interceptor = cfKiller,
+                        timeout = timeoutSec
+                    )
+                }.getOrNull() ?: return null
+                return if (res.code in 200..299 && res.text.isNotBlank()) Jsoup.parse(res.text, pathOrUrl) else null
+            }
+        } else {
+            if (pathOrUrl.startsWith("/")) pathOrUrl else "/$pathOrUrl"
+        }
+
+        for (domain in candidates) {
+            val fullUrl = "$domain$suffix"
+            val res = runCatching {
+                app.get(
+                    fullUrl,
+                    headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$domain/"),
+                    interceptor = cfKiller,
+                    timeout = timeoutSec
+                )
+            }.getOrNull()
+            if (res != null && res.code in 200..299 && res.text.isNotBlank()) {
+                activeNetnaijaBase = domain
+                return Jsoup.parse(res.text, domain)
+            }
+        }
+        return null
+    }
+
+    private suspend fun resolveNetnaijaDownloadLink(
+        rawLink: String,
+        refererUrl: String,
+        label: String,
+        seenUrls: MutableSet<String>,
+        timeoutSec: Long,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        emitNow: suspend (ExtractorLink, Boolean) -> Unit
+    ): Boolean {
+        var resolved = normalizeUrl(rawLink, activeNetnaijaBase)
+        if (resolved.isBlank() || isAdUrl(resolved)) return false
+
+        // Follow NetNaija intermediate /d/ or /download/ landing page if present
+        if (resolved.contains("netnaija", true) && (resolved.contains("/d/") || resolved.contains("/download"))) {
+            val dlDoc = getNetnaijaDoc(resolved, timeoutSec)
+            val directHref = dlDoc?.select("a[href*='sabishare'], a[href*='.mp4'], a[href*='.mkv'], a.download-btn, a[href*='/dl/']")
+                ?.firstOrNull()
+                ?.attr("href")
+                ?.trim()
+            if (!directHref.isNullOrBlank()) {
+                resolved = normalizeUrl(directHref, activeNetnaijaBase)
+            }
+        }
+
+        // Resolve Sabishare / NetNaija file host page to direct CDN video URL
+        if (resolved.contains("sabishare.com", true)) {
+            val sabiHtml = runCatching {
+                app.get(
+                    resolved,
+                    headers = mapOf("User-Agent" to USER_AGENT, "Referer" to refererUrl),
+                    interceptor = cfKiller,
+                    timeout = timeoutSec
+                ).text
+            }.getOrNull().orEmpty()
+            val sabiDoc = Jsoup.parse(sabiHtml, resolved)
+            val cdnUrl = sabiDoc.select("a#download-btn[href], a.btn-download[href], video source[src], a[href*='.mp4'], a[href*='.mkv']")
+                .firstOrNull()
+                ?.let { it.attr("href").ifBlank { it.attr("src") } }
+                ?.trim()
+                ?: Regex("""https?://[^"'\s<>]+\.(?:mp4|mkv)(?:\?[^"'\s<>]*)?""", RegexOption.IGNORE_CASE)
+                    .find(sabiHtml)?.value
+            if (!cdnUrl.isNullOrBlank()) {
+                resolved = normalizeUrl(cdnUrl, resolved)
+            }
+        }
+
+        if (resolved.isBlank() || isAdUrl(resolved) || !seenUrls.add(resolved)) return false
+
+        val isDirectMedia = Regex("""(?i)\.(mp4|mkv|webm|m3u8)(\?|$)""").containsMatchIn(resolved) ||
+            resolved.contains("sabishare", true)
+
+        return if (isDirectMedia) {
+            val isHls = isM3u8Stream(resolved, "")
+            val exLink = newExtractorLink(
+                source = "NetNaija",
+                name = buildSourceLabel("NetNaija", label, ""),
+                url = resolved,
+                type = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+            ) {
+                this.referer = refererUrl
+                this.quality = getQuality(label)
+                this.headers = mapOf("User-Agent" to USER_AGENT, "Referer" to refererUrl)
+            }
+            emitNow(exLink, isHls)
+            true
+        } else {
+            var loaded = false
+            loadExtractor(resolved, refererUrl, subtitleCallback) { link ->
+                if (seenUrls.add(link.url)) {
+                    loaded = true
+                }
+            }
+            loaded
+        }
     }
 
     // Play4u Helpers
@@ -1437,7 +1560,7 @@ class MovieFoxProvider : MainAPI() {
                                     ).text
                                 }.getOrNull().orEmpty()
 
-                                val detail: VegaPostDetail = if (postHtml.isNotBlank()) parseVegaPost(postHtml) else null
+                                val detail = if (postHtml.isNotBlank()) parseVegaPost(postHtml) else null
                                     ?: return@runCatching
 
                                 val groups = if (isTv) {
@@ -1734,7 +1857,7 @@ class MovieFoxProvider : MainAPI() {
                     })
                 }
 
-                // 6. MovieBox BFF
+                // 6. MovieBox BFF (netnaija.film BFF)
                 val movieBoxEnabled = appCtx?.let { MovieFoxSettingsDialog.isServerEnabled(it, "moviebox") } ?: true
                 if (movieBoxEnabled && pageTitle.isNotBlank()) {
                     tasks.add(async(Dispatchers.IO) {
@@ -1844,6 +1967,95 @@ class MovieFoxProvider : MainAPI() {
                                 }
                             }
                             MovieFoxSettingsDialog.reportServerResult(appCtx, "moviebox", mbSuccess, System.currentTimeMillis() - mbStart)
+                        }
+                        Unit
+                    })
+                }
+
+                // 7. NetNaija (Direct Scraper)
+                val netnaijaEnabled = appCtx?.let { MovieFoxSettingsDialog.isServerEnabled(it, "netnaija") } ?: true
+                if (netnaijaEnabled && pageTitle.isNotBlank()) {
+                    tasks.add(async(Dispatchers.IO) {
+                        withTimeoutOrNull(perProviderCapMs) {
+                            val nnStart = System.currentTimeMillis()
+                            var nnSuccess = false
+                            runCatching {
+                                val targetSeason = season.toIntOrNull()?.coerceAtLeast(1) ?: 1
+                                val targetEpisode = episode.toIntOrNull()?.coerceAtLeast(1) ?: 1
+                                val encodedQuery = URLEncoder.encode(pageTitle, "UTF-8")
+                                val searchDoc = getNetnaijaDoc("/search?t=$encodedQuery", timeoutSec)
+                                    ?: getNetnaijaDoc("/?s=$encodedQuery", timeoutSec)
+                                    ?: return@runCatching
+
+                                val matchedPostUrl = searchDoc.select("article.sr-one h2 a, article h2.entry-title a, .search-results article a[href]")
+                                    .firstOrNull { a ->
+                                        val href = a.attr("href").trim()
+                                        val candTitle = a.text().trim()
+                                        if (href.isBlank() || candTitle.isBlank()) return@firstOrNull false
+                                        val isVideoPost = href.contains("/videos/", true) ||
+                                            href.contains("/movies/", true) ||
+                                            href.contains("/series/", true)
+                                        val candIsSeries = href.contains("/series/", true) ||
+                                            Regex("""(?i)\bseason\s*\d|\bs\d{1,2}\b""").containsMatchIn(candTitle)
+                                        isVideoPost && (candIsSeries == isTv) && titleMatchesCandidate(candTitle, pageTitle)
+                                    }
+                                    ?.attr("href")
+                                    ?.let { normalizeUrl(it, activeNetnaijaBase) }
+                                    ?: return@runCatching
+
+                                var targetPageUrl = matchedPostUrl
+                                var targetDoc = getNetnaijaDoc(targetPageUrl, timeoutSec) ?: return@runCatching
+
+                                if (isTv) {
+                                    // Navigate Season -> Episode if series landing page
+                                    val seasonLink = targetDoc.select("a[href*='/season-'], .video-seasons a[href]")
+                                        .firstOrNull { a ->
+                                            val txt = a.text() + " " + a.attr("href")
+                                            Regex("""(?i)season[\s-]*0*$targetSeason\b""").containsMatchIn(txt)
+                                        }
+                                        ?.attr("href")
+                                        ?.let { normalizeUrl(it, activeNetnaijaBase) }
+
+                                    if (!seasonLink.isNullOrBlank()) {
+                                        targetPageUrl = seasonLink
+                                        targetDoc = getNetnaijaDoc(targetPageUrl, timeoutSec) ?: return@runCatching
+                                    }
+
+                                    val epLink = targetDoc.select("a[href*='/episode-'], .video-episodes a[href], article h2 a[href]")
+                                        .firstOrNull { a ->
+                                            val txt = a.text() + " " + a.attr("href")
+                                            Regex("""(?i)(?:episode|ep|e)[\s-]*0*$targetEpisode\b""").containsMatchIn(txt)
+                                        }
+                                        ?.attr("href")
+                                        ?.let { normalizeUrl(it, activeNetnaijaBase) }
+                                        ?: return@runCatching
+
+                                    targetPageUrl = epLink
+                                    targetDoc = getNetnaijaDoc(targetPageUrl, timeoutSec) ?: return@runCatching
+                                }
+
+                                // Extract subtitle if attached on NetNaija page
+                                targetDoc.select("a[href*='/sub'], a[href$='.srt'], a[href$='.vtt']").firstOrNull()?.attr("href")?.let { subHref ->
+                                    val subUrl = normalizeUrl(subHref, activeNetnaijaBase)
+                                    if (subUrl.startsWith("http")) {
+                                        subtitleCallback(newSubtitleFile(lang = "English", url = subUrl))
+                                    }
+                                }
+
+                                // Extract video download / stream buttons
+                                val dlAnchors = targetDoc.select(
+                                    ".download-block a[href], .db-one a[href], a[href*='/d/'], a[href*='sabishare.com'], a.btn-download[href]"
+                                )
+                                for (a in dlAnchors) {
+                                    val href = a.attr("href").trim()
+                                    if (href.isBlank() || href.contains("/sub", true)) continue
+                                    val label = a.text().replace(Regex("""\s+"""), " ").trim().ifBlank { "HD" }
+                                    if (resolveNetnaijaDownloadLink(href, targetPageUrl, label, seenUrls, timeoutSec, subtitleCallback, ::emitNow)) {
+                                        nnSuccess = true
+                                    }
+                                }
+                            }
+                            MovieFoxSettingsDialog.reportServerResult(appCtx, "netnaija", nnSuccess, System.currentTimeMillis() - nnStart)
                         }
                         Unit
                     })
