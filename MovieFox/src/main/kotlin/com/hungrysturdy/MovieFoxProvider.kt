@@ -599,6 +599,58 @@ class MovieFoxProvider : MainAPI() {
         }.distinct()
     }
 
+    private suspend fun resolveNuvioCandidateUrl(
+        rawCandidate: String,
+        addonBase: String,
+        timeoutSec: Long
+    ): String? {
+        val normalized = normalizeUrl(rawCandidate, addonBase)
+        if (normalized.isBlank() || isAdUrl(normalized)) return null
+        if (normalized.startsWith("magnet:", ignoreCase = true)) return normalized
+
+        if (Regex("""(?i)\.(m3u8|mp4|mkv|webm|mpd)(\?|$)""").containsMatchIn(normalized)) {
+            return normalized
+        }
+
+        val resp = runCatching {
+            app.get(
+                normalized,
+                headers = mapOf(
+                    "User-Agent" to USER_AGENT,
+                    "Referer" to "$addonBase/",
+                    "Accept" to "*/*"
+                ),
+                timeout = timeoutSec
+            )
+        }.getOrNull() ?: return null
+
+        if (resp.code !in 200..299) return null
+        val finalUrl = resp.url.trim()
+        val body = resp.text.trim()
+
+        if (body.startsWith("#EXTM3U") || Regex("""(?i)\.(m3u8|mp4|mkv|webm|mpd)(\?|$)""").containsMatchIn(finalUrl)) {
+            return finalUrl
+        }
+
+        if (body.startsWith("{")) {
+            val obj = runCatching { JSONObject(body) }.getOrNull()
+            val innerUrl = obj?.optString("url")?.trim().orEmpty()
+                .ifBlank { obj?.optString("streamUrl")?.trim().orEmpty() }
+                .ifBlank { obj?.optString("file")?.trim().orEmpty() }
+            if (innerUrl.startsWith("http") && !isAdUrl(innerUrl)) {
+                return normalizeUrl(innerUrl, addonBase)
+            }
+        }
+
+        val mediaMatch = Regex("""https?://[^\s"'<>\\]+\.(?:m3u8|mp4|mkv|mpd)(?:\?[^\s"'<>\\]*)?""", RegexOption.IGNORE_CASE)
+            .find(body)?.value
+        if (!mediaMatch.isNullOrBlank() && !isAdUrl(mediaMatch)) {
+            return normalizeUrl(mediaMatch, addonBase)
+        }
+
+        return null
+    }
+
     // MovieBox BFF Helpers
     private fun movieBoxClientToken(): String {
         val ts = System.currentTimeMillis() / 1000
@@ -1433,10 +1485,12 @@ class MovieFoxProvider : MainAPI() {
             val tmdbId = Regex("\"tmdbId\":(\\d+)").find(flightText)?.groupValues?.get(1)
             val jsonId = Regex("\"id\":(\\d+)").find(flightText)?.groupValues?.get(1)
             val candidateIds = listOfNotNull(tmdbId, urlId, jsonId).distinct()
-            val primaryId = candidateIds.firstOrNull() ?: return false
+            val primaryId = candidateIds.firstOrNull()
 
             val imdbId = Regex("\"imdbId\":\"(tt\\d+)\"").find(flightText)?.groupValues?.get(1)
                 ?: Regex("tt\\d+").find(rawHtml)?.value.orEmpty()
+
+            if (primaryId == null && pageTitle.isBlank() && imdbId.isBlank()) return false
 
             val isTv = cleanPageUrl.contains("/tv/") ||
                 cleanPageUrl.contains("/dramas/") ||
@@ -1451,10 +1505,14 @@ class MovieFoxProvider : MainAPI() {
             val tvQuery = if (isTv) "&season=$season&episode=$episode" else ""
             val imdbQuery = if (imdbId.isNotBlank()) "&imdbId=$imdbId" else ""
 
-            val watchUrl = if (isTv) {
-                "$mainUrl/watch/tv-$primaryId?s=$season&e=$episode"
+            val watchUrl = if (primaryId != null) {
+                if (isTv) {
+                    "$mainUrl/watch/tv-$primaryId?s=$season&e=$episode"
+                } else {
+                    "$mainUrl/watch/movie-$primaryId"
+                }
             } else {
-                "$mainUrl/watch/movie-$primaryId"
+                cleanPageUrl
             }
 
             val baseHeaders = mapOf(
@@ -1517,6 +1575,7 @@ class MovieFoxProvider : MainAPI() {
                             val eNum = episode.toIntOrNull()?.coerceAtLeast(1) ?: 1
 
                             enabledManifests.forEach { manifest ->
+                                val addonBase = nuvioAddonBaseFromManifest(manifest.manifestUrl)
                                 val candidateUrls = buildNuvioStreamUrls(
                                     manifestUrl = manifest.manifestUrl,
                                     isTv = isTv,
@@ -1546,15 +1605,16 @@ class MovieFoxProvider : MainAPI() {
                                         val sObj = streamsArr.optJSONObject(i) ?: continue
                                         val rawUrl = sObj.optString("url").trim()
                                         val infoHash = sObj.optString("infoHash").trim()
-                                        val finalUrl = when {
-                                            rawUrl.isNotBlank() -> normalizeUrl(rawUrl, nuvioAddonBaseFromManifest(manifest.manifestUrl))
+                                        val candidateUrl = when {
+                                            rawUrl.isNotBlank() -> normalizeUrl(rawUrl, addonBase)
                                             infoHash.isNotBlank() -> {
                                                 val fileIdx = if (sObj.has("fileIdx")) "&index=${sObj.optInt("fileIdx")}" else ""
                                                 "magnet:?xt=urn:btih:$infoHash$fileIdx"
                                             }
                                             else -> ""
                                         }
-                                        if (finalUrl.isBlank() || isAdUrl(finalUrl) || !seenUrls.add(finalUrl)) continue
+                                        val resolvedStreamUrl = resolveNuvioCandidateUrl(candidateUrl, addonBase, timeoutSec)
+                                        if (resolvedStreamUrl.isNullOrBlank() || !seenUrls.add(resolvedStreamUrl)) continue
 
                                         sObj.optJSONArray("subtitles")?.let { subs ->
                                             for (k in 0 until subs.length()) {
@@ -1564,7 +1624,7 @@ class MovieFoxProvider : MainAPI() {
                                                     subtitleCallback(
                                                         newSubtitleFile(
                                                             lang = subObj.optString("lang").ifBlank { "English" },
-                                                            url = normalizeUrl(subUrl, nuvioAddonBaseFromManifest(manifest.manifestUrl))
+                                                            url = normalizeUrl(subUrl, addonBase)
                                                         )
                                                     )
                                                 }
@@ -1577,17 +1637,17 @@ class MovieFoxProvider : MainAPI() {
                                             server = sObj.optString("name").trim(),
                                             info = streamTitle.lines().firstOrNull().orEmpty()
                                         )
-                                        val isHls = isM3u8Stream(finalUrl, "")
+                                        val isHls = isM3u8Stream(resolvedStreamUrl, "")
                                         val qInt = getQuality(streamTitle)
                                         val exLink = newExtractorLink(
                                             source = "Nuvio",
                                             name = if (streamOnly && isHls) "⚡ $tagLabel" else tagLabel,
-                                            url = finalUrl,
+                                            url = resolvedStreamUrl,
                                             type = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
                                         ) {
-                                            this.referer = nuvioAddonBaseFromManifest(manifest.manifestUrl)
+                                            this.referer = "$addonBase/"
                                             this.quality = qInt
-                                            this.headers = mapOf("User-Agent" to USER_AGENT)
+                                            this.headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$addonBase/")
                                         }
                                         emitNow(exLink, isStream = isHls)
                                         nSuccess = true
@@ -1611,6 +1671,10 @@ class MovieFoxProvider : MainAPI() {
                             runCatching {
                                 val baseProbe = normalizeUrl(cs3Srv.probeUrl, mainUrl)
                                 if (baseProbe.isBlank()) return@runCatching
+                                if (baseProbe.substringBefore("?").endsWith(".cs3", ignoreCase = true)) {
+                                    // .cs3 is a compiled plugin zip archive, not a direct video stream URL
+                                    return@runCatching
+                                }
 
                                 val queryCandidates = buildList {
                                     if (pageTitle.isNotBlank()) {
