@@ -1,6 +1,8 @@
 package com.hungrysturdy
 
+import android.content.Context
 import android.util.Base64
+import com.lagradost.cloudstream3.CloudStreamApp
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.base64Decode
@@ -40,6 +42,16 @@ private fun safeB64Decode(value: String): String {
     } catch (_: Exception) {
         ""
     }
+}
+
+private fun isExtractorAllowed(serverKey: String): Boolean {
+    val ctx: Context = CloudStreamApp.context ?: return true
+    return MovieFoxSettingsDialog.isServerEnabled(ctx, serverKey)
+}
+
+private fun recordExtractorHealth(serverKey: String, ok: Boolean, elapsedMs: Long) {
+    val ctx: Context? = CloudStreamApp.context
+    MovieFoxSettingsDialog.reportServerResult(ctx, serverKey, ok, elapsedMs)
 }
 
 class DirectMediaExtractor : ExtractorApi() {
@@ -421,8 +433,14 @@ open class PixeldrainExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        if (!isExtractorAllowed("pixeldrain")) return
+        val start = System.currentTimeMillis()
         val fileId = Regex("""pixeldrain\.[a-z]+/(?:u|api/file|l)/([a-zA-Z0-9_-]+)""", RegexOption.IGNORE_CASE)
-            .find(url)?.groupValues?.get(1) ?: return
+            .find(url)?.groupValues?.get(1)
+        if (fileId == null) {
+            recordExtractorHealth("pixeldrain", false, System.currentTimeMillis() - start)
+            return
+        }
 
         callback.invoke(
             newExtractorLink(
@@ -435,6 +453,7 @@ open class PixeldrainExtractor : ExtractorApi() {
                 this.quality = Qualities.P1080.value
             }
         )
+        recordExtractorHealth("pixeldrain", true, System.currentTimeMillis() - start)
     }
 }
 
@@ -460,6 +479,10 @@ open class VCloudExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        if (!isExtractorAllowed("vegamovies")) return
+        val start = System.currentTimeMillis()
+        var emittedAny = false
+
         val headers = mapOf(
             "User-Agent" to DEFAULT_MOBILE_UA,
             "Referer" to (referer ?: "https://nexdrive.beer/"),
@@ -523,6 +546,7 @@ open class VCloudExtractor : ExtractorApi() {
                         this.headers = mapOf("User-Agent" to DEFAULT_MOBILE_UA)
                     }
                 )
+                emittedAny = true
             }
         }
 
@@ -538,8 +562,11 @@ open class VCloudExtractor : ExtractorApi() {
                             this.headers = mapOf("User-Agent" to DEFAULT_MOBILE_UA)
                         }
                     )
+                    emittedAny = true
                 }
             }
+
+        recordExtractorHealth("vegamovies", emittedAny, System.currentTimeMillis() - start)
     }
 }
 
@@ -557,6 +584,10 @@ open class HubCloudExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        if (!isExtractorAllowed("vegamovies")) return
+        val start = System.currentTimeMillis()
+        var emittedAny = false
+
         val res = runCatching {
             app.get(url, headers = mapOf("User-Agent" to DEFAULT_MOBILE_UA), timeout = 20L)
         }.getOrNull() ?: return
@@ -603,8 +634,11 @@ open class HubCloudExtractor : ExtractorApi() {
                         this.headers = mapOf("User-Agent" to DEFAULT_MOBILE_UA)
                     }
                 )
+                emittedAny = true
             }
         }
+
+        recordExtractorHealth("vegamovies", emittedAny, System.currentTimeMillis() - start)
     }
 }
 
@@ -623,6 +657,8 @@ open class VegaDriveExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        if (!isExtractorAllowed("vegamovies")) return
+        val start = System.currentTimeMillis()
         val page = runCatching {
             app.get(
                 url,
@@ -653,6 +689,7 @@ open class VegaDriveExtractor : ExtractorApi() {
                         this.headers = mapOf("User-Agent" to DEFAULT_MOBILE_UA)
                     }
                 )
+                recordExtractorHealth("vegamovies", true, System.currentTimeMillis() - start)
                 return
             }
             if (res.code != 202) return
@@ -912,6 +949,9 @@ open class GDShineExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        if (!isExtractorAllowed("hindmoviez")) return
+        val start = System.currentTimeMillis()
+
         val shortId = url.substringAfter("/s/").substringBefore("?").substringBefore("#")
         if (shortId.isBlank() || shortId == url) return
         val fileId = runCatching {
@@ -938,6 +978,7 @@ open class GDShineExtractor : ExtractorApi() {
                 this.headers = mapOf("User-Agent" to DEFAULT_MOBILE_UA)
             }
         )
+        recordExtractorHealth("hindmoviez", true, System.currentTimeMillis() - start)
     }
 }
 
