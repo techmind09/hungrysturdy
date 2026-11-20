@@ -31,9 +31,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
+import java.util.zip.ZipInputStream
 
 object MovieFoxSettingsDialog {
 
@@ -144,6 +146,46 @@ object MovieFoxSettingsDialog {
         runCatching { Toast.makeText(ctx, msg, duration).show() }
     }
 
+    private fun toRawGithubUrl(raw: String): String {
+        val trimmed = raw.trim()
+        val fixed = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            trimmed
+        } else {
+            "https://$trimmed"
+        }
+        return when {
+            fixed.contains("github.com/") && fixed.contains("/blob/") -> {
+                fixed.replace("https://github.com/", "https://raw.githubusercontent.com/")
+                    .replace("/blob/", "/")
+            }
+            fixed.contains("github.com/") && fixed.contains("/raw/") -> {
+                fixed.replace("https://github.com/", "https://raw.githubusercontent.com/")
+                    .replace("/raw/", "/")
+            }
+            else -> fixed
+        }
+    }
+
+    private fun normalizeNuvioManifestUrl(raw: String): String {
+        var u = raw.trim()
+        if (u.startsWith("stremio://", ignoreCase = true)) {
+            u = "https://" + u.substringAfter("://")
+        }
+        if (!u.startsWith("http://") && !u.startsWith("https://")) {
+            u = "https://$u"
+        }
+        val qIdx = u.indexOf('?')
+        val pathPart = if (qIdx >= 0) u.substring(0, qIdx) else u
+        val queryPart = if (qIdx >= 0) u.substring(qIdx) else ""
+        val cleanPath = pathPart.trimEnd('/')
+        val withManifest = if (cleanPath.endsWith("/manifest.json", ignoreCase = true)) {
+            cleanPath
+        } else {
+            "$cleanPath/manifest.json"
+        }
+        return "$withManifest$queryPart"
+    }
+
     private fun prefs(ctx: Context): SharedPreferences =
         cachedPrefs ?: ctx.applicationContext
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -246,93 +288,155 @@ object MovieFoxSettingsDialog {
         return (cachedCs3Servers ?: emptyList()).filter { isServerEnabled(ctx, it.key) }
     }
 
-    private suspend fun fetchServersFromCs3Repo(
-        repo: Cs3RepoConfig,
-        timeoutMs: Int = 3500
-    ): List<ServerItem> = withContext(Dispatchers.IO) {
-        val out = mutableListOf<ServerItem>()
-        runCatching {
-            val fixedUrl = if (repo.repoUrl.startsWith("http")) repo.repoUrl else "https://${repo.repoUrl}"
+    private fun readHttpBytes(urlStr: String, timeoutMs: Int = 5000): ByteArray? {
+        return runCatching {
+            val fixedUrl = toRawGithubUrl(urlStr)
             val conn = (URL(fixedUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = timeoutMs
                 readTimeout = timeoutMs
                 instanceFollowRedirects = true
                 setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36")
+                setRequestProperty("Accept", "application/json, application/octet-stream, */*")
             }
             val code = conn.responseCode
-            val body = if (code in 200..299) {
-                conn.inputStream.bufferedReader().use { it.readText() }
+            val bytes = if (code in 200..299) {
+                conn.inputStream.use { it.readBytes() }
             } else {
-                ""
+                null
             }
             conn.disconnect()
-            if (body.isBlank()) return@runCatching
+            bytes
+        }.getOrNull()
+    }
 
-            val rootJson = JSONObject(body)
-            val pluginsArr = rootJson.optJSONArray("plugins") ?: JSONArray()
-            val manifestListUrl = rootJson.optString("manifestList", "").trim()
-
-            val entries = mutableListOf<JSONObject>()
-            for (i in 0 until pluginsArr.length()) {
-                pluginsArr.optJSONObject(i)?.let { entries.add(it) }
+    private fun extractManifestJsonFromCs3Zip(bytes: ByteArray): JSONObject? {
+        return runCatching {
+            ZipInputStream(ByteArrayInputStream(bytes)).use { zis ->
+                var entry = zis.nextEntry
+                while (entry != null) {
+                    if (!entry.isDirectory && entry.name.endsWith("manifest.json", ignoreCase = true)) {
+                        val content = zis.bufferedReader().use { it.readText() }
+                        return@runCatching JSONObject(content)
+                    }
+                    entry = zis.nextEntry
+                }
             }
+            null
+        }.getOrNull()
+    }
 
-            if (entries.isEmpty() && manifestListUrl.isNotBlank()) {
-                val listUrl = if (manifestListUrl.startsWith("http")) {
-                    manifestListUrl
-                } else {
-                    val base = fixedUrl.substringBeforeLast('/')
-                    "$base/${manifestListUrl.trimStart('/')}"
+    private suspend fun fetchServersFromCs3Repo(
+        repo: Cs3RepoConfig,
+        timeoutMs: Int = 5000
+    ): List<ServerItem> = withContext(Dispatchers.IO) {
+        val out = mutableListOf<ServerItem>()
+        val rawUrl = toRawGithubUrl(repo.repoUrl)
+        val bytes = readHttpBytes(rawUrl, timeoutMs) ?: return@withContext emptyList()
+        if (bytes.isEmpty()) return@withContext emptyList()
+
+        // Case 1: Direct .cs3 file URL (e.g. MovieBox.cs3)
+        if (rawUrl.substringBefore("?").endsWith(".cs3", ignoreCase = true)) {
+            val mObj = extractManifestJsonFromCs3Zip(bytes)
+            val pName = mObj?.optString("name", "")?.trim().orEmpty()
+                .ifBlank { mObj?.optString("internalName", "")?.trim().orEmpty() }
+                .ifBlank { rawUrl.substringBefore("?").substringAfterLast("/").removeSuffix(".cs3") }
+            val slug = pName.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
+            out.add(
+                ServerItem(
+                    key = "cs3_${repo.id.takeLast(6)}_${slug.ifBlank { "plugin" }}",
+                    name = pName,
+                    tag = "CS3",
+                    probeUrl = rawUrl,
+                    accentHex = "#34D399",
+                    isCustom = true
+                )
+            )
+            return@withContext out.distinctBy { it.key }
+        }
+
+        // Case 2: repo.json (or plugins.json array/object)
+        val body = runCatching { String(bytes, Charsets.UTF_8).trim() }.getOrDefault("")
+        if (body.isBlank()) return@withContext emptyList()
+
+        val entries = mutableListOf<JSONObject>()
+        runCatching {
+            if (body.startsWith("[")) {
+                val arr = JSONArray(body)
+                for (i in 0 until arr.length()) {
+                    arr.optJSONObject(i)?.let { entries.add(it) }
                 }
-                val listConn = (URL(listUrl).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "GET"
-                    connectTimeout = timeoutMs
-                    readTimeout = timeoutMs
-                    instanceFollowRedirects = true
-                    setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36")
+            } else if (body.startsWith("{")) {
+                val rootJson = JSONObject(body)
+                val pluginsArr = rootJson.optJSONArray("plugins")
+                    ?: rootJson.optJSONArray("items")
+                    ?: JSONArray()
+                for (i in 0 until pluginsArr.length()) {
+                    pluginsArr.optJSONObject(i)?.let { entries.add(it) }
                 }
-                val listBody = if (listConn.responseCode in 200..299) {
-                    listConn.inputStream.bufferedReader().use { it.readText() }
-                } else {
-                    ""
-                }
-                listConn.disconnect()
-                if (listBody.isNotBlank()) {
-                    val subArr = JSONArray(listBody)
-                    for (j in 0 until subArr.length()) {
-                        subArr.optJSONObject(j)?.let { entries.add(it) }
+                val manifestListUrl = rootJson.optString("manifestList", "").trim()
+                if (entries.isEmpty() && manifestListUrl.isNotBlank()) {
+                    val listUrl = if (manifestListUrl.startsWith("http")) {
+                        toRawGithubUrl(manifestListUrl)
+                    } else {
+                        val base = rawUrl.substringBeforeLast('/')
+                        "$base/${manifestListUrl.trimStart('/')}"
+                    }
+                    val listBytes = readHttpBytes(listUrl, timeoutMs)
+                    if (listBytes != null && listBytes.isNotEmpty()) {
+                        val subArr = JSONArray(String(listBytes, Charsets.UTF_8))
+                        for (j in 0 until subArr.length()) {
+                            subArr.optJSONObject(j)?.let { entries.add(it) }
+                        }
                     }
                 }
             }
-
-            entries.forEachIndexed { idx, pObj ->
-                val rawName = pObj.optString("name", "").trim()
-                val internalName = pObj.optString("internalName", "").trim()
-                val probe = pObj.optString("url", "")
-                    .ifBlank { pObj.optString("status", "") }
-                    .ifBlank { fixedUrl }
-                    .trim()
-                if (rawName.isBlank() && internalName.isBlank()) return@forEachIndexed
-                val finalName = rawName.ifBlank { internalName }
-                val slug = (internalName.ifBlank { finalName })
-                    .lowercase()
-                    .replace(Regex("[^a-z0-9]+"), "_")
-                    .trim('_')
-                val uniqueKey = "cs3_${repo.id.takeLast(6)}_${slug.ifBlank { "srv$idx" }}"
-                out.add(
-                    ServerItem(
-                        key = uniqueKey,
-                        name = finalName,
-                        tag = "CS3",
-                        probeUrl = probe,
-                        accentHex = "#38BDF8",
-                        isCustom = true
-                    )
-                )
-            }
         }
+
+        entries.forEachIndexed { idx, pObj ->
+            val rawName = pObj.optString("name", "").trim()
+            val internalName = pObj.optString("internalName", "").trim()
+            val pluginUrl = pObj.optString("url", "")
+                .ifBlank { pObj.optString("status", "") }
+                .ifBlank { pObj.optString("repositoryUrl", "") }
+                .ifBlank { rawUrl }
+                .trim()
+            if (rawName.isBlank() && internalName.isBlank()) return@forEachIndexed
+            val finalName = rawName.ifBlank { internalName }
+            val resolvedProbe = toRawGithubUrl(pluginUrl)
+            val slug = (internalName.ifBlank { finalName })
+                .lowercase()
+                .replace(Regex("[^a-z0-9]+"), "_")
+                .trim('_')
+            val uniqueKey = "cs3_${repo.id.takeLast(6)}_${slug.ifBlank { "srv$idx" }}"
+            out.add(
+                ServerItem(
+                    key = uniqueKey,
+                    name = finalName,
+                    tag = "CS3",
+                    probeUrl = resolvedProbe,
+                    accentHex = "#38BDF8",
+                    isCustom = true
+                )
+            )
+        }
+
         out.distinctBy { it.key }
+    }
+
+    private suspend fun verifyNuvioManifest(
+        rawUrl: String,
+        timeoutMs: Int = 4500
+    ): Pair<String, String?> = withContext(Dispatchers.IO) {
+        val normalized = normalizeNuvioManifestUrl(rawUrl)
+        val bytes = readHttpBytes(normalized, timeoutMs) ?: return@withContext normalized to null
+        val text = runCatching { String(bytes, Charsets.UTF_8).trim() }.getOrDefault("")
+        val parsedName = runCatching {
+            if (text.startsWith("{")) {
+                JSONObject(text).optString("name", "").trim().takeIf { it.isNotBlank() }
+            } else null
+        }.getOrNull()
+        normalized to parsedName
     }
 
     fun isServerEnabled(ctx: Context, key: String): Boolean =
@@ -439,7 +543,7 @@ object MovieFoxSettingsDialog {
 
     fun deriveManifestLabel(rawUrl: String): String {
         return try {
-            val normalized = if (rawUrl.startsWith("http")) rawUrl else "https://$rawUrl"
+            val normalized = normalizeNuvioManifestUrl(rawUrl)
             val host = URI(normalized).host.orEmpty().removePrefix("www.")
             host.replaceFirstChar { it.uppercase() }.ifBlank { "Nuvio Manifest" }
         } catch (_: Exception) {
@@ -516,7 +620,7 @@ object MovieFoxSettingsDialog {
         withContext(Dispatchers.IO) {
             val start = System.currentTimeMillis()
             try {
-                val fixedUrl = if (urlStr.startsWith("http")) urlStr else "https://$urlStr"
+                val fixedUrl = toRawGithubUrl(urlStr)
                 val conn = (URL(fixedUrl).openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
                     connectTimeout = timeoutMs
@@ -986,7 +1090,7 @@ object MovieFoxSettingsDialog {
         }
 
         cs3AddBox.addView(TextView(ctx).apply {
-            text = "+ Add CS3 Repository & Fetch Servers"
+            text = "+ Add CS3 Repository / .cs3 & Fetch Servers"
             textSize = 14.5f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(safeColor("#38BDF8"))
@@ -1019,7 +1123,7 @@ object MovieFoxSettingsDialog {
         }
 
         val cs3UrlInput = EditText(ctx).apply {
-            hint = "https://.../repo.json"
+            hint = "https://.../repo.json or MovieBox.cs3"
             setHintTextColor(safeColor("#64748B"))
             setTextColor(Color.WHITE)
             textSize = 12.5f
@@ -1057,19 +1161,31 @@ object MovieFoxSettingsDialog {
         val cs3RepoListHolder = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
 
         fun syncCs3ServersIntoList(repos: List<Cs3RepoConfig>) {
-            val existingByKey = (cachedCs3Servers ?: mutableListOf()).associateBy { it.key }
-            val mergedCustom = mutableListOf<ServerItem>()
-            repos.filter { it.enabled }.forEach { repo ->
-                for (i in 0 until repo.serverCount.coerceAtLeast(1)) {
-                    val key = "cs3_${repo.id.takeLast(6)}_srv$i"
-                    existingByKey[key]?.let { mergedCustom.add(it) }
+            val activePrefixes = repos.filter { it.enabled }.map { "cs3_${it.id.takeLast(6)}_" }
+            val actualCustom = (cachedCs3Servers ?: mutableListOf()).filter { srv ->
+                activePrefixes.any { prefix -> srv.key.startsWith(prefix) }
+            }
+            saveCs3Servers(ctx, actualCustom)
+            rebuildServersList()
+        }
+
+        fun fetchAndApplyCs3Repo(repo: Cs3RepoConfig) {
+            safeToast(ctx, "Fetching CS3 servers...")
+            dialogScope.launch {
+                val fetched = fetchServersFromCs3Repo(repo)
+                val prefix = "cs3_${repo.id.takeLast(6)}_"
+                val updatedCustom = ((cachedCs3Servers ?: mutableListOf())
+                    .filterNot { it.key.startsWith(prefix) } + fetched)
+                    .distinctBy { it.key }
+                saveCs3Servers(ctx, updatedCustom)
+                repo.serverCount = fetched.size
+                saveCs3Repos(ctx, cs3RepoList)
+                if (dialog.isShowing && isContextAlive(ctx)) {
+                    renderCs3Repos()
+                    rebuildServersList()
+                    safeToast(ctx, "${fetched.size} CS3 servers loaded!")
                 }
             }
-            val actualCustom = (cachedCs3Servers ?: mutableListOf()).filter { srv ->
-                repos.any { it.enabled && srv.key.startsWith("cs3_${it.id.takeLast(6)}_") }
-            }
-            saveCs3Servers(ctx, actualCustom.ifEmpty { mergedCustom })
-            rebuildServersList()
         }
 
         fun renderCs3Repos() {
@@ -1122,24 +1238,7 @@ object MovieFoxSettingsDialog {
                         ViewGroup.LayoutParams.WRAP_CONTENT,
                         ViewGroup.LayoutParams.WRAP_CONTENT
                     ).apply { marginEnd = dp(ctx, 6) }
-                    setOnClickListener {
-                        safeToast(ctx, "Fetching CS3 servers...")
-                        dialogScope.launch {
-                            val fetched = fetchServersFromCs3Repo(repo)
-                            val prefix = "cs3_${repo.id.takeLast(6)}_"
-                            val updatedCustom = ((cachedCs3Servers ?: mutableListOf())
-                                .filterNot { it.key.startsWith(prefix) } + fetched)
-                                .distinctBy { it.key }
-                            saveCs3Servers(ctx, updatedCustom)
-                            repo.serverCount = fetched.size
-                            saveCs3Repos(ctx, cs3RepoList)
-                            if (dialog.isShowing && isContextAlive(ctx)) {
-                                renderCs3Repos()
-                                rebuildServersList()
-                                safeToast(ctx, "${fetched.size} CS3 servers loaded!")
-                            }
-                        }
-                    }
+                    setOnClickListener { fetchAndApplyCs3Repo(repo) }
                 }
 
                 val delBtn = TextView(ctx).apply {
@@ -1204,10 +1303,12 @@ object MovieFoxSettingsDialog {
                     safeToast(ctx, "Pehle CS3 repo URL dalein")
                     return@setOnClickListener
                 }
-                if (!rawUrl.startsWith("http://") && !rawUrl.startsWith("https://")) {
+                if (!rawUrl.startsWith("http://") && !rawUrl.startsWith("https://") && !rawUrl.startsWith("github.com", true)) {
                     rawUrl = "https://$rawUrl"
                 }
-                val repoName = cs3NameInput.text.toString().trim().ifEmpty { deriveManifestLabel(rawUrl) }
+                val repoName = cs3NameInput.text.toString().trim().ifEmpty {
+                    rawUrl.substringBefore("?").substringAfterLast("/").removeSuffix(".cs3").ifBlank { deriveManifestLabel(rawUrl) }
+                }
                 val newRepo = Cs3RepoConfig(
                     id = System.currentTimeMillis().toString(),
                     name = repoName,
@@ -1220,22 +1321,7 @@ object MovieFoxSettingsDialog {
                 cs3NameInput.setText("")
                 cs3UrlInput.setText("")
                 renderCs3Repos()
-
-                dialogScope.launch {
-                    val fetched = fetchServersFromCs3Repo(newRepo)
-                    val prefix = "cs3_${newRepo.id.takeLast(6)}_"
-                    val updatedCustom = ((cachedCs3Servers ?: mutableListOf())
-                        .filterNot { it.key.startsWith(prefix) } + fetched)
-                        .distinctBy { it.key }
-                    saveCs3Servers(ctx, updatedCustom)
-                    newRepo.serverCount = fetched.size
-                    saveCs3Repos(ctx, cs3RepoList)
-                    if (dialog.isShowing && isContextAlive(ctx)) {
-                        renderCs3Repos()
-                        rebuildServersList()
-                        safeToast(ctx, "$repoName: ${fetched.size} CS3 servers fetched!")
-                    }
-                }
+                fetchAndApplyCs3Repo(newRepo)
             }
         }
 
@@ -1258,7 +1344,7 @@ object MovieFoxSettingsDialog {
         }
 
         nuvioAddBox.addView(TextView(ctx).apply {
-            text = "+ Add Nuvio Manifest URL"
+            text = "+ Add & Fetch Nuvio Manifest"
             textSize = 14.5f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(safeColor("#C084FC"))
@@ -1412,36 +1498,46 @@ object MovieFoxSettingsDialog {
         }
 
         val addManifestBtn = Button(ctx).apply {
-            text = "SAVE NUVIO MANIFEST"
+            text = "SAVE & FETCH NUVIO MANIFEST"
             textSize = 11.5f
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
             background = pillBg("#9333EA", 15f)
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 40))
             setOnClickListener {
-                var rawUrl = manifestUrlInput.text.toString().trim()
+                val rawUrl = manifestUrlInput.text.toString().trim()
                 if (rawUrl.isBlank()) {
                     safeToast(ctx, "Pehle Nuvio manifest URL dalein")
                     return@setOnClickListener
                 }
-                if (!rawUrl.startsWith("http://") && !rawUrl.startsWith("https://")) {
-                    rawUrl = "https://$rawUrl"
-                }
-                val customName = labelInput.text.toString().trim().ifEmpty { deriveManifestLabel(rawUrl) }
-                nuvioList.add(
-                    NuvioManifestConfig(
-                        id = System.currentTimeMillis().toString(),
-                        label = customName,
-                        manifestUrl = rawUrl,
-                        enabled = true
-                    )
+                val manualName = labelInput.text.toString().trim()
+                val newItem = NuvioManifestConfig(
+                    id = System.currentTimeMillis().toString(),
+                    label = manualName.ifEmpty { deriveManifestLabel(rawUrl) },
+                    manifestUrl = normalizeNuvioManifestUrl(rawUrl),
+                    enabled = true
                 )
+                nuvioList.add(newItem)
                 saveNuvioManifests(ctx, nuvioList)
                 labelInput.setText("")
                 manifestUrlInput.setText("")
                 refreshStats()
                 renderNuvioList()
-                safeToast(ctx, "$customName saved!")
+                safeToast(ctx, "Fetching Nuvio manifest...")
+
+                dialogScope.launch {
+                    val (verifiedUrl, fetchedName) = verifyNuvioManifest(rawUrl)
+                    newItem.manifestUrl = verifiedUrl
+                    if (manualName.isEmpty() && !fetchedName.isNullOrBlank()) {
+                        newItem.label = fetchedName
+                    }
+                    saveNuvioManifests(ctx, nuvioList)
+                    if (dialog.isShowing && isContextAlive(ctx)) {
+                        renderNuvioList()
+                        refreshStats()
+                        safeToast(ctx, "${newItem.label} ready!")
+                    }
+                }
             }
         }
 
