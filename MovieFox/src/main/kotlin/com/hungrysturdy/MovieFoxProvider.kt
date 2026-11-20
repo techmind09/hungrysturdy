@@ -30,7 +30,7 @@ class MovieFoxProvider : MainAPI() {
 
     override var mainUrl = "https://moviefox.pro"
     override var name = "MovieFox"
-    override var lang = "en"
+    override var lang = "hi"
     override val hasMainPage = true
 
     private val cfKiller by lazy { CloudflareKiller() }
@@ -712,7 +712,7 @@ class MovieFoxProvider : MainAPI() {
                                 "Referer" to srcUrl
                             )
                         }
-                        emitNow(link, isStream = isHls)
+                        emitNow(link, isHls)
                         anyEmitted = true
                     } else {
                         var hostFound = false
@@ -720,7 +720,7 @@ class MovieFoxProvider : MainAPI() {
                             if (seenUrls.add(exLink.url)) {
                                 hostFound = true
                                 runBlocking {
-                                    emitNow(exLink, isStream = isStreamOrHlsLink(exLink.url, exLink.type))
+                                    emitNow(exLink, isStreamOrHlsLink(exLink.url, exLink.type))
                                 }
                             }
                         }
@@ -1740,7 +1740,7 @@ class MovieFoxProvider : MainAPI() {
                     this.quality = getQuality(qualityStr)
                     this.headers = customHeaders
                 }
-                emitNow(link, isStream = isHls)
+                emitNow(link, isHls)
             }
 
             coroutineScope {
@@ -1871,7 +1871,7 @@ class MovieFoxProvider : MainAPI() {
                                             this.quality = qInt
                                             this.headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$addonBase/")
                                         }
-                                        emitNow(exLink, isStream = isHls)
+                                        emitNow(exLink, isHls)
                                         nSuccess = true
                                     }
                                     if (nSuccess) break
@@ -2119,7 +2119,7 @@ class MovieFoxProvider : MainAPI() {
                                                                 this.quality = tier
                                                                 this.headers = mapOf("User-Agent" to USER_AGENT)
                                                             }
-                                                            emitNow(exLink, isStream = false)
+                                                            emitNow(exLink, false)
                                                             vSuccess = true
                                                         }
                                                     }
@@ -2197,7 +2197,7 @@ class MovieFoxProvider : MainAPI() {
                                                     this.headers = mapOf("Origin" to sflixPlayerUrl, "Referer" to "$sflixPlayerUrl/", "User-Agent" to sflixUa)
                                                     this.quality = maxRes
                                                 }
-                                                emitNow(exLink, isStream = lType != ExtractorLinkType.VIDEO)
+                                                emitNow(exLink, lType != ExtractorLinkType.VIDEO)
                                                 sSuccess = true
                                             }
                                         }
@@ -2245,11 +2245,11 @@ class MovieFoxProvider : MainAPI() {
                                             val detailDoc = Jsoup.parse(detailHtml, activePrmoviesBase)
                                             val ok = if (matchedUrl.contains("/episode/", true)) {
                                                 resolvePrmoviesEpisodePage(detailDoc, matchedUrl, seenUrls, timeoutSec) { ex ->
-                                                    emitNow(ex, isStream = isStreamOrHlsLink(ex.url, ex.type))
+                                                    emitNow(ex, isStreamOrHlsLink(ex.url, ex.type))
                                                 }
                                             } else {
                                                 resolvePrmoviesPagePlayer(detailDoc, seenUrls, timeoutSec) { ex ->
-                                                    emitNow(ex, isStream = isStreamOrHlsLink(ex.url, ex.type))
+                                                    emitNow(ex, isStreamOrHlsLink(ex.url, ex.type))
                                                 }
                                             }
                                             if (ok) prSuccess = true
@@ -2327,7 +2327,7 @@ class MovieFoxProvider : MainAPI() {
                                                     this.headers = p4StreamHeaders
                                                     this.referer = "$play4uBaseUrl/"
                                                 }
-                                                emitNow(exLink, isStream = true)
+                                                emitNow(exLink, true)
                                                 p4Success = true
                                             }
                                         }
@@ -2355,7 +2355,7 @@ class MovieFoxProvider : MainAPI() {
                                                         this.headers = p4StreamHeaders
                                                         this.referer = "$play4uBaseUrl/"
                                                     }
-                                                    emitNow(exLink, isStream = true)
+                                                    emitNow(exLink, true)
                                                     p4Success = true
                                                 }
                                             }
@@ -2440,7 +2440,7 @@ class MovieFoxProvider : MainAPI() {
                                                         this.headers = mbPlayHeaders
                                                         this.referer = "$movieBoxSiteUrl/"
                                                     }
-                                                    emitNow(exLink, isStream = false)
+                                                    emitNow(exLink, false)
                                                     mbSuccess = true
                                                 }
                                             }
@@ -2454,7 +2454,7 @@ class MovieFoxProvider : MainAPI() {
                                                             this.headers = mbPlayHeaders
                                                             this.referer = "$movieBoxSiteUrl/"
                                                         }
-                                                        emitNow(exLink, isStream = true)
+                                                        emitNow(exLink, true)
                                                         mbSuccess = true
                                                     }
                                                 }
