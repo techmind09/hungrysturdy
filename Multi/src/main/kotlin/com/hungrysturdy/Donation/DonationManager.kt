@@ -1,4 +1,4 @@
-package com.hungrysturdy
+package com.hungrysturdy.Donation
 
 import android.content.ClipData
 import android.content.ClipboardManager
