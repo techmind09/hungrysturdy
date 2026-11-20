@@ -515,7 +515,7 @@ class MovieFoxProvider : MainAPI() {
     private fun normalizeUrl(rawUrl: String, baseHost: String = mainUrl): String {
         val trimmed = rawUrl.replace("\\/", "/").trim()
         return when {
-            trimmed.startsWith("http://") || trimmed.startsWith("https://") -> trimmed
+            trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("magnet:") -> trimmed
             trimmed.startsWith("//") -> "https:$trimmed"
             else -> "${baseHost.trimEnd('/')}/${trimmed.trimStart('/')}"
         }
@@ -552,6 +552,51 @@ class MovieFoxProvider : MainAPI() {
 
     private fun isM3u8Stream(url: String, typeHint: String): Boolean {
         return isStreamOrHlsLink(url, ExtractorLinkType.M3U8, typeHint)
+    }
+
+    // Nuvio / Stremio Manifest Helpers
+    private fun nuvioAddonBaseFromManifest(manifestUrl: String): String {
+        val normalized = if (manifestUrl.startsWith("http")) manifestUrl.trim() else "https://${manifestUrl.trim()}"
+        val withoutQuery = normalized.substringBefore("?")
+        return if (withoutQuery.endsWith("/manifest.json", ignoreCase = true)) {
+            withoutQuery.dropLast("/manifest.json".length)
+        } else {
+            withoutQuery.trimEnd('/')
+        }
+    }
+
+    private fun nuvioQuerySuffix(manifestUrl: String): String {
+        val idx = manifestUrl.indexOf('?')
+        return if (idx >= 0) manifestUrl.substring(idx) else ""
+    }
+
+    private fun buildNuvioStreamUrls(
+        manifestUrl: String,
+        isTv: Boolean,
+        imdbId: String,
+        candidateIds: List<String>,
+        seasonNum: Int,
+        episodeNum: Int
+    ): List<String> {
+        val base = nuvioAddonBaseFromManifest(manifestUrl)
+        val qSuffix = nuvioQuerySuffix(manifestUrl)
+        val stremioType = if (isTv) "series" else "movie"
+
+        val ids = buildList {
+            if (imdbId.startsWith("tt")) add(imdbId)
+            candidateIds.forEach { cid ->
+                if (cid.isNotBlank()) {
+                    add("tmdb:$cid")
+                    add(cid)
+                }
+            }
+        }.distinct()
+
+        return ids.map { rawId ->
+            val streamId = if (isTv) "$rawId:$seasonNum:$episodeNum" else rawId
+            val encodedId = Uri.encode(streamId, ":")
+            "$base/stream/$stremioType/$encodedId.json$qSuffix"
+        }.distinct()
     }
 
     // MovieBox BFF Helpers
@@ -1459,6 +1504,191 @@ class MovieFoxProvider : MainAPI() {
 
             coroutineScope {
                 val tasks = mutableListOf<kotlinx.coroutines.Deferred<Unit>>()
+
+                // 0. Nuvio Addon Manifests (Stremio stream endpoints)
+                val nuvioEnabled = appCtx?.let { MovieFoxSettingsDialog.isServerEnabled(it, "nuvio") } ?: true
+                val enabledManifests = appCtx?.let { MovieFoxSettingsDialog.getNuvioManifests(it).filter { m -> m.enabled } }.orEmpty()
+                if (nuvioEnabled && enabledManifests.isNotEmpty()) {
+                    tasks.add(async(Dispatchers.IO) {
+                        withTimeoutOrNull(perProviderCapMs) {
+                            val nStart = System.currentTimeMillis()
+                            var nSuccess = false
+                            val sNum = season.toIntOrNull()?.coerceAtLeast(1) ?: 1
+                            val eNum = episode.toIntOrNull()?.coerceAtLeast(1) ?: 1
+
+                            enabledManifests.forEach { manifest ->
+                                val candidateUrls = buildNuvioStreamUrls(
+                                    manifestUrl = manifest.manifestUrl,
+                                    isTv = isTv,
+                                    imdbId = imdbId,
+                                    candidateIds = candidateIds,
+                                    seasonNum = sNum,
+                                    episodeNum = eNum
+                                )
+                                for (streamEndpoint in candidateUrls) {
+                                    val respText = runCatching {
+                                        app.get(
+                                            streamEndpoint,
+                                            headers = mapOf(
+                                                "User-Agent" to USER_AGENT,
+                                                "Accept" to "application/json, text/plain, */*"
+                                            ),
+                                            timeout = timeoutSec
+                                        ).text
+                                    }.getOrNull().orEmpty()
+                                    if (respText.isBlank()) continue
+
+                                    val streamsArr = runCatching {
+                                        JSONObject(respText).optJSONArray("streams")
+                                    }.getOrNull() ?: continue
+
+                                    for (i in 0 until streamsArr.length()) {
+                                        val sObj = streamsArr.optJSONObject(i) ?: continue
+                                        val rawUrl = sObj.optString("url").trim()
+                                        val infoHash = sObj.optString("infoHash").trim()
+                                        val finalUrl = when {
+                                            rawUrl.isNotBlank() -> normalizeUrl(rawUrl, nuvioAddonBaseFromManifest(manifest.manifestUrl))
+                                            infoHash.isNotBlank() -> {
+                                                val fileIdx = if (sObj.has("fileIdx")) "&index=${sObj.optInt("fileIdx")}" else ""
+                                                "magnet:?xt=urn:btih:$infoHash$fileIdx"
+                                            }
+                                            else -> ""
+                                        }
+                                        if (finalUrl.isBlank() || isAdUrl(finalUrl) || !seenUrls.add(finalUrl)) continue
+
+                                        sObj.optJSONArray("subtitles")?.let { subs ->
+                                            for (k in 0 until subs.length()) {
+                                                val subObj = subs.optJSONObject(k) ?: continue
+                                                val subUrl = subObj.optString("url").trim()
+                                                if (subUrl.isNotBlank()) {
+                                                    subtitleCallback(
+                                                        newSubtitleFile(
+                                                            lang = subObj.optString("lang").ifBlank { "English" },
+                                                            url = normalizeUrl(subUrl, nuvioAddonBaseFromManifest(manifest.manifestUrl))
+                                                        )
+                                                    )
+                                                }
+                                            }
+                                        }
+
+                                        val streamTitle = sObj.optString("title").ifBlank { sObj.optString("name") }.trim()
+                                        val tagLabel = buildSourceLabel(
+                                            siteTag = "Nuvio • ${manifest.label}",
+                                            server = sObj.optString("name").trim(),
+                                            info = streamTitle.lines().firstOrNull().orEmpty()
+                                        )
+                                        val isHls = isM3u8Stream(finalUrl, "")
+                                        val qInt = getQuality(streamTitle)
+                                        val exLink = newExtractorLink(
+                                            source = "Nuvio",
+                                            name = if (streamOnly && isHls) "⚡ $tagLabel" else tagLabel,
+                                            url = finalUrl,
+                                            type = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+                                        ) {
+                                            this.referer = nuvioAddonBaseFromManifest(manifest.manifestUrl)
+                                            this.quality = qInt
+                                            this.headers = mapOf("User-Agent" to USER_AGENT)
+                                        }
+                                        emitNow(exLink, isStream = isHls)
+                                        nSuccess = true
+                                    }
+                                    if (nSuccess) break
+                                }
+                            }
+                            MovieFoxSettingsDialog.reportServerResult(appCtx, "nuvio", nSuccess, System.currentTimeMillis() - nStart)
+                        }
+                        Unit
+                    })
+                }
+
+                // 0b. Cloudstream 3 Repository Servers (fetched from CS3 repo.json)
+                val cs3Servers = appCtx?.let { MovieFoxSettingsDialog.getEnabledCs3Servers(it) }.orEmpty().take(maxConcurrency)
+                cs3Servers.forEach { cs3Srv ->
+                    tasks.add(async(Dispatchers.IO) {
+                        withTimeoutOrNull(perProviderCapMs) {
+                            val cStart = System.currentTimeMillis()
+                            var cSuccess = false
+                            runCatching {
+                                val baseProbe = normalizeUrl(cs3Srv.probeUrl, mainUrl)
+                                if (baseProbe.isBlank()) return@runCatching
+
+                                val queryCandidates = buildList {
+                                    if (pageTitle.isNotBlank()) {
+                                        val sep = if (baseProbe.contains("?")) "&" else "?"
+                                        add("$baseProbe${sep}q=${URLEncoder.encode(pageTitle, "UTF-8")}&type=$contentType&season=$season&episode=$episode")
+                                    }
+                                    add(baseProbe)
+                                }.distinct()
+
+                                for (target in queryCandidates) {
+                                    val resp = runCatching {
+                                        app.get(
+                                            target,
+                                            headers = mapOf(
+                                                "User-Agent" to USER_AGENT,
+                                                "Accept" to "application/json, text/html, */*"
+                                            ),
+                                            timeout = timeoutSec
+                                        )
+                                    }.getOrNull() ?: continue
+
+                                    if (resp.code !in 200..499) continue
+                                    val body = resp.text.trim()
+                                    if (body.isBlank()) continue
+
+                                    if (Regex("""(?i)\.(m3u8|mp4|mkv|webm|mpd)(\?|$)""").containsMatchIn(target) || body.startsWith("#EXTM3U")) {
+                                        val isHls = isM3u8Stream(target, "") || body.startsWith("#EXTM3U")
+                                        emitServerLink(
+                                            serverName = "CS3 • ${cs3Srv.name}",
+                                            streamUrl = target,
+                                            isHls = isHls,
+                                            customHeaders = mapOf("User-Agent" to USER_AGENT)
+                                        )
+                                        cSuccess = true
+                                        break
+                                    }
+
+                                    if (body.startsWith("{")) {
+                                        val jsonObj = runCatching { JSONObject(body) }.getOrNull()
+                                        val streamsArr = jsonObj?.optJSONArray("streams") ?: jsonObj?.optJSONArray("sources")
+                                        if (streamsArr != null) {
+                                            for (i in 0 until streamsArr.length()) {
+                                                val sObj = streamsArr.optJSONObject(i) ?: continue
+                                                val rawUrl = sObj.optString("url").ifBlank { sObj.optString("file") }.trim()
+                                                if (rawUrl.isBlank()) continue
+                                                val resolved = normalizeUrl(rawUrl, baseHostOf(target))
+                                                if (isAdUrl(resolved) || !seenUrls.add(resolved)) continue
+                                                val isHls = isM3u8Stream(resolved, sObj.optString("type"))
+                                                emitServerLink(
+                                                    serverName = "CS3 • ${cs3Srv.name}",
+                                                    streamUrl = resolved,
+                                                    isHls = isHls,
+                                                    qualityStr = sObj.optString("quality").ifBlank { sObj.optString("title") },
+                                                    customHeaders = mapOf("User-Agent" to USER_AGENT)
+                                                )
+                                                cSuccess = true
+                                            }
+                                        }
+                                        val singleUrl = jsonObj?.optString("url").orEmpty().ifBlank { jsonObj?.optString("streamUrl").orEmpty() }.trim()
+                                        if (singleUrl.startsWith("http") && !isAdUrl(singleUrl) && seenUrls.add(singleUrl)) {
+                                            emitServerLink(
+                                                serverName = "CS3 • ${cs3Srv.name}",
+                                                streamUrl = singleUrl,
+                                                isHls = isM3u8Stream(singleUrl, ""),
+                                                customHeaders = mapOf("User-Agent" to USER_AGENT)
+                                            )
+                                            cSuccess = true
+                                        }
+                                    }
+
+                                    if (cSuccess) break
+                                }
+                            }
+                            MovieFoxSettingsDialog.reportServerResult(appCtx, cs3Srv.key, cSuccess, System.currentTimeMillis() - cStart)
+                        }
+                        Unit
+                    })
+                }
 
                 // 1. Purstream / Castle / Watchout APIs
                 val apiEndpoints = mutableListOf<Pair<String, String>>()
