@@ -643,7 +643,6 @@ class MovieFoxProvider : MainAPI() {
         var resolved = normalizeUrl(rawLink, activeNetnaijaBase)
         if (resolved.isBlank() || isAdUrl(resolved)) return false
 
-        // Follow NetNaija intermediate /d/ or /download/ landing page if present
         if (resolved.contains("netnaija", true) && (resolved.contains("/d/") || resolved.contains("/download"))) {
             val dlDoc = getNetnaijaDoc(resolved, timeoutSec)
             val directHref = dlDoc?.select("a[href*='sabishare'], a[href*='.mp4'], a[href*='.mkv'], a.download-btn, a[href*='/dl/']")
@@ -655,7 +654,6 @@ class MovieFoxProvider : MainAPI() {
             }
         }
 
-        // Resolve Sabishare / NetNaija file host page to direct CDN video URL
         if (resolved.contains("sabishare.com", true)) {
             val sabiHtml = runCatching {
                 app.get(
@@ -1561,14 +1559,14 @@ class MovieFoxProvider : MainAPI() {
                                 }.getOrNull().orEmpty()
 
                                 val detail = if (postHtml.isNotBlank()) parseVegaPost(postHtml) else null
-                                    ?: return@runCatching
+                                val vegaDetail = detail ?: return@runCatching
 
                                 val groups = if (isTv) {
-                                    detail.seasons.filter { it.number == targetSeason }.flatMap { it.groups }.ifEmpty {
-                                        detail.seasons.filter { seasonsInText(it.title) == null }.flatMap { it.groups }
+                                    vegaDetail.seasons.filter { it.number == targetSeason }.flatMap { it.groups }.ifEmpty {
+                                        vegaDetail.seasons.filter { seasonsInText(it.title) == null }.flatMap { it.groups }
                                     }
                                 } else {
-                                    detail.movieGroups
+                                    vegaDetail.movieGroups
                                 }
 
                                 val gate = Semaphore(4)
@@ -2007,7 +2005,6 @@ class MovieFoxProvider : MainAPI() {
                                 var targetDoc = getNetnaijaDoc(targetPageUrl, timeoutSec) ?: return@runCatching
 
                                 if (isTv) {
-                                    // Navigate Season -> Episode if series landing page
                                     val seasonLink = targetDoc.select("a[href*='/season-'], .video-seasons a[href]")
                                         .firstOrNull { a ->
                                             val txt = a.text() + " " + a.attr("href")
@@ -2034,7 +2031,6 @@ class MovieFoxProvider : MainAPI() {
                                     targetDoc = getNetnaijaDoc(targetPageUrl, timeoutSec) ?: return@runCatching
                                 }
 
-                                // Extract subtitle if attached on NetNaija page
                                 targetDoc.select("a[href*='/sub'], a[href$='.srt'], a[href$='.vtt']").firstOrNull()?.attr("href")?.let { subHref ->
                                     val subUrl = normalizeUrl(subHref, activeNetnaijaBase)
                                     if (subUrl.startsWith("http")) {
@@ -2042,7 +2038,6 @@ class MovieFoxProvider : MainAPI() {
                                     }
                                 }
 
-                                // Extract video download / stream buttons
                                 val dlAnchors = targetDoc.select(
                                     ".download-block a[href], .db-one a[href], a[href*='/d/'], a[href*='sabishare.com'], a.btn-download[href]"
                                 )
