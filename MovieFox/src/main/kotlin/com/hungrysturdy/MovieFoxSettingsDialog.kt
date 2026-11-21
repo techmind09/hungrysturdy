@@ -14,19 +14,18 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.BaseAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.ListView
 import android.widget.ScrollView
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
-import androidx.recyclerview.widget.LinearLayoutManager
-import androidx.recyclerview.widget.RecyclerView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
@@ -323,10 +322,6 @@ object MovieFoxSettingsDialog {
         }.getOrNull()
     }
 
-    /**
-     * Extracts both plugin manifest metadata AND all bundled providers/servers inside a .cs3 archive
-     * (including multi-provider plugins like StreamHubOne.cs3).
-     */
     private fun extractAllServersFromCs3Zip(
         bytes: ByteArray,
         repoId: String,
@@ -432,10 +427,6 @@ object MovieFoxSettingsDialog {
         }
     }
 
-    /**
-     * Scans DEX constant pool / ASCII strings inside a multi-provider .cs3 plugin
-     * for provider declarations (e.g., Provider/Extractor classes or embedded provider JSON).
-     */
     private fun extractProvidersFromDexBytes(
         dexBytes: ByteArray,
         idTag: String,
@@ -445,13 +436,11 @@ object MovieFoxSettingsDialog {
         if (dexBytes.isEmpty()) return
         val rawText = String(dexBytes, Charsets.ISO_8859_1)
 
-        // 1. Check embedded JSON arrays of providers inside DEX strings
         val jsonArrayRegex = Regex("""\[\s*\{\s*"name"\s*:\s*"[^"]{2,40}"[^]]{10,4000}\]""")
         jsonArrayRegex.findAll(rawText).forEach { match ->
             parseJsonServerEntries(match.value, idTag, fallbackUrl, out)
         }
 
-        // 2. Check Cloudstream MainAPI / Provider class names in DEX descriptor table
         if (out.isEmpty()) {
             val classRegex = Regex("""L[a-zA-Z0-9_/]+/([A-Z][a-zA-Z0-9]{2,28})(?:Provider|Plugin|Source);""")
             val seen = mutableSetOf<String>()
@@ -487,7 +476,6 @@ object MovieFoxSettingsDialog {
         val bytes = readHttpBytes(rawUrl, timeoutMs) ?: return@withContext emptyList()
         if (bytes.isEmpty()) return@withContext emptyList()
 
-        // Case 1: Direct .cs3 plugin file
         if (rawUrl.substringBefore("?").endsWith(".cs3", ignoreCase = true)) {
             return@withContext extractAllServersFromCs3Zip(bytes, repo.id, rawUrl)
         }
@@ -505,7 +493,6 @@ object MovieFoxSettingsDialog {
             } else if (body.startsWith("{")) {
                 val rootJson = JSONObject(body)
 
-                // Direct plugins array
                 val pluginsArr = rootJson.optJSONArray("plugins")
                     ?: rootJson.optJSONArray("items")
                     ?: rootJson.optJSONArray("providers")
@@ -515,7 +502,6 @@ object MovieFoxSettingsDialog {
                     }
                 }
 
-                // Cloudstream standard repo.json uses "pluginLists": ["https://.../plugins.json"]
                 val listUrls = mutableListOf<String>()
                 rootJson.optJSONArray("pluginLists")?.let { pLists ->
                     for (i in 0 until pLists.length()) {
@@ -608,11 +594,7 @@ object MovieFoxSettingsDialog {
         prefs(ctx).edit().putBoolean("$KEY_SRV_PREFIX${key.lowercase()}", enabled).apply()
     }
 
-    // Kept for backward compatibility with MovieFoxProvider callers; no longer flags UI errors
-    fun reportServerResult(ctx: Context?, key: String, success: Boolean, latencyMs: Long = 0L) {
-        // Error badges removed per user preference
-    }
-
+    fun reportServerResult(ctx: Context?, key: String, success: Boolean, latencyMs: Long = 0L) {}
     fun getServerFailCount(ctx: Context, key: String): Int = 0
     fun getServerLastMs(ctx: Context, key: String): Long = -1L
     fun resetAllHealthStats(ctx: Context) {}
@@ -741,12 +723,12 @@ object MovieFoxSettingsDialog {
     }
 
     /**
-     * Lightweight RecyclerView adapter so 200+ CS3 & built-in servers render smoothly with zero crash.
+     * Core Android ListView + ViewHolder Adapter (Zero external AndroidX dependency, recycles 500+ rows smoothly)
      */
     private class ServerListAdapter(
         private val ctx: Context,
         private val onToggleChanged: () -> Unit
-    ) : RecyclerView.Adapter<ServerListAdapter.VH>() {
+    ) : BaseAdapter() {
 
         private var items: List<ServerItem> = emptyList()
 
@@ -755,92 +737,98 @@ object MovieFoxSettingsDialog {
             notifyDataSetChanged()
         }
 
-        class VH(
+        private class VH(
             val root: LinearLayout,
             val avatarTv: TextView,
             val nameTv: TextView,
             val tagTv: TextView,
             val urlTv: TextView,
             val sw: Switch
-        ) : RecyclerView.ViewHolder(root)
+        )
 
-        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VH {
-            val card = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                background = cardBg("#111520", "#222B3F", 20f)
-                setPadding(dp(ctx, 11), dp(ctx, 10), dp(ctx, 11), dp(ctx, 10))
-                layoutParams = RecyclerView.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { bottomMargin = dp(ctx, 7) }
-            }
+        override fun getCount(): Int = items.size
+        override fun getItem(position: Int): ServerItem = items[position]
+        override fun getItemId(position: Int): Long = position.toLong()
 
-            val avatarTv = TextView(ctx).apply {
-                textSize = 14f
-                gravity = Gravity.CENTER
-                setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.WHITE)
-                layoutParams = LinearLayout.LayoutParams(dp(ctx, 36), dp(ctx, 36)).apply {
-                    marginEnd = dp(ctx, 10)
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+            val holder: VH
+            val rowView: View
+
+            if (convertView == null) {
+                val card = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    background = cardBg("#111520", "#222B3F", 20f)
+                    setPadding(dp(ctx, 11), dp(ctx, 10), dp(ctx, 11), dp(ctx, 10))
                 }
+
+                val avatarTv = TextView(ctx).apply {
+                    textSize = 14f
+                    gravity = Gravity.CENTER
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.WHITE)
+                    layoutParams = LinearLayout.LayoutParams(dp(ctx, 36), dp(ctx, 36)).apply {
+                        marginEnd = dp(ctx, 10)
+                    }
+                }
+
+                val col = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                }
+
+                val topLine = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+
+                val nameTv = TextView(ctx).apply {
+                    textSize = 13.5f
+                    isSingleLine = true
+                    ellipsize = TextUtils.TruncateAt.END
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.WHITE)
+                }
+
+                val tagTv = TextView(ctx).apply {
+                    textSize = 8.5f
+                    isSingleLine = true
+                    setTypeface(typeface, Typeface.BOLD)
+                    setPadding(dp(ctx, 6), dp(ctx, 2), dp(ctx, 6), dp(ctx, 2))
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { marginStart = dp(ctx, 6) }
+                }
+
+                topLine.addView(nameTv)
+                topLine.addView(tagTv)
+
+                val urlTv = TextView(ctx).apply {
+                    textSize = 10f
+                    isSingleLine = true
+                    ellipsize = TextUtils.TruncateAt.END
+                    setTextColor(safeColor("#7C869C"))
+                    setPadding(0, dp(ctx, 2), dp(ctx, 6), 0)
+                }
+
+                col.addView(topLine)
+                col.addView(urlTv)
+
+                val sw = Switch(ctx)
+
+                card.addView(avatarTv)
+                card.addView(col)
+                card.addView(sw)
+
+                holder = VH(card, avatarTv, nameTv, tagTv, urlTv, sw)
+                card.tag = holder
+                rowView = card
+            } else {
+                rowView = convertView
+                holder = convertView.tag as VH
             }
 
-            val col = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            }
-
-            val topLine = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-
-            val nameTv = TextView(ctx).apply {
-                textSize = 13.5f
-                isSingleLine = true
-                ellipsize = TextUtils.TruncateAt.END
-                setTypeface(typeface, Typeface.BOLD)
-                setTextColor(Color.WHITE)
-            }
-
-            val tagTv = TextView(ctx).apply {
-                textSize = 8.5f
-                isSingleLine = true
-                setTypeface(typeface, Typeface.BOLD)
-                setPadding(dp(ctx, 6), dp(ctx, 2), dp(ctx, 6), dp(ctx, 2))
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { marginStart = dp(ctx, 6) }
-            }
-
-            topLine.addView(nameTv)
-            topLine.addView(tagTv)
-
-            val urlTv = TextView(ctx).apply {
-                textSize = 10f
-                isSingleLine = true
-                ellipsize = TextUtils.TruncateAt.END
-                setTextColor(safeColor("#7C869C"))
-                setPadding(0, dp(ctx, 2), dp(ctx, 6), 0)
-            }
-
-            col.addView(topLine)
-            col.addView(urlTv)
-
-            val sw = Switch(ctx)
-
-            card.addView(avatarTv)
-            card.addView(col)
-            card.addView(sw)
-
-            return VH(card, avatarTv, nameTv, tagTv, urlTv, sw)
-        }
-
-        override fun getItemCount(): Int = items.size
-
-        override fun onBindViewHolder(holder: VH, position: Int) {
             val srv = items[position]
             val accent = safeColor(srv.accentHex, "#38BDF8")
 
@@ -863,7 +851,6 @@ object MovieFoxSettingsDialog {
                 srv.probeUrl
             }
 
-            // Detach previous listener before setting checked state to prevent recycled view triggers
             holder.sw.setOnCheckedChangeListener(null)
             holder.sw.isChecked = isServerEnabled(ctx, srv.key)
             holder.sw.setOnCheckedChangeListener { _, checked ->
@@ -874,6 +861,8 @@ object MovieFoxSettingsDialog {
             holder.root.setOnClickListener {
                 holder.sw.isChecked = !holder.sw.isChecked
             }
+
+            return rowView
         }
     }
 
@@ -887,7 +876,7 @@ object MovieFoxSettingsDialog {
         val audioCards = mutableMapOf<String, LinearLayout>()
 
         var currentQuery = ""
-        var currentFilter = "ALL" // ALL, BUILTIN, CS3, ACTIVE
+        var currentFilter = "ALL"
         var selectedQuality = getPreferredQuality(ctx)
         var currentConcurrency = getConcurrency(ctx)
 
@@ -897,7 +886,6 @@ object MovieFoxSettingsDialog {
             setPadding(dp(ctx, 14), dp(ctx, 14), dp(ctx, 14), dp(ctx, 14))
         }
 
-        // Top Header Card
         val header = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable(
@@ -1001,7 +989,6 @@ object MovieFoxSettingsDialog {
         }
         refreshStats()
 
-        // Main Navigation Tabs
         val tabScroll = HorizontalScrollView(ctx).apply {
             isHorizontalScrollBarEnabled = false
             layoutParams = LinearLayout.LayoutParams(
@@ -1031,7 +1018,6 @@ object MovieFoxSettingsDialog {
         tabScroll.addView(tabBar)
         root.addView(tabScroll)
 
-        // Search & Quick Bulk Controls (Clean — No Error Buttons)
         val actionRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -1086,7 +1072,6 @@ object MovieFoxSettingsDialog {
             runCatching { dialogScope.cancel() }
         }
 
-        // Content Container (Servers uses RecyclerView directly; other tabs use ScrollView)
         val contentHeight = dp(ctx, 365)
 
         val serversContainer = LinearLayout(ctx).apply {
@@ -1094,7 +1079,6 @@ object MovieFoxSettingsDialog {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, contentHeight)
         }
 
-        // Category Filter Chips inside Servers Tab
         val filterScroll = HorizontalScrollView(ctx).apply {
             isHorizontalScrollBarEnabled = false
             layoutParams = LinearLayout.LayoutParams(
@@ -1153,14 +1137,15 @@ object MovieFoxSettingsDialog {
             refreshStats()
         }
 
-        val serversRecycler = RecyclerView(ctx).apply {
-            layoutManager = LinearLayoutManager(ctx)
+        val serversListView = ListView(ctx).apply {
             adapter = serverAdapter
-            itemAnimator = null
+            divider = GradientDrawable().apply { setColor(Color.TRANSPARENT) }
+            dividerHeight = dp(ctx, 7)
             overScrollMode = View.OVER_SCROLL_NEVER
+            isVerticalScrollBarEnabled = false
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         }
-        serversContainer.addView(serversRecycler)
+        serversContainer.addView(serversListView)
 
         applyServerFilter = {
             val filtered = SERVERS.filter { srv ->
@@ -1201,7 +1186,6 @@ object MovieFoxSettingsDialog {
             safeToast(ctx, "Sabhi servers OFF kar diye gaye!")
         }
 
-        // ScrollView for remaining tabs
         val scrollView = ScrollView(ctx).apply {
             isVerticalScrollBarEnabled = false
             visibility = View.GONE
@@ -1937,7 +1921,6 @@ object MovieFoxSettingsDialog {
             setTimeoutSeconds(ctx, it)
         }
 
-        // Live Search Filter
         searchBox.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
