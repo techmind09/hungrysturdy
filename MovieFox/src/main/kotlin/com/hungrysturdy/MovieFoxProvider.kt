@@ -703,8 +703,8 @@ class MovieFoxProvider : MainAPI() {
         refererUrl: String,
         seenUrls: MutableSet<String>,
         timeoutSec: Long,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        emitNow: (ExtractorLink, Boolean) -> Unit
+        subtitleCallback: suspend (SubtitleFile) -> Unit,
+        emitNow: suspend (ExtractorLink, Boolean) -> Unit
     ): Boolean {
         if (pageTitle.isBlank() && candidateIds.isEmpty() && imdbId.isBlank()) return false
         var anyEmitted = false
@@ -750,8 +750,8 @@ class MovieFoxProvider : MainAPI() {
 
             Regex("""["']?(?:subtitles|tracks|captions)["']?\s*:\s*(\[[\s\S]*?\])""", RegexOption.IGNORE_CASE)
                 .find(body)?.groupValues?.get(1)?.let { subsJson ->
-                    runCatching {
-                        val arr = JSONArray(subsJson)
+                    val arr = runCatching { JSONArray(subsJson) }.getOrNull()
+                    if (arr != null) {
                         for (i in 0 until arr.length()) {
                             val obj = arr.optJSONObject(i) ?: continue
                             val subUrl = normalizeUrl(
@@ -1027,8 +1027,8 @@ class MovieFoxProvider : MainAPI() {
         label: String,
         seenUrls: MutableSet<String>,
         timeoutSec: Long,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        emitNow: (ExtractorLink, Boolean) -> Unit
+        subtitleCallback: suspend (SubtitleFile) -> Unit,
+        emitNow: suspend (ExtractorLink, Boolean) -> Unit
     ): Boolean {
         var resolved = normalizeUrl(rawLink, activeNetnaijaBase)
         if (resolved.isBlank() || isAdUrl(resolved)) return false
@@ -1224,7 +1224,7 @@ class MovieFoxProvider : MainAPI() {
         label: String,
         seenUrls: MutableSet<String>,
         timeoutSec: Long,
-        callback: (ExtractorLink) -> Unit
+        callback: suspend (ExtractorLink) -> Unit
     ): Boolean {
         return runCatching {
             val clean = normalizeUrl(embedUrl, activePrmoviesBase)
@@ -1263,7 +1263,7 @@ class MovieFoxProvider : MainAPI() {
         referer: String,
         seenUrls: MutableSet<String>,
         timeoutSec: Long,
-        callback: (ExtractorLink) -> Unit
+        callback: suspend (ExtractorLink) -> Unit
     ): Boolean {
         return runCatching {
             val clean = normalizeUrl(embedUrl, activePrmoviesBase)
@@ -1313,7 +1313,7 @@ class MovieFoxProvider : MainAPI() {
         doc: Element,
         seenUrls: MutableSet<String>,
         timeoutSec: Long,
-        callback: (ExtractorLink) -> Unit
+        callback: suspend (ExtractorLink) -> Unit
     ): Boolean {
         var foundLink = false
         val tabLabels = mutableMapOf<String, String>()
@@ -1349,7 +1349,7 @@ class MovieFoxProvider : MainAPI() {
         pageUrl: String,
         seenUrls: MutableSet<String>,
         timeoutSec: Long,
-        callback: (ExtractorLink) -> Unit
+        callback: suspend (ExtractorLink) -> Unit
     ): Boolean {
         var foundLink = false
         for (iframe in doc.select("#player2 iframe[src], div.movieplay iframe[src]")) {
@@ -1811,18 +1811,25 @@ class MovieFoxProvider : MainAPI() {
             )
 
             val seenUrls = ConcurrentHashMap.newKeySet<String>()
-            val emitLock = Any()
+            val emitMutex = Mutex()
+            val subMutex = Mutex()
             var found = false
 
-            fun emitNow(extractorLink: ExtractorLink, isStream: Boolean) {
+            suspend fun emitSubtitle(sub: SubtitleFile) {
+                subMutex.withLock {
+                    subtitleCallback(sub)
+                }
+            }
+
+            suspend fun emitNow(extractorLink: ExtractorLink, isStream: Boolean) {
                 if (downloadOnly && isStream) return
-                synchronized(emitLock) {
+                emitMutex.withLock {
                     found = true
                     callback(extractorLink)
                 }
             }
 
-            fun emitServerLink(
+            suspend fun emitServerLink(
                 serverName: String,
                 streamUrl: String,
                 isHls: Boolean,
@@ -1885,7 +1892,7 @@ class MovieFoxProvider : MainAPI() {
                                         refererUrl = watchUrl,
                                         seenUrls = seenUrls,
                                         timeoutSec = timeoutSec,
-                                        subtitleCallback = subtitleCallback,
+                                        subtitleCallback = ::emitSubtitle,
                                         emitNow = ::emitNow
                                     )
                                 }
@@ -1951,7 +1958,7 @@ class MovieFoxProvider : MainAPI() {
                                                     val subObj = subs.optJSONObject(k) ?: continue
                                                     val subUrl = subObj.optString("url").trim()
                                                     if (subUrl.isNotBlank()) {
-                                                        subtitleCallback(
+                                                        emitSubtitle(
                                                             newSubtitleFile(
                                                                 lang = subObj.optString("lang").ifBlank { "English" },
                                                                 url = normalizeUrl(subUrl, addonBase)
@@ -2025,7 +2032,7 @@ class MovieFoxProvider : MainAPI() {
                                             } ?: continue
 
                                             runCatching {
-                                                plugin.loadLinks(targetData, isCasting, subtitleCallback) { link ->
+                                                plugin.loadLinks(targetData, isCasting, ::emitSubtitle) { link ->
                                                     if (seenUrls.add(link.url)) {
                                                         val taggedLink = newExtractorLink(
                                                             source = "CS3 • ${plugin.name}",
@@ -2058,7 +2065,7 @@ class MovieFoxProvider : MainAPI() {
                                                     refererUrl = watchUrl,
                                                     seenUrls = seenUrls,
                                                     timeoutSec = timeoutSec,
-                                                    subtitleCallback = subtitleCallback,
+                                                    subtitleCallback = ::emitSubtitle,
                                                     emitNow = ::emitNow
                                                 )
                                             }
@@ -2149,7 +2156,7 @@ class MovieFoxProvider : MainAPI() {
                                                 refererUrl = watchUrl,
                                                 seenUrls = seenUrls,
                                                 timeoutSec = timeoutSec,
-                                                subtitleCallback = subtitleCallback,
+                                                subtitleCallback = ::emitSubtitle,
                                                 emitNow = ::emitNow
                                             )
                                             if (ok) cSuccess = true
@@ -2210,7 +2217,7 @@ class MovieFoxProvider : MainAPI() {
                                     stream.subtitles?.forEach { sub ->
                                         val rawSubUrl = sub.url.ifBlank { sub.file }.trim()
                                         if (rawSubUrl.isNotBlank()) {
-                                            subtitleCallback(
+                                            emitSubtitle(
                                                 newSubtitleFile(
                                                     lang = sub.label.ifBlank { sub.language.ifBlank { sub.lang.ifBlank { "English" } } },
                                                     url = normalizeUrl(rawSubUrl)
@@ -2643,7 +2650,7 @@ class MovieFoxProvider : MainAPI() {
                                                                 val cObj = capsArr.optJSONObject(c) ?: continue
                                                                 val subUrl = cObj.optString("url").trim()
                                                                 if (subUrl.isNotBlank() && seenSubUrls.add(subUrl)) {
-                                                                    subtitleCallback(newSubtitleFile(lang = cObj.optString("lanName").ifBlank { "Unknown" }, url = subUrl))
+                                                                    emitSubtitle(newSubtitleFile(lang = cObj.optString("lanName").ifBlank { "Unknown" }, url = subUrl))
                                                                 }
                                                             }
                                                         }
@@ -2722,7 +2729,7 @@ class MovieFoxProvider : MainAPI() {
                                     targetDoc.select("a[href*='/sub'], a[href$='.srt'], a[href$='.vtt']").firstOrNull()?.attr("href")?.let { subHref ->
                                         val subUrl = normalizeUrl(subHref, activeNetnaijaBase)
                                         if (subUrl.startsWith("http")) {
-                                            subtitleCallback(newSubtitleFile(lang = "English", url = subUrl))
+                                            emitSubtitle(newSubtitleFile(lang = "English", url = subUrl))
                                         }
                                     }
 
@@ -2733,7 +2740,7 @@ class MovieFoxProvider : MainAPI() {
                                         val href = a.attr("href").trim()
                                         if (href.isBlank() || href.contains("/sub", true)) continue
                                         val label = a.text().replace(Regex("""\s+"""), " ").trim().ifBlank { "HD" }
-                                        resolveNetnaijaDownloadLink(href, targetPageUrl, label, seenUrls, timeoutSec, subtitleCallback, ::emitNow)
+                                        resolveNetnaijaDownloadLink(href, targetPageUrl, label, seenUrls, timeoutSec, ::emitSubtitle, ::emitNow)
                                     }
                                 }
                             }
