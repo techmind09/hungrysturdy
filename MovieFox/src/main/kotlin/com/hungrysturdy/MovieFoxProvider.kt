@@ -79,7 +79,7 @@ class MovieFoxProvider : MainAPI() {
     )
 
     // MovieBox BFF State
-    private val movieBoxBff = "https://h3-api.aoneroom.com/wefeed-h3api-bff"
+    private val movieBoxBff = "https://h5-api.aoneroom.com/wefeed-h5api-bff"
     private val movieBoxSiteUrl = "https://netnaija.film"
     private val movieBoxUa =
         "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
