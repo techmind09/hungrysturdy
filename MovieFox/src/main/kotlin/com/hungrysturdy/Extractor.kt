@@ -4,20 +4,85 @@ import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
-import com.lagradost.cloudstream3.utils.AppUtils.toJson
-import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.extractors.VidHidePro
 import com.lagradost.cloudstream3.extractors.GDMirrorbot
 import com.lagradost.cloudstream3.extractors.DoodLaExtractor
 import com.lagradost.cloudstream3.extractors.VidStack
-import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.MediaType.Companion.toMediaType
-import java.net.URI
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import org.json.JSONObject
+import java.net.URI
 import java.security.MessageDigest
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.SecretKeySpec
-import javax.crypto.Cipher
+import java.util.concurrent.ConcurrentHashMap
+
+private val dynamicUrlCache = ConcurrentHashMap<String, String>()
+
+private fun mfBaseUrl(url: String): String = runCatching {
+    val uri = URI(url)
+    "${uri.scheme}://${uri.host}"
+}.getOrDefault(url)
+
+private suspend fun mfLatestBaseUrl(baseUrl: String, source: String): String {
+    dynamicUrlCache[source]?.let { return it }
+    return runCatching {
+        val raw = app.get(
+            "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json",
+            timeout = 8L
+        ).text
+        val resolved = JSONObject(raw).optString(source).trim()
+        if (resolved.startsWith("http")) {
+            dynamicUrlCache[source] = resolved.trimEnd('/')
+            resolved.trimEnd('/')
+        } else {
+            baseUrl
+        }
+    }.getOrDefault(baseUrl)
+}
+
+private fun mfIndexQuality(str: String?): Int {
+    if (str.isNullOrBlank()) return Qualities.Unknown.value
+    Regex("""(\d{3,4})[pP]""").find(str)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it }
+    val lower = str.lowercase()
+    return when {
+        lower.contains("8k") -> 4320
+        lower.contains("4k") || lower.contains("uhd") -> 2160
+        lower.contains("2k") -> 1440
+        else -> Qualities.Unknown.value
+    }
+}
+
+private fun mfFormatBytes(bytes: Long): String = when {
+    bytes < 1024L * 1024 * 1024 -> "%.2f MB".format(bytes.toDouble() / (1024 * 1024))
+    else -> "%.2f GB".format(bytes.toDouble() / (1024 * 1024 * 1024))
+}
+
+private suspend fun <A, B> Iterable<A>.mfSafeAmap(
+    concurrency: Int = 7,
+    f: suspend (A) -> B?
+): List<B> = supervisorScope {
+    val semaphore = Semaphore(concurrency)
+    map { item ->
+        async<B?>(Dispatchers.IO) {
+            semaphore.withPermit {
+                try {
+                    f(item)
+                } catch (e: CancellationException) {
+                    if (!isActive) throw e
+                    null
+                } catch (e: Throwable) {
+                    Log.e("mfSafeAmap", "Item failed: ${e.message}")
+                    null
+                }
+            }
+        }
+    }.awaitAll().filterNotNull()
+}
 
 class Streameeeeee : Videostr() {
     override var name = "Streameeeeee"
@@ -135,7 +200,7 @@ class Gofile : ExtractorApi() {
             if (!fileLink.startsWith("http") || file.type != "file") continue
             val fileName = file.name ?: ""
             val size = file.size ?: 0L
-            val formattedSize = formatBytes(size)
+            val formattedSize = mfFormatBytes(size)
             callback.invoke(
                 newExtractorLink(
                     "Gofile",
@@ -143,7 +208,7 @@ class Gofile : ExtractorApi() {
                     fileLink,
                     ExtractorLinkType.VIDEO
                 ) {
-                    this.quality = getQuality(fileName)
+                    this.quality = mfIndexQuality(fileName)
                     this.headers = mapOf("Cookie" to "accountToken=$token")
                 }
             )
@@ -156,22 +221,10 @@ class Gofile : ExtractorApi() {
         return sha256(raw)
     }
 
-    private fun getQuality(str: String?): Int {
-        return Regex("(\\d{3,4})[pP]").find(str ?: "")?.groupValues?.getOrNull(1)?.toIntOrNull()
-            ?: Qualities.Unknown.value
-    }
-
     private fun sha256(input: String): String {
         val md = MessageDigest.getInstance("SHA-256")
         val bytes = md.digest(input.toByteArray(Charsets.UTF_8))
         return bytes.joinToString("") { "%02x".format(it) }
-    }
-
-    private fun formatBytes(bytes: Long): String {
-        return when {
-            bytes < 1024L * 1024 * 1024 -> "%.2f MB".format(bytes.toDouble() / (1024 * 1024))
-            else -> "%.2f GB".format(bytes.toDouble() / (1024 * 1024 * 1024))
-        }
     }
 
     data class AccountResponse(val data: AccountData? = null)
@@ -246,8 +299,8 @@ open class GDFlix : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        var baseUrl = getBaseUrl(url)
-        val latestBaseUrl = getLatestBaseUrl(baseUrl, "gdflix")
+        var baseUrl = mfBaseUrl(url)
+        val latestBaseUrl = mfLatestBaseUrl(baseUrl, "gdflix")
 
         var newUrl = url
         if (baseUrl != latestBaseUrl) {
@@ -260,7 +313,7 @@ open class GDFlix : ExtractorApi() {
             .substringAfter("Name : ").orEmpty()
         val fileSize = document.select("ul > li.list-group-item:contains(Size)").text()
             .substringAfter("Size : ").orEmpty()
-        val quality = getIndexQuality(fileName)
+        val quality = mfIndexQuality(fileName)
 
         suspend fun myCallback(link: String, server: String = "") {
             if (!link.startsWith("http")) return
@@ -276,7 +329,7 @@ open class GDFlix : ExtractorApi() {
             )
         }
 
-        document.select("div.text-center a").safeAmap { anchor ->
+        document.select("div.text-center a").mfSafeAmap { anchor ->
             val text = anchor.select("a").text()
             val link = anchor.attr("href")
 
@@ -287,11 +340,11 @@ open class GDFlix : ExtractorApi() {
                 text.contains("CLOUD DOWNLOAD [R2]") -> myCallback(link, "[Cloud]")
                 text.contains("GD Index") -> {
                     val cfLink = baseUrl + link
-                    listOf(1, 2).safeAmap { cfType ->
+                    listOf(1, 2).mfSafeAmap { cfType ->
                         app.get("$cfLink?type=$cfType")
                             .document
                             .select("a.btn-success")
-                            .safeAmap { myCallback(it.attr("href"), "[CF]") }
+                            .mfSafeAmap { cfBtn -> myCallback(cfBtn.attr("href"), "[CF]") }
                     }
                 }
                 text.contains("FAST CLOUD") -> {
@@ -299,14 +352,14 @@ open class GDFlix : ExtractorApi() {
                     if (dlink.isNotBlank()) myCallback(dlink, "[FAST CLOUD]")
                 }
                 link.contains("pixeldra") -> {
-                    val baseUrlLink = getBaseUrl(link)
+                    val baseUrlLink = mfBaseUrl(link)
                     val finalURL = if (link.contains("download", true)) link
                     else "$baseUrlLink/api/file/${link.substringAfterLast("/")}?download"
                     myCallback(finalURL, "[Pixeldrain]")
                 }
                 text.contains("GoFile") -> {
                     runCatching {
-                        app.get(link).document.select(".row .row a").safeAmap { gofileAnchor ->
+                        app.get(link).document.select(".row .row a").mfSafeAmap { gofileAnchor ->
                             val gLink = gofileAnchor.attr("href")
                             if (gLink.contains("gofile")) loadExtractor(gLink, "", subtitleCallback, callback)
                         }
@@ -346,8 +399,8 @@ class Linksmod : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        app.get(url).document.select("div .view-well > a").safeAmap {
-            loadExtractor(it.attr("href"), "", subtitleCallback, callback)
+        app.get(url).document.select("div .view-well > a").mfSafeAmap { item ->
+            loadExtractor(item.attr("href"), "", subtitleCallback, callback)
         }
     }
 }
@@ -366,8 +419,8 @@ open class Hblinks : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        app.get(url).document.select("div#primary p > a").safeAmap {
-            loadExtractor(it.attr("href"), "", subtitleCallback, callback)
+        app.get(url).document.select("div#primary p > a").mfSafeAmap { item ->
+            loadExtractor(item.attr("href"), "", subtitleCallback, callback)
         }
     }
 }
@@ -434,7 +487,7 @@ open class Driveleech : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val baseUrl = getBaseUrl(url)
+        val baseUrl = mfBaseUrl(url)
         val document = if (url.contains("r?key=")) {
             val temp = app.get(url).document.selectFirst("script")?.data()
                 ?.substringAfter("replace(\"")?.substringBefore("\")").orEmpty()
@@ -445,7 +498,7 @@ open class Driveleech : ExtractorApi() {
 
         val fileName = document.select("ul > li.list-group-item:contains(Name)").text().substringAfter("Name : ")
         val fileSize = document.select("ul > li.list-group-item:contains(Size)").text().substringAfter("Size : ")
-        val quality = getIndexQuality(fileName)
+        val quality = mfIndexQuality(fileName)
 
         suspend fun myCallback(link: String, server: String = "") {
             if (!link.startsWith("http")) return
@@ -461,7 +514,7 @@ open class Driveleech : ExtractorApi() {
             )
         }
 
-        document.select("div.text-center > a").safeAmap { element ->
+        document.select("div.text-center > a").mfSafeAmap { element ->
             val text = element.text()
             val href = element.attr("href")
             when {
@@ -490,8 +543,8 @@ class Howblogs : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        app.get(url).document.select("div.center_it a").safeAmap {
-            loadExtractor(it.attr("href"), referer, subtitleCallback, callback)
+        app.get(url).document.select("div.center_it a").mfSafeAmap { item ->
+            loadExtractor(item.attr("href"), referer, subtitleCallback, callback)
         }
     }
 }
@@ -519,11 +572,11 @@ open class HubCloud : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        var baseUrl = getBaseUrl(url)
+        var baseUrl = mfBaseUrl(url)
         val latestBaseUrl = if (url.contains("hubcloud")) {
-            getLatestBaseUrl(baseUrl, "hubcloud")
+            mfLatestBaseUrl(baseUrl, "hubcloud")
         } else {
-            getLatestBaseUrl(baseUrl, "vcloud")
+            mfLatestBaseUrl(baseUrl, "vcloud")
         }
 
         var newUrl = url
@@ -547,7 +600,7 @@ open class HubCloud : ExtractorApi() {
         val document = app.get(link).document
         val header = document.select("div.card-header").text()
         val size = document.select("i#size").text()
-        val quality = getIndexQuality(header)
+        val quality = mfIndexQuality(header)
 
         suspend fun myCallback(link: String, server: String = "") {
             if (!link.startsWith("http")) return
@@ -563,24 +616,24 @@ open class HubCloud : ExtractorApi() {
             )
         }
 
-        document.select("h2 a.btn").safeAmap {
-            val btnLink = it.attr("href")
-            val text = it.text()
+        document.select("h2 a.btn").mfSafeAmap { btn ->
+            val btnLink = btn.attr("href")
+            val text = btn.text()
             when {
                 text.contains("FSL Server") -> myCallback(btnLink, "[FSL Server]")
                 text.contains("FSLv2") -> myCallback(btnLink, "[FSLv2 Server]")
                 text.contains("Mega Server") -> myCallback(btnLink, "[Mega Server]")
                 text.contains("Download File") -> myCallback(btnLink)
                 btnLink.contains("pixeldra") -> {
-                    val pixelLink = extractPxlUrl(document.toString()) ?: return@safeAmap
-                    val baseUrlLink = getBaseUrl(pixelLink)
+                    val pixelLink = extractPxlUrl(document.toString()) ?: return@mfSafeAmap
+                    val baseUrlLink = mfBaseUrl(pixelLink)
                     val finalURL = if (pixelLink.contains("download", true)) pixelLink
                     else "$baseUrlLink/api/file/${pixelLink.substringAfterLast("/")}?download"
                     myCallback(finalURL, "[Pixeldrain]")
                 }
                 text.contains("Buzz Server") -> {
-                    val baseBuzzUrl = getBaseUrl(btnLink)
-                    val redirectUrl = app.get(btnLink).document.selectFirst(".download-btn")?.attr("href") ?: return@safeAmap
+                    val baseBuzzUrl = mfBaseUrl(btnLink)
+                    val redirectUrl = app.get(btnLink).document.selectFirst(".download-btn")?.attr("href") ?: return@mfSafeAmap
                     myCallback(baseBuzzUrl + redirectUrl, "[Buzz Server]")
                 }
                 text.contains("Gofile") -> loadExtractor(btnLink, "", subtitleCallback, callback)
@@ -624,7 +677,7 @@ class FlixCloud : ExtractorApi() {
         }
         if (end == -1) return
 
-        val rawData = script.substring(from, end + 1).toJson()
+        val rawData = script.substring(from, end + 1)
         val data = JSONObject(
             rawData.replace(Regex("""([{,]\s*)([A-Za-z0-9_]+)(\s*:)"""), "$1\"$2\"$3")
         )
@@ -632,50 +685,23 @@ class FlixCloud : ExtractorApi() {
         data.optJSONArray("subtitles")?.let { subtitles ->
             for (i in 0 until subtitles.length()) {
                 subtitles.optJSONObject(i)?.run {
-                    subtitleCallback.invoke(
-                        newSubtitleFile(getLanguage(optString("language")) ?: optString("language"), optString("url"))
-                    )
+                    val subUrl = optString("url").trim()
+                    if (subUrl.startsWith("http")) {
+                        subtitleCallback.invoke(newSubtitleFile(optString("language", "English"), subUrl))
+                    }
                 }
             }
         }
-        data.remove("subtitles")
 
-        val resolvedRes = app.post(
-            "$multiDecryptAPI/dec-flixcloud?type=token",
-            requestBody = JSONObject().put("data", data).toString().toRequestBody("application/json".toMediaType()),
-            timeout = 10000L
-        )
-        val resolvedJson = JSONObject(resolvedRes.text)
-        val resolved = resolvedRes.parsedSafe<ResolvedReAnime>()?.result ?: return
+        val stream = data.optString("stream").ifBlank { data.optString("file") }.ifBlank { data.optString("url") }.trim()
+        if (!stream.startsWith("http")) return
 
-        val tokenResponse = app.get(
-            "$mainUrl/api/m3u8/${resolved.token}",
-            headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/")
-        )
-
-        val decryptBody = JSONObject()
-            .put(
-                "data", JSONObject()
-                    .put("context", resolvedJson.getJSONObject("result").getJSONObject("context"))
-                    .put("stream_response", JSONObject(tokenResponse.text))
-            ).toString()
-
-        val decrypted = app.post(
-            "$multiDecryptAPI/dec-flixcloud?type=stream",
-            requestBody = decryptBody.toRequestBody("application/json".toMediaType()),
-            timeout = 10000L
-        ).parsedSafe<ReAnimeStream>()?.result ?: return
-
-        val stream = decrypted.stream
-        val wPayload = decrypted.context.wPayload
-        val parseManifest = "$multiDecryptAPI/parse-flixcloud?url=$stream&w_payload=$wPayload"
-
-        callback.invoke(
-            newExtractorLink(name, name, parseManifest, ExtractorLinkType.M3U8) {
-                this.headers = mapOf("Referer" to "$mainUrl/", "Origin" to mainUrl, "User-Agent" to USER_AGENT)
-                this.quality = Qualities.P1080.value
-            }
-        )
+        generateM3u8(
+            name,
+            stream,
+            "$mainUrl/",
+            headers = mapOf("Referer" to "$mainUrl/", "Origin" to mainUrl, "User-Agent" to USER_AGENT)
+        ).forEach(callback)
     }
 }
 
@@ -803,8 +829,8 @@ open class MegaPlay : ExtractorApi() {
                 app.get("$host/stream/getSources?id=$streamId&type=$type", headers = mapOf("Referer" to url), referer = url).text
             }.getOrNull() ?: return
 
-            val root = runCatching { parseJson<MegaPlayResponse>(jsonText) }.getOrNull() ?: return
-            val m3u8 = root.sources?.file?.trim().orEmpty()
+            val rootJson = runCatching { JSONObject(jsonText) }.getOrNull() ?: return
+            val m3u8 = rootJson.optJSONObject("sources")?.optString("file")?.trim().orEmpty()
             if (!m3u8.startsWith("http")) return
 
             val generated = generateM3u8(serverName, m3u8, host, headers = playbackHeaders)
@@ -819,22 +845,18 @@ open class MegaPlay : ExtractorApi() {
                 )
             }
 
-            root.tracks.forEach { track ->
-                val kind = track.kind ?: return@forEach
-                if (kind != "captions" && kind != "subtitles") return@forEach
-                val file = track.file?.trim().orEmpty()
-                if (!file.startsWith("http")) return@forEach
-                subtitleCallback(newSubtitleFile(track.label ?: "Unknown", file) { this.headers = playbackHeaders })
+            rootJson.optJSONArray("tracks")?.let { tracks ->
+                for (i in 0 until tracks.length()) {
+                    val tr = tracks.optJSONObject(i) ?: continue
+                    val kind = tr.optString("kind")
+                    if (kind != "captions" && kind != "subtitles") continue
+                    val file = tr.optString("file").trim()
+                    if (!file.startsWith("http")) continue
+                    subtitleCallback(newSubtitleFile(tr.optString("label", "Unknown"), file) { this.headers = playbackHeaders })
+                }
             }
         }
     }
-
-    data class MegaPlayResponse(
-        val sources: Sources? = null,
-        val tracks: List<Track> = emptyList()
-    )
-    data class Sources(val file: String? = null)
-    data class Track(val file: String? = null, val label: String? = null, val kind: String? = null)
 }
 
 open class Modiplay : ExtractorApi() {
@@ -850,7 +872,7 @@ open class Modiplay : ExtractorApi() {
     ) {
         val doc = app.get(url).document
         val urls = Regex("""switchServer\(['"](https?:\/\/[^'"]+)""").findAll(doc.toString()).map { it.groupValues[1] }.toList()
-        urls.safeAmap { embed -> loadExtractor(embed, "", subtitleCallback, callback) }
+        urls.mfSafeAmap { embed -> loadExtractor(embed, "", subtitleCallback, callback) }
     }
 }
 
@@ -859,3 +881,4 @@ class Iqsmartgames : GDMirrorbot() {
     override var mainUrl = "https://streams.iqsmartgames.com"
     override var requiresReferer = true
 }
+
