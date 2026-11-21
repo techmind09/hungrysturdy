@@ -193,7 +193,36 @@ class MovieFoxProvider : MainAPI() {
         }.toString()
     }
 
+    private fun resolveCategoryLabel(defaultName: String, url: String): String? {
+        val ctx = CloudStreamApp.context ?: return defaultName
+        val cats = MovieFoxSettingsDialog.getHomeCategories(ctx)
+        val match = cats.firstOrNull { c ->
+            when (c.id) {
+                "trending" -> url.contains("/trending", true)
+                "popular_movies" -> url.contains("list=popular", true) && url.contains("/movies", true)
+                "popular_tv" -> url.contains("list=popular", true) && url.contains("/tv", true)
+                "hindi_movies" -> url.contains("lang=hi", true) && url.contains("/movies", true)
+                "hindi_tv" -> url.contains("lang=hi", true) && url.contains("/tv", true)
+                "kdrama" -> url.contains("lang=ko", true) && url.contains("/tv", true)
+                "anime" -> url.contains("/anime", true)
+                "hollywood" -> url.contains("lang=en", true) && url.contains("/movies", true)
+                "tamil_telugu" -> url.contains("lang=ta", true) || url.contains("lang=te", true)
+                "cdrama" -> url.contains("lang=zh", true) || url.contains("lang=tr", true)
+                else -> false
+            }
+        }
+        if (match != null) {
+            if (!match.visible) return null
+            return match.title
+        }
+        return defaultName
+    }
+
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val ctx = CloudStreamApp.context
+        val categoryLabel = resolveCategoryLabel(request.name, request.data)
+            ?: return newHomePageResponse(emptyList(), hasNext = false)
+
         val timeoutSec = currentTimeoutSec()
         val targetUrl = if (page > 1) {
             val sep = if (request.data.contains("?")) "&" else "?"
@@ -210,9 +239,12 @@ class MovieFoxProvider : MainAPI() {
             "a[href*=/movie/], a[href*=/tv/], a[href*=/dramas/], a[href*=/anime/], a[href*=/series/]"
 
         val elements = document.select(cardSelector).ifEmpty { document.select(fallbackLinkSelector) }
-        val items = elements.mapNotNull { toSearchResult(it) }.distinctBy { it.url }
+        var items = elements.mapNotNull { toSearchResult(it) }.distinctBy { it.url }
+        if (ctx != null && MovieFoxSettingsDialog.isShuffleHomeCategories(ctx)) {
+            items = items.shuffled()
+        }
 
-        val home = if (items.isNotEmpty()) listOf(HomePageList(request.name, items)) else emptyList()
+        val home = if (items.isNotEmpty()) listOf(HomePageList(categoryLabel, items)) else emptyList()
         return newHomePageResponse(home, hasNext = items.isNotEmpty())
     }
 
@@ -486,6 +518,10 @@ class MovieFoxProvider : MainAPI() {
         val timeoutSec: Long,
         val streamOnly: Boolean,
         val downloadOnly: Boolean,
+        val allow4k: Boolean,
+        val allow1080: Boolean,
+        val allow720: Boolean,
+        val allow480: Boolean,
         val seenUrls: MutableSet<String>
     )
 
@@ -493,10 +529,25 @@ class MovieFoxProvider : MainAPI() {
         val quality = value?.uppercase().orEmpty()
         return when {
             quality.contains("2160") || quality.contains("4K") -> Qualities.P2160.value
+            quality.contains("1440") -> Qualities.P1440.value
             quality.contains("1080") -> Qualities.P1080.value
             quality.contains("720") -> Qualities.P720.value
             quality.contains("480") -> Qualities.P480.value
             else -> Qualities.P1080.value
+        }
+    }
+
+    private fun isQualityAllowed(lc: LinkContext, qualityValue: Int, qualityStr: String?): Boolean {
+        val anyToggleEnabled = lc.allow4k || lc.allow1080 || lc.allow720 || lc.allow480
+        if (!anyToggleEnabled) return true
+        val raw = qualityStr.orEmpty()
+        val hasExplicitTag = Regex("""\b(2160|1440|1080|720|480|4k|uhd|fhd|hd)\b""", RegexOption.IGNORE_CASE).containsMatchIn(raw)
+        if (!hasExplicitTag) return true
+        return when {
+            qualityValue >= Qualities.P1440.value -> lc.allow4k
+            qualityValue >= Qualities.P1080.value -> lc.allow1080
+            qualityValue >= Qualities.P720.value -> lc.allow720
+            else -> lc.allow480
         }
     }
 
@@ -688,6 +739,10 @@ class MovieFoxProvider : MainAPI() {
             timeoutSec = timeoutSec,
             streamOnly = appCtx?.let { MovieFoxSettingsDialog.isStreamOnly(it) } ?: false,
             downloadOnly = appCtx?.let { MovieFoxSettingsDialog.isDownloadOnly(it) } ?: false,
+            allow4k = appCtx?.let { MovieFoxSettingsDialog.isQuality4kEnabled(it) } ?: true,
+            allow1080 = appCtx?.let { MovieFoxSettingsDialog.isQuality1080Enabled(it) } ?: true,
+            allow720 = appCtx?.let { MovieFoxSettingsDialog.isQuality720Enabled(it) } ?: true,
+            allow480 = appCtx?.let { MovieFoxSettingsDialog.isQuality480Enabled(it) } ?: true,
             seenUrls = ConcurrentHashMap.newKeySet()
         )
     }
@@ -715,7 +770,9 @@ class MovieFoxProvider : MainAPI() {
                 synchronized(subLock) { subtitleCallback(sub) }
             }
             val emitLink: (ExtractorLink, Boolean) -> Unit = { link, isStream ->
-                if (!(lc.downloadOnly && isStream)) {
+                val allowedByMode = !(lc.downloadOnly && isStream)
+                val allowedByQuality = isQualityAllowed(lc, link.quality, link.name)
+                if (allowedByMode && allowedByQuality) {
                     synchronized(emitLock) {
                         found = true
                         callback(link)
@@ -782,14 +839,18 @@ class MovieFoxProvider : MainAPI() {
         if (streamUrl.isBlank() || isAdUrl(streamUrl) || !lc.seenUrls.add(streamUrl)) return
         if (lc.downloadOnly && isHls) return
 
+        val resolvedQuality = getQuality(qualityStr ?: serverName)
+        if (!isQualityAllowed(lc, resolvedQuality, qualityStr ?: serverName)) return
+
+        val label = if (lc.streamOnly && isHls) "⚡ $serverName" else serverName
         val link = newExtractorLink(
             source = serverName,
-            name = if (lc.streamOnly && isHls) "⚡ $serverName" else serverName,
+            name = label,
             url = streamUrl,
             type = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
         ) {
             this.referer = customHeaders["Referer"] ?: lc.watchUrl
-            this.quality = getQuality(qualityStr)
+            this.quality = resolvedQuality
             this.headers = customHeaders
         }
         emitLink(link, isHls)
@@ -1142,7 +1203,8 @@ class MovieFoxProvider : MainAPI() {
             val t = item.safeStr("title")
             val dPath = item.safeStr("detailPath")
             if (dPath.isBlank() || t.isBlank()) continue
-            if ((item.optInt("subjectType", 1) == 1) == lc.isTv) continue
+            val itemIsTv = item.optInt("subjectType", 1) == 2
+            if (itemIsTv != lc.isTv) continue
             if (titleMatchesCandidate(t, lc.pageTitle)) { matchedPath = dPath; break }
         }
         val detailPath = matchedPath ?: return
@@ -1268,7 +1330,7 @@ class MovieFoxProvider : MainAPI() {
             val targets = if (lc.isTv) page.episodes[targetEpisode] ?: page.servers.takeIf { page.episodes.isEmpty() } else page.servers
             targets.orEmpty().take(4).forEach { (lbl, href) ->
                 if (href.startsWith("http")) {
-                    emitStream(lc, buildSourceLabel("VegaMovies", lbl, "S${targetSeason}E${targetEpisode}"), href, false, null, mapOf("User-Agent" to USER_AGENT), emitLink)
+                    emitStream(lc, buildSourceLabel("VegaMovies", lbl, "S${targetSeason}E${targetEpisode}"), href, false, lbl, mapOf("User-Agent" to USER_AGENT), emitLink)
                 }
             }
         }
@@ -1364,7 +1426,8 @@ class MovieFoxProvider : MainAPI() {
                     val u = normalizeUrl(sObj.safeStr("url"), base)
                     if (u.startsWith("http")) {
                         val lbl = sObj.safeStr("name", m.label)
-                        emitStream(lc, buildSourceLabel("Nuvio • ${m.label}", lbl, sObj.safeStr("title").lines().firstOrNull().orEmpty()), u, isM3u8Stream(u, ""), sObj.safeStr("title"), mapOf("Referer" to "$base/", "User-Agent" to USER_AGENT), emitLink)
+                        val titleLine = sObj.safeStr("title").lines().firstOrNull().orEmpty()
+                        emitStream(lc, buildSourceLabel("Nuvio • ${m.label}", lbl, titleLine), u, isM3u8Stream(u, ""), "$lbl $titleLine", mapOf("Referer" to "$base/", "User-Agent" to USER_AGENT), emitLink)
                     }
                     sObj.optJSONArray("subtitles")?.let { subs ->
                         for (k in 0 until subs.length()) {
@@ -1446,7 +1509,9 @@ class MovieFoxProvider : MainAPI() {
                     if (targetData != null) {
                         runCatching {
                             plugin.loadLinks(targetData, isCasting, emitSub) { ex ->
-                                if (lc.seenUrls.add(ex.url)) emitLink(ex, isStreamOrHlsLink(ex.url, ex.type))
+                                if (lc.seenUrls.add(ex.url) && isQualityAllowed(lc, ex.quality, ex.name)) {
+                                    emitLink(ex, isStreamOrHlsLink(ex.url, ex.type))
+                                }
                             }
                         }
                     }
@@ -1468,3 +1533,4 @@ class MovieFoxProvider : MainAPI() {
         }
     }
 }
+
