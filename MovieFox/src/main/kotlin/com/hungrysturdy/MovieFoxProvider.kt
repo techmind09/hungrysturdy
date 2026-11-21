@@ -161,6 +161,11 @@ class MovieFoxProvider : MainAPI() {
         return runCatching { URLEncoder.encode(src, "UTF-8") }.getOrDefault(src)
     }
 
+    private fun safeUriEncode(raw: String?, allow: String? = null): String {
+        val src = raw.orEmpty()
+        return if (allow != null) Uri.encode(src, allow).orEmpty() else Uri.encode(src).orEmpty()
+    }
+
     private suspend fun safeSubtitle(langRaw: String?, urlRaw: String?, baseHost: String = mainUrl): SubtitleFile? {
         val cleanUrl = normalizeUrl(urlRaw.orEmpty().trim(), baseHost)
         if (!cleanUrl.startsWith("http")) return null
@@ -1240,7 +1245,7 @@ class MovieFoxProvider : MainAPI() {
         val targetSeason = lc.season.toIntOrNull()?.coerceAtLeast(1) ?: 1
         val targetEpisode = lc.episode.toIntOrNull()?.coerceAtLeast(1) ?: 1
         val docs = vegamoviesDomains.flatMap { dom ->
-            val raw = safeGetText("$dom/ts-search.php?q=${safeEncode(lc.pageTitle)}&page=1", mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+            val raw = safeGetText("$dom/ts-search.php?q=${safeUriEncode(lc.pageTitle)}&page=1", mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
             runCatching {
                 val hits = JSONObject(raw).optJSONArray("hits") ?: return@runCatching emptyList<VegaDoc>()
                 (0 until hits.length()).mapNotNull { i ->
@@ -1351,7 +1356,7 @@ class MovieFoxProvider : MainAPI() {
 
             for (rawId in ids) {
                 val sid = if (lc.isTv) "$rawId:$sNum:$eNum" else rawId
-                val epUrl = "$base/stream/$stremioType/${Uri.encode(sid, ":")}.json$qSuffix"
+                val epUrl = "$base/stream/$stremioType/${safeUriEncode(sid, ":")}.json$qSuffix"
                 val raw = safeGetText(epUrl, timeoutSec = lc.timeoutSec).orEmpty()
                 val arr = runCatching { JSONObject(raw).optJSONArray("streams") }.getOrNull() ?: continue
                 for (i in 0 until arr.length()) {
@@ -1438,9 +1443,11 @@ class MovieFoxProvider : MainAPI() {
                         val eN = lc.episode.toIntOrNull() ?: 1
                         loadRes.episodes.firstOrNull { it.season == sN && it.episode == eN }?.data ?: loadRes.episodes.firstOrNull()?.data
                     } else (loadRes as? MovieLoadResponse)?.dataUrl ?: hit.url
-                    runCatching {
-                        plugin.loadLinks(targetData, isCasting, emitSub) { ex ->
-                            if (lc.seenUrls.add(ex.url)) emitLink(ex, isStreamOrHlsLink(ex.url, ex.type))
+                    if (targetData != null) {
+                        runCatching {
+                            plugin.loadLinks(targetData, isCasting, emitSub) { ex ->
+                                if (lc.seenUrls.add(ex.url)) emitLink(ex, isStreamOrHlsLink(ex.url, ex.type))
+                            }
                         }
                     }
                 }
