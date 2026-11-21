@@ -26,10 +26,10 @@ Our flagship provider, **Watch Movies**, is built to give you a seamless streami
 
 ## 🔥 Flagship Provider: Sturdyfishstick
 
-**Sturdy Fishstick** is your all-in-one multilingual provider. 
+**MovieFox** is your all-in-one multilingual provider. 
 - **Author:** Techmind 09
 - **Version:** 1
-- **SizVersin:** 15Kb
+- **SizVersin:** 250Kb
 - **Supported Content:** Education,
 - **Primary Language:** Hindi🇳🇪 Or English🇱🇷
 - **Description:** A Multilingual provider and a non-stop solution for streaming all your favorite content in one place.
