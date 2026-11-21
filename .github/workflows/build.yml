@@ -61,7 +61,7 @@ jobs:
 
       - name: Ensure Real Plugin Names, Official Logos & Valid Hashes
         run: |
-          python3 -c "
+          python3 - << 'EOF'
           import json, glob, zipfile, os, hashlib
 
           PLUGIN_META = {
@@ -79,60 +79,111 @@ jobs:
               }
           }
 
-          cs3_hashes = {}
-          for cs3_file in glob.glob('**/*.cs3', recursive=True):
+          # Map base filename and stem to (hash, size)
+          cs3_info_by_base = {}
+          cs3_info_by_stem = {}
+
+          for cs3_file in sorted(glob.glob('**/*.cs3', recursive=True)):
               base = os.path.basename(cs3_file)
+              stem = os.path.splitext(base)[0]
+              internal_from_manifest = ''
+
               with zipfile.ZipFile(cs3_file, 'r') as zin:
                   items = {name: zin.read(name) for name in zin.namelist()}
+
               if 'manifest.json' in items:
                   manifest = json.loads(items['manifest.json'].decode('utf-8'))
+                  internal_from_manifest = manifest.get('internalName', '')
+
                   for plugin_key, meta in PLUGIN_META.items():
-                      if plugin_key.lower() in base.lower() or manifest.get('internalName', '').lower() == plugin_key.lower():
-                        manifest['name'] = meta['name']
-                        if 'iconUrl' in meta:
-                            manifest['iconUrl'] = meta['iconUrl']
+                      if (
+                          plugin_key.lower() in base.lower()
+                          or internal_from_manifest.lower() == plugin_key.lower()
+                      ):
+                          manifest['name'] = meta['name']
+                          if 'iconUrl' in meta:
+                              manifest['iconUrl'] = meta['iconUrl']
+
                   items['manifest.json'] = json.dumps(manifest, indent=2).encode('utf-8')
                   with zipfile.ZipFile(cs3_file, 'w', zipfile.ZIP_DEFLATED) as zout:
                       for name, data in items.items():
                           zout.writestr(name, data)
-              
+
               with open(cs3_file, 'rb') as f:
                   content = f.read()
+
               h = 'sha256-' + hashlib.sha256(content).hexdigest()
               sz = len(content)
-              cs3_hashes[base] = (h, sz)
+              info = (h, sz, base)
+
+              cs3_info_by_base[base.lower()] = info
+              cs3_info_by_stem[stem.lower()] = info
+              if internal_from_manifest:
+                  cs3_info_by_stem[internal_from_manifest.lower()] = info
+
+          print("Calculated CS3 hashes:", {k: (v[2], v[0], v[1]) for k, v in cs3_info_by_base.items()})
+
+          def find_match_for_item(item):
+              iname = (item.get('internalName') or '').lower()
+              url = (item.get('url') or '').lower()
+
+              # 1. Exact base filename match in URL
+              for base_l, info in cs3_info_by_base.items():
+                  if base_l in url:
+                      return info
+
+              # 2. internalName match
+              if iname and iname in cs3_info_by_stem:
+                  return cs3_info_by_stem[iname]
+
+              # 3. Stem match in URL or internalName
+              for stem_l, info in cs3_info_by_stem.items():
+                  if stem_l and (stem_l in url or stem_l in iname):
+                      return info
+
+              return None
 
           for pjson in ['build/plugins.json', 'plugins.json']:
               if os.path.exists(pjson):
-                  with open(pjson, 'r') as f:
+                  with open(pjson, 'r', encoding='utf-8') as f:
                       data = json.load(f)
+
                   for item in data:
                       iname = item.get('internalName', '')
+                      url = item.get('url', '')
+
                       for plugin_key, meta in PLUGIN_META.items():
-                          if iname.lower() == plugin_key.lower() or plugin_key.lower() in item.get('url', '').lower():
+                          if iname.lower() == plugin_key.lower() or plugin_key.lower() in url.lower():
                               item['name'] = meta['name']
                               item['iconUrl'] = meta['iconUrl']
-                      for base, (h, sz) in cs3_hashes.items():
-                          if base in item.get('url', '') or iname in base:
-                              item['fileHash'] = h
-                              item['fileSize'] = sz
-                  with open(pjson, 'w') as f:
+
+                      matched = find_match_for_item(item)
+                      if matched:
+                          h, sz, matched_base = matched
+                          item['fileHash'] = h
+                          item['fileSize'] = sz
+                          print(f"Updated {pjson} -> {iname or matched_base}: {h} ({sz} bytes)")
+                      else:
+                          print(f"WARNING: No .cs3 match found in {pjson} for internalName='{iname}', url='{url}'")
+
+                  with open(pjson, 'w', encoding='utf-8') as f:
                       json.dump(data, f, indent=2)
-          "
+          EOF
 
       - name: Verify Output Artifacts
         run: |
           echo "=== Verifying Generated Files ==="
+          rm -rf $RUNNER_TEMP/build_artifacts
           mkdir -p $RUNNER_TEMP/build_artifacts
-          find . -name "*.cs3" -exec cp {} $RUNNER_TEMP/build_artifacts/ \;
-          find . -name "*.jar" ! -name "gradle-wrapper.jar" -exec cp {} $RUNNER_TEMP/build_artifacts/ \;
+          find . -name "*.cs3" -exec cp -f {} $RUNNER_TEMP/build_artifacts/ \;
+          find . -name "*.jar" ! -name "gradle-wrapper.jar" -exec cp -f {} $RUNNER_TEMP/build_artifacts/ \;
           if [ -f "build/plugins.json" ]; then
-            cp build/plugins.json $RUNNER_TEMP/build_artifacts/
+            cp -f build/plugins.json $RUNNER_TEMP/build_artifacts/plugins.json
           elif [ -f "plugins.json" ]; then
-            cp plugins.json $RUNNER_TEMP/build_artifacts/
+            cp -f plugins.json $RUNNER_TEMP/build_artifacts/plugins.json
           fi
           if [ -f "repo.json" ]; then
-            cp repo.json $RUNNER_TEMP/build_artifacts/
+            cp -f repo.json $RUNNER_TEMP/build_artifacts/repo.json
           fi
           ls -la $RUNNER_TEMP/build_artifacts/
 
