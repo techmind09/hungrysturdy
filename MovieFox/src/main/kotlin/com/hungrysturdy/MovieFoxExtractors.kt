@@ -67,11 +67,17 @@ internal object ExtractorUtils {
         if (!dynamicUrlsLoaded) {
             dynamicUrlsLoaded = true
             runCatching {
-                val map = app.get(
+                val text = app.get(
                     "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json",
                     timeout = 5L
-                ).parsedSafe>()
-                map?.forEach { (k, v) -> if (v.isNotBlank()) dynamicUrlCache[k] = v }
+                ).text
+                val obj = JSONObject(text)
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val k = keys.next()
+                    val v = obj.optString(k).trim()
+                    if (v.isNotBlank()) dynamicUrlCache[k] = v
+                }
             }
         }
         return dynamicUrlCache[source]?.takeIf { it.isNotBlank() } ?: baseUrl
