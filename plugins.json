@@ -1,0 +1,62 @@
+[
+  {
+    "url": "https://raw.githubusercontent.com/techmind09/hungrysturdy/builds/MovieFox.cs3",
+    "status": 1,
+    "version": 4,
+    "name": "MovieFox",
+    "internalName": "MovieFox",
+    "authors": [
+      "sturdyfishstick1"
+    ],
+    "description": "MovieFox - Indian Hindi+English Movies&Web Series",
+    "fileSize": 219917,
+    "repositoryUrl": "https://github.com/techmind09/hungrysturdy",
+    "language": "hi",
+    "tvTypes": [
+      "Movies&Series"
+    ],
+    "iconUrl": "https://raw.githubusercontent.com/techmind09/hungrysturdy/refs/heads/main/246481509.png",
+    "apiVersion": 1,
+    "fileHash": "sha256-af10df185cbd1c3b28f7093819330da0284df5804bbef793f208345e3b23afa0"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/techmind09/hungrysturdy/builds/Multi.cs3",
+    "status": 1,
+    "version": 10,
+    "name": "Multi",
+    "internalName": "Multi",
+    "authors": [
+      "hungrysturdy"
+    ],
+    "description": "Multi - Indian Hindi+English+Other Movies&Web Series",
+    "fileSize": 253394,
+    "repositoryUrl": "https://github.com/techmind09/hungrysturdy",
+    "language": "hi",
+    "tvTypes": [
+      "Movies&Series"
+    ],
+    "iconUrl": "https://raw.githubusercontent.com/techmind09/hungrysturdy/refs/heads/main/246481509.png",
+    "apiVersion": 1,
+    "fileHash": "sha256-306c6ae6a0b0fc546d124bf7328ca6ac8db51fff695c4b1078d03467f2313454"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/techmind09/hungrysturdy/builds/Multi2.cs3",
+    "status": 1,
+    "version": 6,
+    "name": "Multi2",
+    "internalName": "Multi2",
+    "authors": [
+      "sturdyfishstick1"
+    ],
+    "description": "Multi2 - Indian Hindi+English Movies&Web Series",
+    "fileSize": 93161,
+    "repositoryUrl": "https://github.com/techmind09/hungrysturdy",
+    "language": "hi",
+    "tvTypes": [
+      "Movies&Series"
+    ],
+    "iconUrl": "https://raw.githubusercontent.com/techmind09/hungrysturdy/refs/heads/main/246481509.png",
+    "apiVersion": 1,
+    "fileHash": "sha256-db69e4cc65e2d30cd6bec32278447a82d8df0d09f430ad10ecbd319559db0d0d"
+  }
+]
