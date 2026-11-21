@@ -12,6 +12,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
@@ -225,7 +226,7 @@ internal object GokuHDSources {
                 h.contains(".r2.dev") -> listOf(Server("FSL", href))
                 h.contains("pixeldrain") -> {
                     val id = href.substringBefore("?").substringBefore("#").substringAfterLast("/")
-                    if (id.isNotBlank()) listOf(Server("PixelDrain", "${mfBaseUrl(href)}/api/file/$id")) else emptyList()
+                    if (id.isNotBlank()) listOf(Server("PixelDrain", "https://pixeldrain.dev/api/file/$id")) else emptyList()
                 }
                 h.contains("vcloud") || h.contains("hubcloud") -> {
                     val resHtml = runCatching {
@@ -245,7 +246,13 @@ internal object GokuHDSources {
                             lbl.contains("10gbps", true) || u.contains("gpdl", true) -> "10Gbps"
                             else -> null
                         } ?: continue
-                        out.add(Server(sName, u))
+                        val finalU = if (sName == "PixelDrain") {
+                            val pid = u.substringBefore("?").substringBefore("#").substringAfterLast("/")
+                            if (pid.isNotBlank()) "https://pixeldrain.dev/api/file/$pid" else u
+                        } else {
+                            u
+                        }
+                        out.add(Server(sName, finalU))
                     }
                     out.distinctBy { it.url }
                 }
@@ -519,7 +526,7 @@ open class GDFlix : ExtractorApi() {
                 }
                 link.contains("pixeldra") -> {
                     val finalURL = if (link.contains("download", true)) link
-                    else "${mfBaseUrl(link)}/api/file/${link.substringAfterLast("/")}?download"
+                    else "https://pixeldrain.dev/api/file/${link.substringAfterLast("/")}?download"
                     myCallback(finalURL, "[Pixeldrain]")
                 }
                 text.contains("GoFile") -> {
@@ -764,7 +771,7 @@ open class HubCloud : ExtractorApi() {
                 btnLink.contains("pixeldra") -> {
                     val pixelLink = extractPxlUrl(document.toString()) ?: return@mfSafeAmap
                     val finalURL = if (pixelLink.contains("download", true)) pixelLink
-                    else "${mfBaseUrl(pixelLink)}/api/file/${pixelLink.substringAfterLast("/")}?download"
+                    else "https://pixeldrain.dev/api/file/${pixelLink.substringAfterLast("/")}?download"
                     myCallback(finalURL, "[Pixeldrain]")
                 }
                 text.contains("Buzz Server") -> {
@@ -790,10 +797,10 @@ open class PixeldrainExtractor : ExtractorApi() {
     ) {
         val fileId = Regex("""pixeldrain\.[a-z]+/(?:u|api/file|l)/([a-zA-Z0-9_-]+)""", RegexOption.IGNORE_CASE)
             .find(url)?.groupValues?.get(1) ?: return
-        val directUrl = "${mfBaseUrl(url)}/api/file/$fileId"
+        val directUrl = "https://pixeldrain.dev/api/file/$fileId"
         if (mfIsBrokenContainerUrl(directUrl)) return
         callback.invoke(newExtractorLink(source = name, name = name, url = directUrl, type = ExtractorLinkType.VIDEO) {
-            this.referer = "$mainUrl/"
+            this.referer = "https://pixeldrain.dev/"
             this.quality = Qualities.P1080.value
         })
     }
