@@ -1,5 +1,6 @@
 package com.hungrysturdy
 
+import android.util.Base64
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
@@ -12,7 +13,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
@@ -816,7 +816,7 @@ open class VoeExtractor : ExtractorApi() {
         val html = app.get(url, referer = referer ?: "$mainUrl/").text
         val hlsB64 = Regex("""['"]hls['"]\s*:\s*['"]([A-Za-z0-9+/=]+)['"]""").find(html)?.groupValues?.get(1)
         if (!hlsB64.isNullOrBlank()) {
-            val decoded = runCatching { String(Base64.decode(hlsB64, Base64.DEFAULT)).trim() }.getOrNull().orEmpty()
+            val decoded = runCatching { String(base64Decode(hlsB64)).trim() }.getOrNull().orEmpty()
             if (decoded.startsWith("http") && !mfIsBrokenContainerUrl(decoded)) {
                 callback.invoke(newExtractorLink(name, "$name HLS", decoded, ExtractorLinkType.M3U8) {
                     this.referer = url
@@ -888,8 +888,8 @@ class VibuxerExtractor : NxStreamHubExtractor() {
     override var mainUrl = "https://vibuxer.com"
 }
 
-class Vivibebe : VibePlayer() { override val mainUrl = "https://vivibebe.site" }
-class Bibiemb : VibePlayer() { override val mainUrl = "https://bibiemb.xyz" }
+class Vivibebe : VibePlayer() { override var mainUrl = "https://vivibebe.site" }
+class Bibiemb : VibePlayer() { override var mainUrl = "https://bibiemb.xyz" }
 
 open class VibePlayer : ExtractorApi() {
     override val name = "VibePlayer"
