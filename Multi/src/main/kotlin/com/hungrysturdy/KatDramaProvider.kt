@@ -3,6 +3,7 @@ package com.hungrysturdy
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.*
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
 class KatDramaProvider : MainAPI() {
@@ -132,7 +133,35 @@ class KatDramaProvider : MainAPI() {
         }
     }
 
-    private fun parseArchiveDocument(doc: org.jsoup.nodes.Document, fallbackQuality: String, episodeMap: MutableMap<Int, MutableList<String>>) {
+    private fun isSupportedHost(href: String): Boolean {
+        val lower = href.lowercase()
+        return lower.contains("hubcloud") ||
+                lower.contains("gamerxyt") ||
+                lower.contains("gdflix") ||
+                lower.contains("filebee") ||
+                lower.contains("goflix") ||
+                lower.contains("pixeldrain") ||
+                lower.contains("hbplay.pages.dev") ||
+                lower.contains("fuckingfast.net") ||
+                lower.contains("drive.google.com")
+    }
+
+    private fun extractCandidateUrl(el: Element): String {
+        val raw = el.attr("href").ifEmpty {
+            el.attr("data-href").ifEmpty {
+                el.attr("data-url").ifEmpty {
+                    Regex("""https?://[^\s"'<>]+""").find(el.attr("onclick"))?.value.orEmpty()
+                }
+            }
+        }
+        return raw.replace("&amp;", "&").trim()
+    }
+
+    private fun parseArchiveDocument(
+        doc: Document,
+        fallbackQuality: String,
+        episodeMap: MutableMap<Int, MutableList<String>>
+    ) {
         val contentRoot = doc.selectFirst("div.entry-content, article, main") ?: doc.body()
         var currentEp = 1
         var currentQuality = fallbackQuality
@@ -142,7 +171,7 @@ class KatDramaProvider : MainAPI() {
 
         for (el in contentRoot.select("*")) {
             val ownText = el.ownText().trim()
-            if (ownText.isNotEmpty() && ownText.length < 120 && el.tagName() != "a") {
+            if (ownText.isNotEmpty() && ownText.length < 120 && el.tagName() != "a" && el.tagName() != "button") {
                 val epMatch = epRegex.find(ownText)
                 if (epMatch != null) {
                     val parsedEp = epMatch.groupValues[1].toIntOrNull()
@@ -156,15 +185,9 @@ class KatDramaProvider : MainAPI() {
                 }
             }
 
-            if (el.tagName() == "a") {
-                val href = el.attr("href").replace("&amp;", "&").trim()
-                if (href.contains("hubcloud", true) ||
-                    href.contains("gdflix", true) ||
-                    href.contains("filebee", true) ||
-                    href.contains("goflix", true) ||
-                    href.contains("pixeldrain", true) ||
-                    href.contains("drive.google.com", true)
-                ) {
+            if (el.tagName() == "a" || el.tagName() == "button" || el.hasAttr("data-href") || el.hasAttr("data-url")) {
+                val href = extractCandidateUrl(el)
+                if (href.startsWith("http") && isSupportedHost(href)) {
                     val linkText = el.text().trim()
                     val epFromLink = epRegex.find(linkText)?.groupValues?.get(1)?.toIntOrNull() ?: currentEp
                     val qualFromLink = qualRegex.find(linkText)?.groupValues?.get(1) ?: currentQuality
@@ -172,6 +195,15 @@ class KatDramaProvider : MainAPI() {
                     episodeMap.getOrPut(epFromLink) { mutableListOf() }.add("$qualFromLink|$href")
                 }
             }
+        }
+
+        if (episodeMap.isEmpty()) {
+            Regex("""https?://[^\s"'<>\\]+(?:hubcloud|gamerxyt|gdflix|pixeldrain|goflix|hbplay\.pages\.dev|fuckingfast\.net)[^\s"'<>\\]*""", RegexOption.IGNORE_CASE)
+                .findAll(contentRoot.html())
+                .forEach { m ->
+                    val clean = m.value.replace("&amp;", "&").replace("\\/", "/")
+                    episodeMap.getOrPut(1) { mutableListOf() }.add("$fallbackQuality|$clean")
+                }
         }
     }
 
@@ -185,13 +217,13 @@ class KatDramaProvider : MainAPI() {
             ?: return null
         val title = cleanTitle(rawTitle)
 
-        // Prioritized img.poster-img to fetch the exact drama poster correctly
         val poster = fixUrlNull(
-            mainArticle.selectFirst("img.poster-img, .poster-img, div.post-featured-image img, div.single-featured img, div.post-thumbnail img, .featured-image img, img.wp-post-image")?.attr("src")
-                ?: document.selectFirst("img.poster-img, .poster-img, div.post-featured-image img, div.single-featured img, div.post-thumbnail img, .featured-image img, img.wp-post-image")?.attr("src")
-                ?: mainArticle.selectFirst("div.entry-content img")?.attr("src")
+            document.selectFirst("meta[property=og:image]")?.attr("content")
+                ?: mainArticle.selectFirst("img.poster-img")?.attr("src")
+                ?: mainArticle.selectFirst("div.entry-content img")?.let { it.attr("src").ifEmpty { it.attr("data-src") } }
+                ?: mainArticle.selectFirst("div.post-featured-image img, div.single-featured img, div.post-thumbnail img, .featured-image img, img.wp-post-image")?.attr("src")
         )
-        
+
         val plot = mainArticle.selectFirst("div.entry-content p")?.text()?.trim()
             ?: document.selectFirst("meta[property=og:description]")?.attr("content")?.trim()
 
@@ -200,18 +232,35 @@ class KatDramaProvider : MainAPI() {
         val episodeMap = mutableMapOf<Int, MutableList<String>>()
         val visitedArchives = mutableSetOf<String>()
 
-        val archiveLinks = document.select("a[href*='dramashindi.online'], a[href*='/archives/'], div.entry-content a.wp-block-button__link, div.entry-content a")
-            .filter {
-                val href = it.attr("href")
-                href.contains("dramashindi.online") || href.contains("/archives/")
+        val archiveLinks = mainArticle.select("a[href], button[data-href], a[data-href]")
+            .mapNotNull { el ->
+                val href = extractCandidateUrl(el)
+                val text = el.text().trim()
+                if (href.startsWith("http") &&
+                    !href.contains("t.me") &&
+                    !href.contains("telegram") &&
+                    !href.contains("whatsapp") &&
+                    !href.contains("/category/") &&
+                    !href.contains("/tag/") &&
+                    !isSupportedHost(href) &&
+                    (href.contains("dramashindi", true) ||
+                            href.contains("/archives/", true) ||
+                            href.contains("katworld", true) ||
+                            text.contains("480p", true) ||
+                            text.contains("720p", true) ||
+                            text.contains("1080p", true) ||
+                            text.contains("Download", true) ||
+                            text.contains("Episode", true))
+                ) {
+                    href to text
+                } else {
+                    null
+                }
             }
 
         if (archiveLinks.isNotEmpty()) {
-            archiveLinks.forEach { archiveBtn ->
-                val archiveUrl = archiveBtn.attr("href").replace("&amp;", "&").trim()
-                if (!visitedArchives.add(archiveUrl)) return@forEach
-
-                val btnText = archiveBtn.text().trim()
+            for ((archiveUrl, btnText) in archiveLinks) {
+                if (!visitedArchives.add(archiveUrl)) continue
                 val qualityLabel = Regex("""(\d{3,4}p)""", RegexOption.IGNORE_CASE).find(btnText)?.groupValues?.get(1) ?: "HD"
 
                 try {
@@ -253,6 +302,38 @@ class KatDramaProvider : MainAPI() {
         }
     }
 
+    private suspend fun dispatchSingleServer(
+        url: String,
+        qualityStr: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val quality = getQualityFromName(qualityStr)
+        when {
+            url.contains("hubcloud", ignoreCase = true) || url.contains("gamerxyt", ignoreCase = true) -> {
+                KatServerLogic.extractHubCloudServers(url, qualityStr, callback)
+            }
+            url.contains("gdflix", ignoreCase = true) -> {
+                KatServerLogic.extractGdFlixServers("GDFlix", url, qualityStr, subtitleCallback, callback)
+            }
+            url.contains("pixeldrain", ignoreCase = true) -> {
+                KatServerLogic.extractPixelDrain(url, quality, callback)
+            }
+            url.contains("hbplay.pages.dev", ignoreCase = true) -> {
+                KatServerLogic.extractHbPlay(url, quality, callback)
+            }
+            url.contains("fuckingfast.net", ignoreCase = true) -> {
+                KatServerLogic.extractFuckingFast(url, quality, callback)
+            }
+            url.contains("goflix.sbs", ignoreCase = true) -> {
+                KatServerLogic.extractGoFlixMirror(url, quality, subtitleCallback, callback)
+            }
+            else -> {
+                loadExtractor(url, qualityStr, subtitleCallback, callback)
+            }
+        }
+    }
+
     override suspend fun loadLinks(
         data: String,
         isCasting: Boolean,
@@ -266,28 +347,37 @@ class KatDramaProvider : MainAPI() {
             val qualityStr = if (parts.size == 2) parts[0] else ""
             val rawUrl = if (parts.size == 2) parts[1] else parts[0]
             val url = rawUrl.replace("&amp;", "&").trim()
-            val quality = getQualityFromName(qualityStr)
 
-            when {
-                url.contains("hubcloud", ignoreCase = true) || url.contains("gamerxyt", ignoreCase = true) -> {
-                    KatServerLogic.extractHubCloudServers(url, qualityStr, callback)
-                }
-                url.contains("gdflix", ignoreCase = true) -> {
-                    KatServerLogic.extractGdFlixServers(url, qualityStr, subtitleCallback, callback)
-                }
-                url.contains("pixeldrain", ignoreCase = true) -> {
-                    KatServerLogic.extractPixelDrain(url, quality, callback)
-                }
-                url.contains("hbplay.pages.dev", ignoreCase = true) -> {
-                    KatServerLogic.extractHbPlay(url, quality, callback)
-                }
-                url.contains("fuckingfast.net", ignoreCase = true) -> {
-                    KatServerLogic.extractFuckingFast(url, quality, callback)
-                }
-                url.contains("goflix.sbs", ignoreCase = true) -> {
-                    KatServerLogic.extractGoFlixMirror(url, quality, subtitleCallback, callback)
-                }
-                else -> {
+            if (isSupportedHost(url)) {
+                dispatchSingleServer(url, qualityStr, subtitleCallback, callback)
+            } else if (url.startsWith("http")) {
+                try {
+                    val subDoc = app.get(url, headers = customHeaders, interceptor = cfKiller).document
+                    val foundLinks = linkedSetOf<String>()
+
+                    subDoc.select("a[href], button[data-href], a[data-href]").forEach { el ->
+                        val candidate = extractCandidateUrl(el)
+                        if (candidate.startsWith("http") && isSupportedHost(candidate)) {
+                            foundLinks.add(candidate)
+                        }
+                    }
+
+                    if (foundLinks.isEmpty()) {
+                        Regex("""https?://[^\s"'<>\\]+(?:hubcloud|gamerxyt|gdflix|pixeldrain|goflix|hbplay\.pages\.dev|fuckingfast\.net)[^\s"'<>\\]*""", RegexOption.IGNORE_CASE)
+                            .findAll(subDoc.html())
+                            .forEach { m ->
+                                foundLinks.add(m.value.replace("&amp;", "&").replace("\\/", "/"))
+                            }
+                    }
+
+                    if (foundLinks.isNotEmpty()) {
+                        foundLinks.amap { serverUrl ->
+                            dispatchSingleServer(serverUrl, qualityStr, subtitleCallback, callback)
+                        }
+                    } else {
+                        loadExtractor(url, qualityStr, subtitleCallback, callback)
+                    }
+                } catch (_: Exception) {
                     loadExtractor(url, qualityStr, subtitleCallback, callback)
                 }
             }
