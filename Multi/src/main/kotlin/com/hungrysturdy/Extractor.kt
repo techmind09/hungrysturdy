@@ -6,7 +6,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.extractors.Filesim
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
+import org.json.JSONObject
 import java.net.URI
 import java.net.URLDecoder
 
@@ -45,10 +45,13 @@ private fun katGetIndexQuality(str: String?): Int {
 
 private suspend fun katGetLatestBaseUrl(baseUrl: String, source: String): String {
     return try {
-        val rawJson = app.get("https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json").text
-        val dynamicUrls: Map<String, String>? = tryParseJson>(rawJson)
-        val mappedUrl = dynamicUrls?.get(source)
-        if (!mappedUrl.isNullOrBlank()) mappedUrl else baseUrl
+        val rawJson = app.get("https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json").text.trim()
+        if (rawJson.startsWith("{")) {
+            val obj = JSONObject(rawJson)
+            val mappedUrl = obj.optString(source, "")
+            if (mappedUrl.isNotBlank()) return mappedUrl
+        }
+        baseUrl
     } catch (_: Exception) {
         baseUrl
     }
