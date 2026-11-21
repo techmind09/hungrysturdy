@@ -27,9 +27,7 @@ import java.lang.reflect.Modifier
 import java.net.URI
 import java.net.URLEncoder
 import java.security.MessageDigest
-import java.security.SecureRandom
 import java.util.Collections
-import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.zip.ZipFile
 import javax.crypto.Mac
@@ -98,7 +96,6 @@ class MovieFoxProvider : MainAPI() {
     private val fourKhdHubDomains = listOf("https://4khdhub.one")
     private val movies4uDomains = listOf("https://new6.movies4u.garden")
     private val multimoviesDomains = listOf("https://m1.multimovies.courses", "https://multimovies.garden")
-    private val tmfDomains = listOf("https://one.1moviesflix.lol", "https://themoviesflixhq.com")
 
     private val cfKillers = ConcurrentHashMap<String, CloudflareKiller>()
     private val cfLocks = ConcurrentHashMap<String, Mutex>()
@@ -156,11 +153,6 @@ class MovieFoxProvider : MainAPI() {
         URI(url).host?.lowercase().orEmpty()
     }.getOrDefault("")
 
-    private fun originOf(url: String): String = runCatching {
-        val u = URI(url)
-        "${u.scheme}://${u.host}"
-    }.getOrDefault(url)
-
     private fun killerFor(url: String): CloudflareKiller =
         cfKillers.getOrPut(hostOf(url).ifBlank { url }) { CloudflareKiller() }
 
@@ -193,7 +185,6 @@ class MovieFoxProvider : MainAPI() {
         return out
     }
 
-    // Automatic Cloudflare Bypass + Saved Cookie Fallback
     private suspend fun safeGetText(
         url: String,
         extraHeaders: Map<String, String> = emptyMap(),
@@ -233,7 +224,8 @@ class MovieFoxProvider : MainAPI() {
     private fun isYouTubeOrBlockedStream(url: String, label: String = ""): Boolean {
         val lowUrl = url.lowercase()
         val lowLbl = label.lowercase()
-        return lowUrl.contains("googlevideo.com") ||
+        return mfIsBrokenContainerUrl(url) ||
+            lowUrl.contains("googlevideo.com") ||
             lowUrl.contains("youtube.com") ||
             lowUrl.contains("youtu.be") ||
             lowLbl.contains("youtube")
@@ -257,7 +249,7 @@ class MovieFoxProvider : MainAPI() {
 
     private suspend fun safeSubtitle(langRaw: String?, urlRaw: String?, baseHost: String = mainUrl): SubtitleFile? {
         val cleanUrl = normalizeUrl(urlRaw.orEmpty().trim(), baseHost)
-        if (!cleanUrl.startsWith("http")) return null
+        if (!cleanUrl.startsWith("http") || mfIsBrokenContainerUrl(cleanUrl)) return null
         val cleanLang = langRaw.orEmpty().trim().ifBlank { "English" }
         return newSubtitleFile(lang = cleanLang, url = cleanUrl)
     }
@@ -964,7 +956,6 @@ class MovieFoxProvider : MainAPI() {
             "movy" -> fetchMovy(lc, emitSub, emitLink)
             "4khdhub" -> fetch4KhdHub(lc, emitSub, emitLink)
             "movies4u" -> fetchMovies4u(lc, emitSub, emitLink)
-            "tmf" -> fetchTmf(lc, emitSub, emitLink)
             "multimovies" -> fetchMultimovies(lc, emitSub, emitLink)
             else -> fetchCustomCs3Server(srvKey, lc, isCasting, emitSub, emitLink)
         }
@@ -1052,13 +1043,24 @@ class MovieFoxProvider : MainAPI() {
                 }
             }
 
+            val audioList = mutableListOf<String>()
+            st.optJSONArray("languages")?.let { langs ->
+                for (a in 0 until langs.length()) {
+                    langs.optJSONObject(a)?.safeStr("name")?.takeIf { it.isNotBlank() }?.let { audioList.add(it) }
+                        ?: langs.optString(a).trim().takeIf { it.isNotBlank() && it != "null" }?.let { audioList.add(it) }
+                }
+            }
+            val langTag = st.safeStr("language").ifBlank { st.safeStr("lang") }.ifBlank { audioList.distinct().joinToString("/") }
+
             val extraHeaders = mutableMapOf<String, String>()
             st.optJSONObject("headers")?.let { hObj ->
-                val keys = hObj.keys()
-                while (keys.hasNext()) {
-                    val k = keys.next()
-                    val v = hObj.safeStr(k)
-                    if (v.isNotBlank()) extraHeaders[k] = v
+                val keysArr = hObj.names()
+                if (keysArr != null) {
+                    for (ki in 0 until keysArr.length()) {
+                        val k = keysArr.optString(ki)
+                        val v = hObj.safeStr(k)
+                        if (v.isNotBlank()) extraHeaders[k] = v
+                    }
                 }
             }
 
@@ -1162,7 +1164,6 @@ class MovieFoxProvider : MainAPI() {
         }
     }
 
-    // --- VegaMovies + GokuHDSources (FSL, FSLv2, PixelDrain, V-Cloud, HubCloud, GoFile, 10Gbps) ---
     private suspend fun fetchVegaMoviesResolved(
         lc: LinkContext,
         emitSub: (SubtitleFile) -> Unit,
@@ -1225,7 +1226,6 @@ class MovieFoxProvider : MainAPI() {
         }
     }
 
-    // --- Sflix (sflix.film + h5-api.aoneroom.com + mzfi.me DASH/HLS/MP4) ---
     private fun sflixMd5(input: ByteArray): String =
         MessageDigest.getInstance("MD5").digest(input).joinToString("") { "%02x".format(it) }
 
@@ -1332,7 +1332,6 @@ class MovieFoxProvider : MainAPI() {
         }
     }
 
-    // --- Prmovies (Mirror domains + Speedostream + Vidsrc) ---
     private suspend fun fetchPrmoviesFull(
         lc: LinkContext,
         emitSub: (SubtitleFile) -> Unit,
@@ -1394,7 +1393,6 @@ class MovieFoxProvider : MainAPI() {
         }
     }
 
-    // --- DramaVerse (mydverse.com + xcloud.tattoo / stream.xcloud1.lol + Pixeldrain) ---
     private suspend fun fetchDramaVerse(
         lc: LinkContext,
         emitSub: (SubtitleFile) -> Unit,
@@ -1433,7 +1431,6 @@ class MovieFoxProvider : MainAPI() {
         }
     }
 
-    // --- GokuHD (gokuhd.nl + GokuHDSources) ---
     private suspend fun fetchGokuHd(
         lc: LinkContext,
         emitSub: (SubtitleFile) -> Unit,
@@ -1478,7 +1475,6 @@ class MovieFoxProvider : MainAPI() {
         }
     }
 
-    // --- Play4u ---
     private fun extractWindowJsonObject(html: String, varName: String): JSONObject? {
         val marker = "window.$varName = "
         val at = html.indexOf(marker)
@@ -1577,24 +1573,30 @@ class MovieFoxProvider : MainAPI() {
         } else {
             val seasonsObj = extractWindowJsonObject(pageHtml, "__PA_SERIES__")?.optJSONObject("seasons") ?: return
             var matchedSeason: JSONObject? = null
-            for (k in seasonsObj.keys()) {
-                val o = seasonsObj.optJSONObject(k) ?: continue
-                if (o.optInt("number", -1) == targetSeason || k.toIntOrNull() == targetSeason) { matchedSeason = o; break }
+            val sKeys = seasonsObj.names()
+            if (sKeys != null) {
+                for (si in 0 until sKeys.length()) {
+                    val k = sKeys.optString(si)
+                    val o = seasonsObj.optJSONObject(k) ?: continue
+                    if (o.optInt("number", -1) == targetSeason || k.toIntOrNull() == targetSeason) { matchedSeason = o; break }
+                }
             }
-            val episodesObj = (matchedSeason ?: if (seasonsObj.length() == 1) seasonsObj.optJSONObject(seasonsObj.keys().next()) else null)
+            val episodesObj = (matchedSeason ?: if (seasonsObj.length() == 1 && sKeys != null) seasonsObj.optJSONObject(sKeys.optString(0)) else null)
                 ?.optJSONObject("episodes") ?: return
-            for (ek in episodesObj.keys()) {
-                val epObj = episodesObj.optJSONObject(ek) ?: continue
-                if (epObj.optInt("number", -1) != targetEpisode) continue
-                val linkUrl = play4uUnseal(epObj.safeStr("hls"), sealKey).let { if (it.isNotBlank()) normalizeUrl(it, play4uBaseUrl) else "" }
-                if (linkUrl.startsWith("http")) {
-                    emitStream(lc, buildSourceLabel("Play4u", "HLS", "Ep $targetEpisode"), linkUrl, true, null, p4StreamHeaders, emitLink)
+            val eKeys = episodesObj.names()
+            if (eKeys != null) {
+                for (ei in 0 until eKeys.length()) {
+                    val epObj = episodesObj.optJSONObject(eKeys.optString(ei)) ?: continue
+                    if (epObj.optInt("number", -1) != targetEpisode) continue
+                    val linkUrl = play4uUnseal(epObj.safeStr("hls"), sealKey).let { if (it.isNotBlank()) normalizeUrl(it, play4uBaseUrl) else "" }
+                    if (linkUrl.startsWith("http")) {
+                        emitStream(lc, buildSourceLabel("Play4u", "HLS", "Ep $targetEpisode"), linkUrl, true, null, p4StreamHeaders, emitLink)
+                    }
                 }
             }
         }
     }
 
-    // --- HDHub4u ---
     private suspend fun fetchHdHub4u(
         lc: LinkContext,
         emitSub: (SubtitleFile) -> Unit,
@@ -2033,32 +2035,6 @@ class MovieFoxProvider : MainAPI() {
             extractCandidateMediaAndEmbedUrls(postHtml, postUrl).take(8).forEach { (u, kind) ->
                 if (kind == "DIRECT") emitStream(lc, "Movies4u", u, isM3u8Stream(u, ""), null, mapOf("Referer" to postUrl), emitLink)
                 else loadExtractor(u, postUrl, emitSub) { ex ->
-                    if (!isYouTubeOrBlockedStream(ex.url, ex.name) && lc.seenUrls.add(ex.url)) emitLink(ex, isStreamOrHlsLink(ex.url, ex.type))
-                }
-            }
-            break
-        }
-    }
-
-    private suspend fun fetchTmf(
-        lc: LinkContext,
-        emitSub: (SubtitleFile) -> Unit,
-        emitLink: (ExtractorLink, Boolean) -> Unit
-    ) {
-        if (lc.pageTitle.isBlank()) return
-        val q = safeUriEncode(lc.pageTitle)
-        for (dom in tmfDomains) {
-            val html = safeGetText("$dom/?s=$q", mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
-            if (html.isBlank()) continue
-            val postHref = Jsoup.parse(html, dom).select("article.latestpost a[id=featured-thumbnail], article a[href]")
-                .firstOrNull { el -> titleMatchesCandidate(el.attr("title").ifBlank { el.text() }, lc.pageTitle) }
-                ?.attr("href")?.let { normalizeUrl(it, dom) }.orEmpty()
-            if (postHref.isBlank()) continue
-            val postHtml = safeGetText(postHref, mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
-            if (postHtml.isBlank()) continue
-            extractCandidateMediaAndEmbedUrls(postHtml, postHref).take(8).forEach { (u, kind) ->
-                if (kind == "DIRECT") emitStream(lc, "TMF", u, isM3u8Stream(u, ""), null, mapOf("Referer" to postHref), emitLink)
-                else loadExtractor(u, postHref, emitSub) { ex ->
                     if (!isYouTubeOrBlockedStream(ex.url, ex.name) && lc.seenUrls.add(ex.url)) emitLink(ex, isStreamOrHlsLink(ex.url, ex.type))
                 }
             }
