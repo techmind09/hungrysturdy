@@ -371,7 +371,7 @@ class KatDramaProvider : MainAPI() {
                     }
 
                     if (foundLinks.isNotEmpty()) {
-                        foundLinks.amap { serverUrl ->
+                        foundLinks.toList().amap { serverUrl ->
                             dispatchSingleServer(serverUrl, qualityStr, subtitleCallback, callback)
                         }
                     } else {
