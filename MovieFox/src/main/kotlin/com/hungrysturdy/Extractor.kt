@@ -21,7 +21,7 @@ import java.net.URI
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 
-private val dynamicUrlCache = ConcurrentHashMap<String, String>()
+private val mfDynamicUrlCache = ConcurrentHashMap<String, String>()
 
 private fun mfBaseUrl(url: String): String = runCatching {
     val uri = URI(url)
@@ -29,7 +29,7 @@ private fun mfBaseUrl(url: String): String = runCatching {
 }.getOrDefault(url)
 
 private suspend fun mfLatestBaseUrl(baseUrl: String, source: String): String {
-    dynamicUrlCache[source]?.let { return it }
+    mfDynamicUrlCache[source]?.let { return it }
     return runCatching {
         val raw = app.get(
             "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json",
@@ -37,7 +37,7 @@ private suspend fun mfLatestBaseUrl(baseUrl: String, source: String): String {
         ).text
         val resolved = JSONObject(raw).optString(source).trim()
         if (resolved.startsWith("http")) {
-            dynamicUrlCache[source] = resolved.trimEnd('/')
+            mfDynamicUrlCache[source] = resolved.trimEnd('/')
             resolved.trimEnd('/')
         } else {
             baseUrl
@@ -100,13 +100,14 @@ open class Videostr : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
+        val resolvedBase = mfLatestBaseUrl(mainUrl, "videostr")
         val mainHeaders = mapOf(
             "User-Agent" to USER_AGENT,
             "Accept" to "*/*",
             "Accept-Language" to "en-US,en;q=0.5",
             "Accept-Encoding" to "gzip, deflate, br, zstd",
-            "Origin" to mainUrl,
-            "Referer" to "$mainUrl/",
+            "Origin" to resolvedBase,
+            "Referer" to "$resolvedBase/",
             "Connection" to "keep-alive",
             "Pragma" to "no-cache",
             "Cache-Control" to "no-cache"
@@ -115,7 +116,7 @@ open class Videostr : ExtractorApi() {
         val headers = mapOf(
             "Accept" to "*/*",
             "X-Requested-With" to "XMLHttpRequest",
-            "Referer" to "$mainUrl/",
+            "Referer" to "$resolvedBase/",
             "User-Agent" to USER_AGENT
         )
 
@@ -139,7 +140,7 @@ open class Videostr : ExtractorApi() {
             singleMatch?.value ?: return
         }
 
-        val apiUrl = "$mainUrl/embed-1/v3/e-1/getSources?id=$fileId&_k=$nonce"
+        val apiUrl = "$resolvedBase/embed-1/v3/e-1/getSources?id=$fileId&_k=$nonce"
         val jsonResponse = app.get(apiUrl, headers = headers).text
 
         val rootObj = JSONObject(jsonResponse)
@@ -149,7 +150,7 @@ open class Videostr : ExtractorApi() {
         val m3u8 = sourcesArray.optJSONObject(0)?.optString("file")?.trim().orEmpty()
         if (!m3u8.startsWith("http")) return
 
-        generateM3u8(name, m3u8, mainUrl, headers = mainHeaders).forEach(callback)
+        generateM3u8(name, m3u8, resolvedBase, headers = mainHeaders).forEach(callback)
     }
 }
 
