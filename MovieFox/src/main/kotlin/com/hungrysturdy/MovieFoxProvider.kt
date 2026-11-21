@@ -156,10 +156,12 @@ class MovieFoxProvider : MainAPI() {
         return if (v.isBlank() || v.equals("null", ignoreCase = true)) fallback else v
     }
 
-    private fun safeEncode(raw: String): String =
-        runCatching { URLEncoder.encode(raw, "UTF-8") }.getOrDefault(raw)
+    private fun safeEncode(raw: String?): String {
+        val src = raw.orEmpty()
+        return runCatching { URLEncoder.encode(src, "UTF-8") }.getOrDefault(src)
+    }
 
-    private fun safeSubtitle(langRaw: String?, urlRaw: String?, baseHost: String = mainUrl): SubtitleFile? {
+    private suspend fun safeSubtitle(langRaw: String?, urlRaw: String?, baseHost: String = mainUrl): SubtitleFile? {
         val cleanUrl = normalizeUrl(urlRaw.orEmpty().trim(), baseHost)
         if (!cleanUrl.startsWith("http")) return null
         val cleanLang = langRaw.orEmpty().trim().ifBlank { "English" }
@@ -1176,7 +1178,7 @@ class MovieFoxProvider : MainAPI() {
             if (firstId != null && (dub.optBoolean("original") || seenSubs.isEmpty())) {
                 runCatching {
                     val capRaw = safeGetText(
-                        "$movieBoxBff/subject/caption?format=MP4&id=${safeEncode(firstId.orEmpty())}&subjectId=${safeEncode(dubId)}&detailPath=${safeEncode(dubPath)}",
+                        "$movieBoxBff/subject/caption?format=MP4&id=${safeEncode(firstId)}&subjectId=${safeEncode(dubId)}&detailPath=${safeEncode(dubPath)}",
                         headers,
                         lc.timeoutSec
                     ).orEmpty()
@@ -1238,7 +1240,7 @@ class MovieFoxProvider : MainAPI() {
         val targetSeason = lc.season.toIntOrNull()?.coerceAtLeast(1) ?: 1
         val targetEpisode = lc.episode.toIntOrNull()?.coerceAtLeast(1) ?: 1
         val docs = vegamoviesDomains.flatMap { dom ->
-            val raw = safeGetText("$dom/ts-search.php?q=${Uri.encode(lc.pageTitle)}&page=1", mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+            val raw = safeGetText("$dom/ts-search.php?q=${safeEncode(lc.pageTitle)}&page=1", mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
             runCatching {
                 val hits = JSONObject(raw).optJSONArray("hits") ?: return@runCatching emptyList<VegaDoc>()
                 (0 until hits.length()).mapNotNull { i ->
