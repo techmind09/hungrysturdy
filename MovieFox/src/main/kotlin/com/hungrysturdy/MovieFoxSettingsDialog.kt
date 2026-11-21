@@ -48,11 +48,10 @@ import java.util.zip.ZipInputStream
 
 object MovieFoxSettingsDialog {
 
-    private const val PREFS_NAME = "moviefox_ultra_max_v15"
+    private const val PREFS_NAME = "moviefox_ultra_max_v16"
     private const val KEY_SRV_PREFIX = "mf_srv_"
     private const val KEY_SRV_ORDER = "mf_srv_order_csv"
     private const val KEY_CF_COOKIE_PREFIX = "mf_cf_cookie_"
-    private const val KEY_AUDIO_PREFIX = "mf_audio_"
     private const val KEY_NUVIO_MANIFESTS = "mf_nuvio_manifests_json"
     private const val KEY_CS3_REPOS = "mf_cs3_repos_json"
     private const val KEY_CS3_SERVERS = "mf_cs3_servers_json"
@@ -121,9 +120,13 @@ object MovieFoxSettingsDialog {
     )
 
     val BASE_SERVERS = listOf(
-        ServerItem("purstream", "Purstream", "API", "https://moviefox.pro/api/stream/purstream", "#38BDF8", false, true),
-        ServerItem("castle", "Castle", "API", "https://moviefox.pro/api/stream/castle", "#818CF8", false, true),
-        ServerItem("watchout", "Watchout", "API", "https://moviefox.pro/api/stream/watchout", "#2DD4BF", false, false),
+        ServerItem("vidsrc_pro", "VidSrc Pro", "EMBED/M3U8", "https://vidsrc.pro/", "#38BDF8", false, false),
+        ServerItem("vidsrc_me", "VidSrc ME", "EMBED/M3U8", "https://vidsrc.me/", "#60A5FA", false, false),
+        ServerItem("embedsu", "EmbedSu", "EMBED/HLS", "https://embed.su/", "#22D3EE", false, false),
+        ServerItem("autoembed", "AutoEmbed", "STREAM/MP4", "https://autoembed.cc/", "#818CF8", false, false),
+        ServerItem("cinemacity", "CinemaCity", "EMBED/MP4", "https://cinemacity.cc/", "#34D399", false, true),
+        ServerItem("anidao", "AniDao", "ANIME/HLS", "https://anidao.to/", "#F472B6", false, true),
+        ServerItem("netmirror", "NetMirror", "STREAM/MP4", "https://net52.cc/", "#A78BFA", false, true),
         ServerItem("cinetv_api", "CineTV API", "WEB/API", "https://cinetv.app/", "#F43F5E", false, true),
         ServerItem("cinetv_hls", "CineTV HLS", "WORKER", "https://silent-frost-f2dbv.nxstreamhub.workers.dev/hls/", "#FB7185", false, true),
         ServerItem("vegamovies", "VegaMovies", "FSL/PXL", "https://vegamovies.lease/", "#EC4899", false, true),
@@ -140,6 +143,8 @@ object MovieFoxSettingsDialog {
         BypassSite("anidao.to", "AniDao"),
         BypassSite("animepahe.ru", "AnimePahe"),
         BypassSite("net52.cc", "NetMirror"),
+        BypassSite("vidsrc.pro", "VidSrc Pro"),
+        BypassSite("embed.su", "EmbedSu"),
         BypassSite("moviefox.pro", "MovieFox"),
         BypassSite("cinetv.app", "CineTV"),
         BypassSite("vegamovies.lease", "VegaMovies"),
@@ -176,8 +181,6 @@ object MovieFoxSettingsDialog {
 
     val SERVERS: List<ServerItem>
         get() = BASE_SERVERS + cachedCs3Servers.toList()
-
-    // ── Helpers & Preferences ────────────────────────────────
 
     private fun isContextAlive(ctx: Context?): Boolean {
         if (ctx == null) return false
@@ -224,8 +227,6 @@ object MovieFoxSettingsDialog {
                 }
             }
 
-    // ── Cloudflare Cookie Persistence ────────────────────────
-
     private fun normalizeHost(urlOrDomain: String): String {
         val trimmed = urlOrDomain.trim()
         val host = if (trimmed.contains("://")) {
@@ -255,8 +256,6 @@ object MovieFoxSettingsDialog {
         val h = normalizeHost(urlOrDomain)
         if (h.isNotBlank()) prefs(ctx).edit().remove("$KEY_CF_COOKIE_PREFIX$h").apply()
     }
-
-    // ── Streaming & Quality Settings ─────────────────────────
 
     fun isHindiOnly(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_HINDI_ONLY, false)
     fun setHindiOnly(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_HINDI_ONLY, enabled).apply()
@@ -297,7 +296,7 @@ object MovieFoxSettingsDialog {
     fun isStreamOnly(ctx: Context): Boolean = isLowBufferMode(ctx)
     fun getParallelServers(ctx: Context): Int = getConcurrency(ctx)
 
-    fun getConcurrency(ctx: Context): Int = prefs(ctx).getInt(KEY_CONCURRENCY, 15)
+    fun getConcurrency(ctx: Context): Int = prefs(ctx).getInt(KEY_CONCURRENCY, 16)
     fun setConcurrency(ctx: Context, value: Int) = prefs(ctx).edit().putInt(KEY_CONCURRENCY, value.coerceIn(2, 50)).apply()
 
     fun getTimeoutSeconds(ctx: Context): Int = prefs(ctx).getInt(KEY_TIMEOUT_SEC, 8)
@@ -308,8 +307,6 @@ object MovieFoxSettingsDialog {
 
     fun isShuffleHomeCategories(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_SHUFFLE_HOME, false)
     fun setShuffleHomeCategories(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_SHUFFLE_HOME, enabled).apply()
-
-    // ── Home Page Categories Persistence ─────────────────────
 
     fun getHomeCategories(ctx: Context): MutableList<HomeCategoryItem> {
         val raw = prefs(ctx).getString(KEY_HOME_CATEGORIES, null)
@@ -336,8 +333,6 @@ object MovieFoxSettingsDialog {
         }
         prefs(ctx).edit().putString(KEY_HOME_CATEGORIES, arr.toString()).apply()
     }
-
-    // ── Server Order & Enablement ────────────────────────────
 
     fun isServerEnabled(ctx: Context, key: String): Boolean {
         val enabled = prefs(ctx).getBoolean("$KEY_SRV_PREFIX${key.lowercase()}", true)
@@ -368,8 +363,6 @@ object MovieFoxSettingsDialog {
     fun getServerFailCount(ctx: Context, key: String): Int = 0
     fun getServerLastMs(ctx: Context, key: String): Long = -1L
     fun resetAllHealthStats(ctx: Context) {}
-
-    // ── CS3 Repos & Stremio/Nuvio Manifests ──────────────────
 
     private fun toRawGithubUrl(raw: String): String {
         val trimmed = raw.trim()
@@ -597,8 +590,6 @@ object MovieFoxSettingsDialog {
         out.distinctBy { it.key }
     }
 
-    // ── Built-in Cloudflare Bypass WebView ───────────────────
-
     @SuppressLint("SetJavaScriptEnabled")
     fun showCloudflareBypassWebView(ctx: Context, startUrl: String, onCookiesChanged: () -> Unit = {}) {
         if (!isContextAlive(ctx)) return
@@ -705,8 +696,6 @@ object MovieFoxSettingsDialog {
         webView.loadUrl(targetUrl)
     }
 
-    // ── Recycled Server ListView Adapter (Zero Crash on 500+ items) ──
-
     private class ServerListAdapter(
         private val ctx: Context,
         private val onToggleChanged: () -> Unit
@@ -811,8 +800,6 @@ object MovieFoxSettingsDialog {
         }
     }
 
-    // ── Main Dialog UI (Original MOVIEFOX ULTRA MAX Tabbed Style) ──
-
     fun show(ctx: Context) {
         if (!isContextAlive(ctx)) return
         prefs(ctx)
@@ -837,7 +824,6 @@ object MovieFoxSettingsDialog {
             setPadding(dp(ctx, 14), dp(ctx, 14), dp(ctx, 14), dp(ctx, 14))
         }
 
-        // Top Gradient Header (Exact Original Look)
         val header = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable(
@@ -912,7 +898,6 @@ object MovieFoxSettingsDialog {
         }
         refreshStats()
 
-        // Horizontal Tab Bar (Original Style)
         val tabBar = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             background = cardBg("#0F131C", "#212A3D", 18f)
@@ -934,7 +919,6 @@ object MovieFoxSettingsDialog {
                 .apply { bottomMargin = dp(ctx, 8) }
         )
 
-        // Filter + ALL ON / ALL OFF Row (Shown on Servers tab)
         val actionRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -964,7 +948,6 @@ object MovieFoxSettingsDialog {
 
         val contentHeight = dp(ctx, 365)
 
-        // ── TAB 0: SERVERS (Recycled ListView) ───────────────
         val serverAdapter = ServerListAdapter(ctx) { refreshStats() }
         val serversListView = ListView(ctx).apply {
             adapter = serverAdapter
@@ -1004,7 +987,6 @@ object MovieFoxSettingsDialog {
             override fun afterTextChanged(s: Editable?) {}
         })
 
-        // ScrollView for Tabs 1..5
         val scrollView = ScrollView(ctx).apply {
             isVerticalScrollBarEnabled = false; visibility = View.GONE
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, contentHeight)
@@ -1016,7 +998,6 @@ object MovieFoxSettingsDialog {
         val homePane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val cs3Pane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
 
-        // ── TAB 1: BUILT-IN CLOUDFLARE BYPASS ────────────────
         cfPane.addView(TextView(ctx).apply {
             text = "Tap Open Web next to sites with a red dot, complete verification, and tap SAVE COOKIES."
             textSize = 11.5f; setTextColor(safeColor("#94A3B8"))
@@ -1083,7 +1064,6 @@ object MovieFoxSettingsDialog {
             cfPane.addView(card)
         }
 
-        // ── TAB 2: STREAMING & DOWNLOAD CONTROLS ─────────────
         fun makeToggleCard(parent: LinearLayout, title: String, desc: String, initial: Boolean, onChange: (Boolean) -> Unit) {
             val card = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
@@ -1166,14 +1146,13 @@ object MovieFoxSettingsDialog {
             streamPane.addView(card)
         }
 
-        makeStepper("Concurrent Threads", "Up to 50 parallel requests (10-15 optimal)", currentConcurrency, 2, 50, 1, "x") {
+        makeStepper("Concurrent Threads", "Up to 50 parallel requests (12-18 optimal)", currentConcurrency, 2, 50, 1, "x") {
             currentConcurrency = it; setConcurrency(ctx, it); refreshStats()
         }
         makeStepper("Server Timeout", "Wait limit per source", currentTimeout, 4, 20, 1, "s") {
             currentTimeout = it; setTimeoutSeconds(ctx, it)
         }
 
-        // ── TAB 3: STREMIO CATALOG INTEGRATION ───────────────
         val metaCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = cardBg("#121621", "#253046", 20f)
@@ -1321,7 +1300,6 @@ object MovieFoxSettingsDialog {
         catalogPane.addView(nuvioAddBox); catalogPane.addView(nuvioListHolder)
         renderNuvioList()
 
-        // ── TAB 4: FULLY CUSTOMIZABLE HOME PAGE ──────────────
         makeToggleCard(homePane, "Shuffle Categories", "Randomize home screen categories on every load", shuffleHome) {
             shuffleHome = it; setShuffleHomeCategories(ctx, it)
         }
@@ -1402,7 +1380,6 @@ object MovieFoxSettingsDialog {
             }
         })
 
-        // ── TAB 5: CS3 REPOSITORIES ──────────────────────────
         val cs3AddBox = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL; background = cardBg("#131826", "#2563EB", 22f)
             setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
@@ -1515,7 +1492,6 @@ object MovieFoxSettingsDialog {
         cs3Pane.addView(cs3AddBox); cs3Pane.addView(cs3RepoListHolder)
         renderCs3Repos()
 
-        // Assemble Tabs
         val scrollPanes = listOf(cfPane, streamPane, catalogPane, homePane, cs3Pane)
         scrollPanes.forEach { wrapper.addView(it) }
         scrollView.addView(wrapper)
@@ -1547,7 +1523,6 @@ object MovieFoxSettingsDialog {
         root.addView(serversListView)
         root.addView(scrollView)
 
-        // Footer Buttons (Original CLOSE + SAVE & APPLY)
         val dialog = AlertDialog.Builder(ctx).setView(root).create()
         dialog.setOnDismissListener { runCatching { dialogScope.cancel() } }
 
@@ -1590,3 +1565,4 @@ object MovieFoxSettingsDialog {
         }
     }
 }
+
