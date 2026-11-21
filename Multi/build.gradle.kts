@@ -1,7 +1,7 @@
-version = 6
+version = 10
 cloudstream {
-    description = "Multi - Indian Hindi+English Movies&Web Series"
-    authors = listOf("sturdyfishstick1")
+    description = "Multi - Indian Hindi+English+Other Movies&Web Series"
+    authors = listOf("hungrysturdy")
     requiresResources = false
 
     /**
