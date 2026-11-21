@@ -122,7 +122,7 @@ object MovieFoxSettingsDialog {
 
     val BASE_SERVERS = listOf(
         ServerItem("purstream", "Purstream", "API", "https://moviefox.pro/api/stream/purstream", "#38BDF8", false, true),
-        ServerItem("castle", "Castle", "API", "https://moviefox.pro/api/stream/castle", "#818CF8", false, true),
+        ServerItem("castle", "Castle", "API", "https://api.hlowb.com/", "#818CF8", false, true),
         ServerItem("watchout", "Watchout", "API", "https://moviefox.pro/api/stream/watchout", "#2DD4BF", false, false),
         ServerItem("cinetv_api", "CineTV API", "WEB/API", "https://cinetv.app/", "#F43F5E", false, true),
         ServerItem("cinetv_hls", "CineTV HLS", "WORKER", "https://silent-frost-f2dbv.nxstreamhub.workers.dev/hls/", "#FB7185", false, true),
@@ -131,18 +131,50 @@ object MovieFoxSettingsDialog {
         ServerItem("prmovies", "Prmovies", "SITE", "https://prmovies.coupons/", "#F59E0B", false, true),
         ServerItem("play4u", "Play4u", "HLS", "https://play4u.org/", "#FB7185", false, true),
         ServerItem("nuvio", "Nuvio Addon", "MANIFEST", "https://nuvio.app/", "#A855F7", false, true),
-        ServerItem("moviebox", "MovieBox", "BFF", "https://netnaija.film/", "#34D399", false, true),
+        ServerItem("moviebox", "MovieBox", "BFF", "https://h5-api.aoneroom.com/wefeed-h5api-bff", "#34D399", false, true),
         ServerItem("netnaija", "NetNaija", "SITE", "https://www.thenetnaija.net/", "#FACC15", false, false),
         ServerItem("hicine", "HiCine", "HAPI", "https://hicine.biz/", "#38BDF8", false, true),
         ServerItem("hindmoviez", "HindMoviez", "SITE", "https://v3.hindmovie.im/", "#FACC15", false, true),
         ServerItem("movielinkbd", "MovieLinkBD", "SITE", "https://drjuea.movielinkbd.at/", "#818CF8", false, false),
         ServerItem("netmirror", "NetMirror", "OTT", "https://net52.cc/", "#F43F5E", false, true),
+        ServerItem("netmirror79", "NetMirror79", "OTT", "https://net52.cc/mobile", "#FB7185", false, true),
         ServerItem("movy", "Movy", "API", "https://www.movy.sx/", "#22D3EE", false, true),
         ServerItem("hdhub4u", "HDHub4u", "SITE", "https://new13.hdhub4u.cl/", "#34D399", false, true),
         ServerItem("4khdhub", "4KHDHub", "4K", "https://4khdhub.one/", "#C084FC", false, true),
         ServerItem("movies4u", "Movies4u", "SITE", "https://new6.movies4u.garden/", "#FB923C", false, true),
         ServerItem("tmf", "TMF", "SITE", "https://one.1moviesflix.lol/", "#F43F5E", false, true),
-        ServerItem("multimovies", "Multimovies", "SITE", "https://m1.multimovies.courses/", "#22D3EE", false, true)
+        ServerItem("themoviesflix", "TheMoviesFlix", "SITE", "https://themoviesflixhq.com/", "#38BDF8", false, true),
+        ServerItem("multimovies", "Multimovies", "SITE", "https://m1.multimovies.courses/", "#22D3EE", false, true),
+        ServerItem("vidlink", "VidLink", "STREAM", "https://vidlink.pro/", "#A855F7", false, false),
+        ServerItem("bingr", "Bingr", "STREAM", "https://bingr.one/", "#38BDF8", false, false),
+        ServerItem("vidcore", "Vidcore", "STREAM", "https://vidcore.io/", "#818CF8", false, false),
+        ServerItem("vidspark", "VidSpark", "STREAM", "https://vidfast.vc/", "#FB923C", false, false),
+        ServerItem("rivestream", "Rivestream", "STREAM", "https://enc-dec.app/api", "#22D3EE", false, false),
+        ServerItem("vidrift", "Vidrift", "STREAM", "https://vidrift.net/", "#F43F5E", false, false),
+        ServerItem("atlantic", "Atlantic", "STREAM", "https://api.wecollege.net/", "#34D399", false, false),
+        ServerItem("animeworld", "AnimeWorld", "ANIME", "https://animesalt.ac/", "#38BDF8", false, true),
+        ServerItem("hianime", "HiAnime", "ANIME", "https://anikototv.to/", "#A855F7", false, true),
+        ServerItem("blakite", "Blakite", "STREAM", "https://player.vidzee.wtf/", "#EC4899", false, true),
+        ServerItem("fibwatch", "Fibwatch", "SITE", "https://fibwatch.com/", "#FACC15", false, true),
+        ServerItem("allmovieland", "Allmovieland", "SITE", "https://allmovieland.one/", "#34D399", false, true),
+        ServerItem("bollyflix", "Bollyflix", "HI", "https://bollyflix.site/", "#38BDF8", false, true),
+        ServerItem("sdmovies", "SDMovies", "HI", "https://sdmovies.site/", "#22D3EE", false, true),
+        ServerItem("dudefilms", "Dudefilms", "HI", "https://dudefilms.site/", "#C084FC", false, true),
+        ServerItem("zinkmovies", "Zinkmovies", "SITE", "https://zinkmovies.site/", "#FB923C", false, true),
+        ServerItem("moviesdrive", "MoviesDrive", "4K", "https://moviesdrive.site/", "#34D399", false, true),
+        ServerItem("rtally", "Rtally", "SITE", "https://rtally.site/", "#818CF8", false, false),
+        ServerItem("just4anime", "Just4Anime", "ANIME", "https://just4anime.online/", "#FACC15", false, true),
+        ServerItem("animesalt", "Animesalt", "ANIME", "https://animesalt.ac/", "#38BDF8", false, true),
+        ServerItem("anikage", "Anikage", "ANIME", "https://anikage.cc/", "#A855F7", false, true),
+        ServerItem("animekizz", "Animekizz", "ANIME", "https://animekizz.live/", "#22D3EE", false, true),
+        ServerItem("reanime", "Reanime", "ANIME", "https://reanime.to/", "#F43F5E", false, true),
+        ServerItem("disney_studio", "Disney Studio", "OTT", "https://net52.cc/mobile/hs", "#38BDF8", false, true),
+        ServerItem("prime_video_mirror", "Prime Video Mirror", "OTT", "https://net52.cc/mobile/pv", "#22D3EE", false, true),
+        ServerItem("netflix", "NetFlix", "OTT", "https://net52.cc/mobile", "#F43F5E", false, true),
+        ServerItem("primesrc", "PrimeSrc", "API", "https://primesrc.me/", "#C084FC", false, false),
+        ServerItem("mlsbd", "Mlsbd", "SITE", "https://mlsbd.site/", "#34D399", false, true),
+        ServerItem("skymovies", "SkyMovies", "HI", "https://skymovies.site/", "#FB923C", false, true),
+        ServerItem("onetouchtv", "Onetouchtv", "API", "https://api3.devcorp.me/", "#818CF8", false, false)
     )
 
     private val CF_BYPASS_SITES = listOf(
@@ -1599,3 +1631,4 @@ object MovieFoxSettingsDialog {
         }
     }
 }
+
