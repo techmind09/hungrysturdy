@@ -17,12 +17,18 @@ class Plugin : Plugin() {
 
         // Extractors Registration
         registerExtractorAPI(GokuHDExtractor())
+        registerExtractorAPI(KatFastDlServer())
         registerExtractorAPI(KatHubCloudExtractor())
         registerExtractorAPI(HubCloudDrive())
         registerExtractorAPI(HubCloudClub())
         registerExtractorAPI(HubCloudOne())
         registerExtractorAPI(GamerXYTExtractor())
         registerExtractorAPI(KatGDFlixExtractor())
+        registerExtractorAPI(GDLink())
+        registerExtractorAPI(GDFlixApp())
+        registerExtractorAPI(GdFlix1())
+        registerExtractorAPI(GdFlix2())
+        registerExtractorAPI(GDFlixNet())
         registerExtractorAPI(GDFlixCfd())
         registerExtractorAPI(GDFlixdad())
         registerExtractorAPI(GDFlixNew9())
