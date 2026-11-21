@@ -20,6 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
@@ -595,7 +596,7 @@ internal object MovieFoxMoviesLinkBdSite {
                 directMedia.containsMatchIn(href) -> emitDirect(href, "Instant MP4", info, quality, callback)
                 else -> loadExtractor(href, pageUrl, subtitleCallback) { link ->
                     if (MovieFoxSiteLabels.allowLink(CloudStreamApp.context, quality ?: link.quality, info, link.type == ExtractorLinkType.M3U8)) {
-                        callback(link)
+                        runBlocking { callback(link) }
                     }
                 }
             }
@@ -622,7 +623,7 @@ internal object MovieFoxMoviesLinkBdSite {
                 } else {
                     loadExtractor(target, referer, subtitleCallback) { link ->
                         if (MovieFoxSiteLabels.allowLink(CloudStreamApp.context, quality ?: link.quality, info, link.type == ExtractorLinkType.M3U8)) {
-                            callback(link)
+                            runBlocking { callback(link) }
                         }
                     }
                 }
@@ -1126,7 +1127,7 @@ internal object MovieFoxHiCineSite {
             id == "gofile" || url.contains("gofile.io") ->
                 loadExtractor(url, null, subtitleCallback) { link ->
                     if (MovieFoxSiteLabels.allowLink(CloudStreamApp.context, quality ?: link.quality, info, link.type == ExtractorLinkType.M3U8)) {
-                        callback(link)
+                        runBlocking { callback(link) }
                     }
                 }
             url.contains("transfer.it") || url.contains("bzzhr.co") ||
@@ -1518,7 +1519,7 @@ internal object MovieFoxDrivePages {
             val qVal = quality ?: link.quality
             val name = MovieFoxSiteLabels.buildLabel(site, link.name, info)
             if (MovieFoxSiteLabels.allowLink(CloudStreamApp.context, qVal, name, link.type == ExtractorLinkType.M3U8)) {
-                callback(link)
+                runBlocking { callback(link) }
             }
         }
     }
@@ -1684,7 +1685,7 @@ internal object MovieFoxHdHub4uSite {
         loadExtractor(url, referer, subtitleCallback) { link ->
             val name = MovieFoxSiteLabels.buildLabel("hdhub4u", link.name, label)
             if (MovieFoxSiteLabels.allowLink(CloudStreamApp.context, qVal, name, link.type == ExtractorLinkType.M3U8)) {
-                callback(link)
+                runBlocking { callback(link) }
             }
         }
     }
@@ -1816,7 +1817,7 @@ internal object MovieFoxHdHub4uSite {
                 loadExtractor(link, url, subtitleCallback) { extractorLink ->
                     val name = MovieFoxSiteLabels.buildLabel("hdhub4u", extractorLink.name, "Episode $episode")
                     if (MovieFoxSiteLabels.allowLink(CloudStreamApp.context, quality, name, extractorLink.type == ExtractorLinkType.M3U8)) {
-                        callback(extractorLink)
+                        runBlocking { callback(extractorLink) }
                     }
                 }
             }
@@ -1892,7 +1893,7 @@ internal object MovieFoxFourKhdHubSite {
                         loadExtractor(href, domain, subtitleCallback) { link ->
                             val name = MovieFoxSiteLabels.buildLabel("4khdhub", link.name, label)
                             if (MovieFoxSiteLabels.allowLink(CloudStreamApp.context, qVal, name, link.type == ExtractorLinkType.M3U8)) {
-                                callback(link)
+                                runBlocking { callback(link) }
                             }
                         }
                     }
@@ -2161,7 +2162,7 @@ internal object MovieFoxMovies4uSite {
                 loadExtractor(url, referer, subtitleCallback) { link ->
                     val name = MovieFoxSiteLabels.buildLabel("movies4u", link.name, label)
                     if (MovieFoxSiteLabels.allowLink(CloudStreamApp.context, quality ?: link.quality, name, link.type == ExtractorLinkType.M3U8)) {
-                        callback(link)
+                        runBlocking { callback(link) }
                     }
                 }
         }
@@ -2436,13 +2437,15 @@ internal object MovieFoxMultimoviesSite {
                                 val qVal = if (link.quality != Qualities.Unknown.value) link.quality else MovieFoxSiteNet.getIndexQuality(server.name)
                                 val name = MovieFoxSiteLabels.buildLabel("multimovies", server.name, link.name)
                                 if (MovieFoxSiteLabels.allowLink(CloudStreamApp.context, qVal, name, link.type == ExtractorLinkType.M3U8)) {
-                                    callback(
-                                        newExtractorLink("Multimovies", name, link.url, link.type) {
-                                            this.quality = qVal
-                                            this.referer = link.referer
-                                            this.headers = link.headers
-                                        }
-                                    )
+                                    runBlocking {
+                                        callback(
+                                            newExtractorLink("Multimovies", name, link.url, link.type) {
+                                                this.quality = qVal
+                                                this.referer = link.referer
+                                                this.headers = link.headers
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         } catch (_: Exception) {}
