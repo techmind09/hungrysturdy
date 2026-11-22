@@ -287,8 +287,9 @@ class MovieFoxProvider : MainAPI() {
         sourceTag: String = "HTTP"
     ): String? {
         val headers = directHeaders(url, extraHeaders)
-        val effectiveTimeout = if (url.contains("moviefox.pro", true)) minOf(timeoutSec, 4L) else timeoutSec
-        val effectiveRetries = if (url.contains("moviefox.pro", true)) 1 else retries.coerceAtLeast(1)
+        val isMovieFoxSite = url.contains("moviefox.pro", true)
+        val effectiveTimeout = if (isMovieFoxSite) minOf(timeoutSec, 4L) else timeoutSec
+        val effectiveRetries = if (isMovieFoxSite) 1 else retries.coerceAtLeast(1)
 
         repeat(effectiveRetries) { attempt ->
             val start = System.currentTimeMillis()
@@ -301,10 +302,15 @@ class MovieFoxProvider : MainAPI() {
                 }
                 val code = res.code
                 runCatching { res.okhttpResponse.close() }
+                if (isMovieFoxSite && code == 404) {
+                    return null
+                }
                 val reason = if (code == 401) "TOKEN EXPIRED (401)" else "HTTP $code"
                 logError(sourceTag, url, null, "$reason attempt=${attempt + 1}")
             } catch (e: Exception) {
-                logError(sourceTag, url, e, "attempt=${attempt + 1}")
+                if (!isMovieFoxSite) {
+                    logError(sourceTag, url, e, "attempt=${attempt + 1}")
+                }
             }
             if (attempt < effectiveRetries - 1) delay(250L)
         }
@@ -602,7 +608,6 @@ class MovieFoxProvider : MainAPI() {
         val movieFoxEnabled = ctx?.let { MovieFoxSettingsDialog.isServerEnabled(it, "moviefox") } ?: true
         val timeoutSec = currentTimeoutSec()
 
-        // When MovieFox is turned OFF, show CineStream categories on Home Page
         if (!movieFoxEnabled) {
             if (ctx == null) {
                 return newHomePageResponse(emptyList(), hasNext = false)
