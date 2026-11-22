@@ -1,4 +1,4 @@
-package com.megix
+package com.hungrysturdy
 
 // Cloudstream Core, Utils, & Logging
 import com.lagradost.api.Log
