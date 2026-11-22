@@ -1,4 +1,3 @@
-
 package com.hungrysturdy
 
 import android.util.Base64
