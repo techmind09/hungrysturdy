@@ -94,6 +94,7 @@ object MovieFoxSettingsDialog {
     )
 
     val NETNAIJA_API_HOSTS = listOf(
+        "h5-api.aoneroom.com",
         "api6.aoneroom.com",
         "api5.aoneroom.com",
         "api4.aoneroom.com",
@@ -218,25 +219,29 @@ object MovieFoxSettingsDialog {
         }
     }
 
-    val VEGA_ALLOWED_HOSTS = listOf("pixeldrain", "fsl2", "fsl", "gdrive", "gdflix", "hubcloud")
+    val VEGA_ALLOWED_HOSTS = listOf(
+        "pixeldrain", "fsl2", "fsl", "gdrive", "gdflix", "hubcloud",
+        "nexdrive", "vcloud", "vegadrive", "fastdl", "filebee", "filepress",
+        "fpgo", "gofile", "gpdl", ".r2.dev", ".r2.cloudflarestorage.com", "buzzserver", "10gbps"
+    )
 
     val EXTRACTORS = listOf(
-        ExtractorItem("hubcloud", "HubCloud", "hubcloud.*", "DIRECT"),
-        ExtractorItem("vcloud", "VCloud", "vcloud.*", "DIRECT"),
-        ExtractorItem("gdflix", "GDFlix", "gdflix.*", "GDRIVE"),
+        ExtractorItem("hubcloud", "HubCloud", "hubcloud.* / .workers.dev", "DIRECT"),
+        ExtractorItem("vcloud", "VCloud", "vcloud.* / mcloud.*", "DIRECT"),
+        ExtractorItem("gdflix", "GDFlix", "gdflix.* / new18.gdflix.*", "GDRIVE"),
         ExtractorItem("gdlink", "GDLink", "gdlink.*", "GDRIVE"),
-        ExtractorItem("pixeldrain", "Pixeldrain / Dev", "pixeldrain.com / .dev", "FAST"),
-        ExtractorItem("fastdlserver", "FastDL / FSL / FSL2", "fastdlserver.*", "FSL"),
-        ExtractorItem("hubdrive", "Hubdrive", "hubdrive.*", "DRIVE"),
-        ExtractorItem("driveleech", "Driveleech / Driveseed", "driveleech.* / driveseed.*", "DRIVE"),
-        ExtractorItem("gofile", "Gofile", "gofile.io", "DIRECT"),
+        ExtractorItem("pixeldrain", "Pixeldrain / Dev", "pixeldrain.com / pixeldrain.dev", "FAST"),
+        ExtractorItem("fastdlserver", "FastDL / FSL / FSL2", "fastdl.* / fastdlserver.* / hubcdn.wiki", "FSL"),
+        ExtractorItem("hubdrive", "Hubdrive / Hblinks / Linksmod / Howblogs", "hubdrive.* / hblinks.* / linksmod.* / howblogs.*", "DRIVE"),
+        ExtractorItem("driveleech", "Driveleech / Driveseed / FilePress", "driveleech.* / driveseed.* / filebee.xyz / dotflix.store", "DRIVE"),
+        ExtractorItem("gofile", "Gofile", "gofile.io / api.gofile.io", "DIRECT"),
         ExtractorItem("voe", "Voe", "voe.sx", "HLS"),
         ExtractorItem("streamtape", "StreamTape", "streamtape.com / stape.*", "MP4"),
-        ExtractorItem("nxstreamhub", "NxStreamHub", "nxstreamhub.workers.dev", "HLS"),
-        ExtractorItem("itsnitrox", "Nitrox", "itsnitrox.tech", "HLS"),
+        ExtractorItem("nxstreamhub", "NxStreamHub", "nxstreamhub.workers.dev / proxy.nxstreamhub.workers.dev", "HLS"),
+        ExtractorItem("itsnitrox", "Nitrox", "itsnitrox.tech / wts.itsnitrox.tech", "HLS"),
         ExtractorItem("vibuxer", "Vibuxer", "vibuxer.com", "HLS"),
-        ExtractorItem("gokuhd", "GokuHD / NexDrive", "nexdrive.*", "MULTI"),
-        ExtractorItem("wootly", "Wootly / Videostr / MegaPlay", "wootly / videostr / megaplay", "EMBED")
+        ExtractorItem("gokuhd", "GokuHD / NexDrive / VegaDrive", "nexdrive.beer / nexdrive.fit / one.vegadrive.app", "MULTI"),
+        ExtractorItem("wootly", "Wootly / Videostr / MegaPlay / VibePlayer / Modiplay", "wootly.ch / videostr.net / streameeeeee.site / megaplay.buzz / vidwish.live / vidtube.site / vibeplayer.site / vivibebe.site / bibiemb.xyz / rozgarlelo.modiplay.xyz / streams.iqsmartgames.com / hubstream.art / hdstream4u.com / playmogo.com / otakuvid.online / otakuhg.site / minochinos.com", "EMBED")
     )
 
     val BASE_SERVERS = listOf(
@@ -252,20 +257,24 @@ object MovieFoxSettingsDialog {
         ServerItem("cinetv_hls", "CineTV HLS", "WORKER", "https://silent-frost-f2dbv.nxstreamhub.workers.dev/hls/movie/550", "#FB7185", false, true, "Movies"),
         ServerItem("rogmovies", "RogMovies", "PXL•FSL•GDRIVE", "https://rogmovies.vip/", "#EC4899", false, true, "Hindi"),
         ServerItem("bollyflix", "Bollyflix", "HI/4K", "https://new1.bollyflix.tours/", "#38BDF8", false, true, "Hindi"),
-        ServerItem("play4u", "Play4u", "HLS", "https://play4u.org/", "#FB7185", false, true, "Movies"),
+        ServerItem("play4u", "Play4u", "HLS/API", "https://play4u.org/api/search.php?q=&page=1&per_page=24", "#FB7185", false, true, "Movies"),
         ServerItem("hdhub4u", "HDHub4u", "SITE", "https://new15.hdhub4u.cl/?utm=mn1", "#34D399", false, true, "Hindi"),
         ServerItem("dramaverse", "DramaVerse", "XCLOUD", "https://mydverse.com/", "#A855F7", false, true, "Series"),
         ServerItem("gokuhd", "GokuHD", "ANIME", "https://gokuhd.nl/", "#38BDF8", false, true, "Anime"),
+        ServerItem("animeworldindia", "Anime World India", "ZEPHYR/M3U8", "https://watchanimeworld.top/", "#F43F5E", false, true, "Anime"),
         ServerItem("nuvio", "Nuvio / Stremio", "MANIFEST", DEFAULT_STREMIO_MANIFEST, "#A855F7", false, true, "Series"),
         ServerItem("moviebox", "MovieBox / NetNaija API", "BFF", "https://h5-api.aoneroom.com/wefeed-mobile-bff/tab/ranking-list?tabId=0&page=1&perPage=1", "#34D399", false, true, "Movies"),
         ServerItem("netnaija", "NetNaija", "SITE", "https://netnaija.film/", "#FACC15", false, false, "Series"),
-        ServerItem("hicine", "HiCine", "HAPI", "https://hicine.biz/", "#38BDF8", false, true, "Hindi"),
+        ServerItem("sportslive", "SportsLive", "LIVE/SPORTS", "https://h5-sport-api.aoneroom.com/wefeed-h5api-bff/live/match-list-v5", "#22D3EE", false, false, "Movies"),
+        ServerItem("hicine", "HiCine", "HAPI", "https://hicine.biz/hapi/home", "#38BDF8", false, true, "Hindi"),
         ServerItem("hindmoviez", "HindMoviez", "SITE", "https://v3.hindmovie.im/", "#FACC15", false, true, "Hindi"),
         ServerItem("movielinkbd", "MovieLinkBD", "SITE", "https://drjuea.movielinkbd.at/", "#818CF8", false, false, "Movies"),
-        ServerItem("netmirror", "NetMirror", "OTT", "https://net52.cc/", "#F43F5E", false, true, "Series"),
+        ServerItem("netmirror", "NetMirror", "OTT", "https://netmirror.gold/", "#F43F5E", false, true, "Series"),
         ServerItem("movy", "Movy", "API", "https://www.movy.sx/", "#22D3EE", false, true, "Movies"),
         ServerItem("4khdhub", "4KHDHub", "4K", "https://4khdhub.one/", "#C084FC", false, true, "Hindi"),
         ServerItem("movies4u", "Movies4u", "SITE", "https://new8.movies4u.garden/", "#FB923C", false, true, "Hindi"),
+        ServerItem("moviesmod", "Moviesmod", "SITE/4K", "https://moviesleech.rest/", "#38BDF8", false, true, "Hindi"),
+        ServerItem("topmovies", "TopMovies", "HI/MOVIES", "https://topmovies.pet/", "#34D399", false, true, "Hindi"),
         ServerItem("multimovies", "Multimovies", "ANIME/HI", "https://m1.multimovies.courses/", "#22D3EE", false, true, "Anime"),
         ServerItem("bollyhq", "BollyHQ", "MIRROR", "https://bolly-hq.info/", "#38BDF8", false, true, "Hindi"),
         ServerItem("moviesdrive", "MoviesDrive", "MIRROR", "https://new4.moviesdrive.cyou/", "#F43F5E", false, true, "Hindi"),
@@ -356,10 +365,17 @@ object MovieFoxSettingsDialog {
     fun clearDiagnosticLogs() = errorLogRing.clear()
 
     private suspend fun probeServerLive(srv: ServerItem, apiHost: String): ServerHealthInfo = withContext(Dispatchers.IO) {
-        val probeTarget = if (srv.key == "moviebox") {
-            "https://$apiHost/wefeed-mobile-bff/tab/ranking-list?tabId=0&page=1&perPage=1"
-        } else {
-            srv.probeUrl
+        val probeTarget = when (srv.key) {
+            "moviebox" -> "https://$apiHost/wefeed-mobile-bff/tab/ranking-list?tabId=0&page=1&perPage=1"
+            "hicine" -> {
+                val hicineBase = srv.probeUrl.removeSuffix("/hapi/home").trimEnd('/')
+                "$hicineBase/hapi/home"
+            }
+            "play4u" -> {
+                val play4uBase = srv.probeUrl.substringBefore("/api/").trimEnd('/')
+                "$play4uBase/api/search.php?q=&page=1&per_page=24"
+            }
+            else -> srv.probeUrl
         }
         val start = System.currentTimeMillis()
         try {
