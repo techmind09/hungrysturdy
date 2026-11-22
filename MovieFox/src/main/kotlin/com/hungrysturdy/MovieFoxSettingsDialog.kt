@@ -12,7 +12,6 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.text.Editable
@@ -23,9 +22,6 @@ import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
-import android.view.WindowInsets
-import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -140,7 +136,7 @@ object MovieFoxSettingsDialog {
         val isCustom: Boolean = false,
         val isHindi: Boolean = true,
         val category: String = "Movies",
-        val runtimeBadge: String = "☁️ CS"
+        val runtimeBadge: String = "⚡ SKY"
     )
 
     data class ExtractorItem(
@@ -251,33 +247,33 @@ object MovieFoxSettingsDialog {
     )
 
     val BASE_SERVERS = listOf(
-        ServerItem("moviefox", "MovieFox Main", "HOME/TMDB", "https://moviefox.pro/", "#7C3AED", false, true, "Movies", "☁️ CS"),
+        ServerItem("moviefox", "MovieFox Main", "HOME/TMDB", "https://moviefox.pro/", "#7C3AED", false, true, "Movies", "🎬 MF"),
         ServerItem("cinestream", "CineStream", "CINEMETA/KITSU", "https://cinemeta-catalogs.strem.io/top/catalog/movie/top/skip=0.json", "#38BDF8", false, true, "Movies", "☁️ CS"),
+        ServerItem("purstream", "Purstream", "API", "https://moviefox.pro/api/stream/purstream?type=movie&id=550", "#38BDF8", false, true, "Movies", "🎬 MF"),
+        ServerItem("castle", "Castle", "API", "https://moviefox.pro/api/stream/castle?type=movie&id=550", "#818CF8", false, true, "Movies", "🎬 MF"),
+        ServerItem("watchout", "Watchout", "API", "https://moviefox.pro/api/stream/watchout?type=movie&id=550", "#2DD4BF", false, false, "Movies", "🎬 MF"),
+        ServerItem("cinetv_api", "CineTV API", "WEB/API", "https://cinetv.app/en", "#F43F5E", false, true, "Movies", "🎬 MF"),
+        ServerItem("cinetv_hls", "CineTV HLS", "WORKER", "https://silent-frost-f2dbv.nxstreamhub.workers.dev/hls/movie/550", "#FB7185", false, true, "Movies", "🎬 MF"),
+        ServerItem("nuvio", "Nuvio / Stremio", "MANIFEST", DEFAULT_STREMIO_MANIFEST, "#A855F7", false, true, "Series", "🎬 MF"),
+        ServerItem("moviebox", "MovieBox / NetNaija API", "BFF", "https://h5-api.aoneroom.com/wefeed-mobile-bff/tab/ranking-list?tabId=0&page=1&perPage=1", "#34D399", false, true, "Movies", "🎬 MF"),
+        ServerItem("sportslive", "SportsLive", "LIVE/SPORTS", "https://h5-sport-api.aoneroom.com/wefeed-h5api-bff/live/match-list-v5", "#22D3EE", false, false, "Movies", "🎬 MF"),
+        ServerItem("hicine", "HiCine", "HAPI", "https://hicine.biz/hapi/home", "#38BDF8", false, true, "Hindi", "🎬 MF"),
+        ServerItem("movy", "Movy", "API", "https://www.movy.sx/", "#22D3EE", false, true, "Movies", "🎬 MF"),
         ServerItem("sflix", "Sflix", "HLS/MP4", "https://sflix.film/", "#F97316", false, true, "Series", "⚡ SKY"),
         ServerItem("prmovies", "Prmovies", "HI/M3U8", "https://prmovies.beer/", "#F59E0B", false, true, "Hindi", "⚡ SKY"),
         ServerItem("hindidrama", "HindiDrama", "K-DRAMA", "https://hindidrama.net/", "#EC4899", false, true, "Series", "⚡ SKY"),
         ServerItem("vegamovies", "VegaMovies", "PXL•FSL•GDRIVE", "https://vegamovies.lease/", "#EC4899", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("purstream", "Purstream", "API", "https://moviefox.pro/api/stream/purstream?type=movie&id=550", "#38BDF8", false, true, "Movies", "☁️ CS"),
-        ServerItem("castle", "Castle", "API", "https://moviefox.pro/api/stream/castle?type=movie&id=550", "#818CF8", false, true, "Movies", "☁️ CS"),
-        ServerItem("watchout", "Watchout", "API", "https://moviefox.pro/api/stream/watchout?type=movie&id=550", "#2DD4BF", false, false, "Movies", "☁️ CS"),
-        ServerItem("cinetv_api", "CineTV API", "WEB/API", "https://cinetv.app/en", "#F43F5E", false, true, "Movies", "☁️ CS"),
-        ServerItem("cinetv_hls", "CineTV HLS", "WORKER", "https://silent-frost-f2dbv.nxstreamhub.workers.dev/hls/movie/550", "#FB7185", false, true, "Movies", "⚡ SKY"),
         ServerItem("rogmovies", "RogMovies", "PXL•FSL•GDRIVE", "https://rogmovies.vip/", "#EC4899", false, true, "Hindi", "⚡ SKY"),
         ServerItem("bollyflix", "Bollyflix", "HI/4K", "https://new1.bollyflix.tours/", "#38BDF8", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("play4u", "Play4u", "HLS/API", "https://play4u.org/api/search.php?q=&page=1&per_page=24", "#FB7185", false, true, "Movies", "☁️ CS"),
+        ServerItem("play4u", "Play4u", "HLS/API", "https://play4u.org/api/search.php?q=&page=1&per_page=24", "#FB7185", false, true, "Movies", "⚡ SKY"),
         ServerItem("hdhub4u", "HDHub4u", "SITE", "https://new15.hdhub4u.cl/?utm=mn1", "#34D399", false, true, "Hindi", "⚡ SKY"),
         ServerItem("dramaverse", "DramaVerse", "XCLOUD", "https://mydverse.com/", "#A855F7", false, true, "Series", "⚡ SKY"),
         ServerItem("gokuhd", "GokuHD", "ANIME", "https://gokuhd.nl/", "#38BDF8", false, true, "Anime", "⚡ SKY"),
-        ServerItem("animeworldindia", "Anime World India", "ZEPHYR/M3U8", "https://watchanimeworld.top/", "#F43F5E", false, true, "Anime", "☁️ CS"),
-        ServerItem("nuvio", "Nuvio / Stremio", "MANIFEST", DEFAULT_STREMIO_MANIFEST, "#A855F7", false, true, "Series", "☁️ CS"),
-        ServerItem("moviebox", "MovieBox / NetNaija API", "BFF", "https://h5-api.aoneroom.com/wefeed-mobile-bff/tab/ranking-list?tabId=0&page=1&perPage=1", "#34D399", false, true, "Movies", "☁️ CS"),
+        ServerItem("animeworldindia", "Anime World India", "ZEPHYR/M3U8", "https://watchanimeworld.top/", "#F43F5E", false, true, "Anime", "⚡ SKY"),
         ServerItem("netnaija", "NetNaija", "SITE", "https://netnaija.film/", "#FACC15", false, false, "Series", "⚡ SKY"),
-        ServerItem("sportslive", "SportsLive", "LIVE/SPORTS", "https://h5-sport-api.aoneroom.com/wefeed-h5api-bff/live/match-list-v5", "#22D3EE", false, false, "Movies", "☁️ CS"),
-        ServerItem("hicine", "HiCine", "HAPI", "https://hicine.biz/hapi/home", "#38BDF8", false, true, "Hindi", "☁️ CS"),
         ServerItem("hindmoviez", "HindMoviez", "SITE", "https://v3.hindmovie.im/", "#FACC15", false, true, "Hindi", "⚡ SKY"),
         ServerItem("movielinkbd", "MovieLinkBD", "SITE", "https://drjuea.movielinkbd.at/", "#818CF8", false, false, "Movies", "⚡ SKY"),
-        ServerItem("netmirror", "NetMirror", "OTT", "https://netmirror.gold/", "#F43F5E", false, true, "Series", "☁️ CS"),
-        ServerItem("movy", "Movy", "API", "https://www.movy.sx/", "#22D3EE", false, true, "Movies", "☁️ CS"),
+        ServerItem("netmirror", "NetMirror", "OTT", "https://netmirror.gold/", "#F43F5E", false, true, "Series", "⚡ SKY"),
         ServerItem("4khdhub", "4KHDHub", "4K", "https://4khdhub.one/", "#C084FC", false, true, "Hindi", "⚡ SKY"),
         ServerItem("movies4u", "Movies4u", "SITE", "https://new8.movies4u.garden/", "#FB923C", false, true, "Hindi", "⚡ SKY"),
         ServerItem("moviesmod", "Moviesmod", "SITE/4K", "https://moviesleech.rest/", "#38BDF8", false, true, "Hindi", "⚡ SKY"),
@@ -304,6 +300,8 @@ object MovieFoxSettingsDialog {
         HomeCategoryItem("tamil_telugu", "South Indian (Tamil/Telugu)", true, "Movies"),
         HomeCategoryItem("cdrama", "Chinese & Turkish Dramas", true, "Series")
     )
+
+    private val METADATA_SOURCES = listOf("TMDB", "Cinemeta", "Stremio")
 
     private val PRESET_CATALOGS = listOf(
         "Soluserv Catalog Plus" to DEFAULT_STREMIO_MANIFEST,
@@ -783,7 +781,7 @@ object MovieFoxSettingsDialog {
                             isCustom = true,
                             isHindi = true,
                             category = "Movies",
-                            runtimeBadge = if (probeUrl.endsWith(".cs3", true)) "⚡ SKY" else "☁️ CS"
+                            runtimeBadge = "⚡ SKY"
                         )
                     )
                 }
@@ -1266,10 +1264,21 @@ object MovieFoxSettingsDialog {
 
             holder.nameTv.text = srv.name
 
-            val isSky = srv.runtimeBadge.contains("SKY", true)
+            val isCs = srv.runtimeBadge.contains("CS", true)
+            val isMf = srv.runtimeBadge.contains("MF", true)
             holder.platformTv.text = srv.runtimeBadge
-            holder.platformTv.setTextColor(safeColor(if (isSky) "#34D399" else "#C084FC"))
-            holder.platformTv.background = pillBg(if (isSky) "#0B2920" else "#201336", 8f)
+            val pColor = when {
+                isMf -> "#A78BFA"
+                isCs -> "#38BDF8"
+                else -> "#34D399"
+            }
+            val pBg = when {
+                isMf -> "#23153B"
+                isCs -> "#0B2239"
+                else -> "#0B2920"
+            }
+            holder.platformTv.setTextColor(safeColor(pColor))
+            holder.platformTv.background = pillBg(pBg, 8f)
 
             holder.tagTv.text = srv.tag
             holder.tagTv.setTextColor(safeColor(srv.accentHex, "#38BDF8"))
