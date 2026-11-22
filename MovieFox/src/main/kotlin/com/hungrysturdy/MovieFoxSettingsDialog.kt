@@ -1,1601 +1,2319 @@
 package com.hungrysturdy
 
-import android.annotation.SuppressLint
-import android.app.Activity
-import android.app.AlertDialog
-import android.app.Dialog
-import android.content.ClipboardManager
-import android.content.Context
-import android.content.SharedPreferences
-import android.content.res.ColorStateList
-import android.graphics.Bitmap
-import android.graphics.Color
-import android.graphics.Typeface
-import android.graphics.drawable.ColorDrawable
-import android.graphics.drawable.GradientDrawable
 import android.net.Uri
-import android.os.Handler
-import android.os.Looper
-import android.text.Editable
-import android.text.TextUtils
-import android.text.TextWatcher
-import android.view.Gravity
-import android.view.View
-import android.view.ViewGroup
-import android.view.Window
-import android.view.WindowManager
-import android.webkit.CookieManager
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import android.widget.*
-import kotlinx.coroutines.CoroutineScope
+import android.util.Base64
+import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.CloudflareKiller
+import com.lagradost.cloudstream3.utils.*
+import com.lagradost.nicehttp.NiceResponse
+import dalvik.system.DexClassLoader
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.ByteArrayInputStream
-import java.net.HttpURLConnection
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Element
+import java.io.File
+import java.lang.reflect.Modifier
 import java.net.URI
-import java.net.URL
-import java.util.concurrent.CopyOnWriteArrayList
-import java.util.zip.ZipInputStream
+import java.net.URLEncoder
+import java.security.MessageDigest
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
+import java.util.zip.ZipFile
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
-object MovieFoxSettingsDialog {
+class MovieFoxProvider : MainAPI() {
 
-    private const val PREFS_NAME = "moviefox_ultra_max_v15"
-    private const val KEY_SRV_PREFIX = "mf_srv_"
-    private const val KEY_SRV_ORDER = "mf_srv_order_csv"
-    private const val KEY_CF_COOKIE_PREFIX = "mf_cf_cookie_"
-    private const val KEY_AUDIO_PREFIX = "mf_audio_"
-    private const val KEY_NUVIO_MANIFESTS = "mf_nuvio_manifests_json"
-    private const val KEY_CS3_REPOS = "mf_cs3_repos_json"
-    private const val KEY_CS3_SERVERS = "mf_cs3_servers_json"
-    private const val KEY_QUALITY = "mf_preferred_quality"
-    private const val KEY_Q_4K = "mf_q_4k_1440p"
-    private const val KEY_Q_1080 = "mf_q_1080p"
-    private const val KEY_Q_720 = "mf_q_720p"
-    private const val KEY_Q_480 = "mf_q_480p"
-    private const val KEY_HINDI_ONLY = "mf_hindi_providers_only"
-    private const val KEY_LOW_BUFFER = "mf_low_buffer_mode"
-    private const val KEY_DOWNLOAD_ONLY = "mf_download_only_mode"
-    private const val KEY_FAST_FETCH = "mf_fast_fetch_mode"
-    private const val KEY_CONCURRENCY = "mf_concurrency"
-    private const val KEY_TIMEOUT_SEC = "mf_timeout_sec"
-    private const val KEY_METADATA_SOURCE = "mf_metadata_source"
-    private const val KEY_SHUFFLE_HOME = "mf_shuffle_home_categories"
-    private const val KEY_HOME_CATEGORIES = "mf_home_categories_json"
+    override var mainUrl = "https://moviefox.pro"
+    override var name = "MovieFox"
+    override var lang = "hi"
+    override val hasMainPage = true
+    override val hasDownloadSupport = true
+    override val instantLinkLoading = true
 
-    const val CF_BYPASS_UA =
-        "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36"
-
-    private var cachedPrefs: SharedPreferences? = null
-    private var cachedManifests: MutableList<NuvioManifestConfig>? = null
-    private var cachedCs3Repos: MutableList<Cs3RepoConfig>? = null
-    private val cachedCs3Servers = CopyOnWriteArrayList<ServerItem>()
-    private var cs3Loaded = false
-
-    data class ServerItem(
-        val key: String,
-        val name: String,
-        val tag: String,
-        val probeUrl: String,
-        val accentHex: String,
-        val isCustom: Boolean = false,
-        val isHindi: Boolean = true
-    )
-
-    data class BypassSite(val domain: String, val displayName: String)
-
-    data class HomeCategoryItem(
-        val id: String,
-        var title: String,
-        var visible: Boolean = true
-    )
-
-    data class NuvioManifestConfig(
-        val id: String,
-        var label: String,
-        var manifestUrl: String,
-        var enabled: Boolean = true
-    )
-
-    data class Cs3RepoConfig(
-        val id: String,
-        val name: String,
-        val repoUrl: String,
-        var enabled: Boolean = true,
-        var serverCount: Int = 0
-    )
-
-    data class CustomExternalSite(
-        val id: String,
-        val name: String,
-        val baseUrl: String,
-        var enabled: Boolean = true
-    )
-
-    val BASE_SERVERS = listOf(
-        ServerItem("purstream", "Purstream", "API", "https://moviefox.pro/api/stream/purstream", "#38BDF8", false, true),
-        ServerItem("castle", "Castle", "API", "https://moviefox.pro/api/stream/castle", "#818CF8", false, true),
-        ServerItem("watchout", "Watchout", "API", "https://moviefox.pro/api/stream/watchout", "#2DD4BF", false, false),
-        ServerItem("cinetv_api", "CineTV API", "WEB/API", "https://cinetv.app/en", "#F43F5E", false, true),
-        ServerItem("cinetv_hls", "CineTV HLS", "WORKER", "https://silent-frost-f2dbv.nxstreamhub.workers.dev/hls/", "#FB7185", false, true),
-        ServerItem("vegamovies", "VegaMovies", "PXL/FSL", "https://vegamovies.lease/", "#EC4899", false, true),
-        ServerItem("rogmovies", "RogMovies", "PXL/FSL", "https://rogmovies.im/", "#EC4899", false, true),
-        ServerItem("bollyflix", "Bollyflix", "HI/4K", "https://bollyflix.frl/", "#38BDF8", false, true),
-        ServerItem("sflix", "Sflix", "DASH/HLS", "https://sflix.film/", "#F97316", false, true),
-        ServerItem("prmovies", "Prmovies", "SITE", "https://prmovies.com.cv/", "#F59E0B", false, true),
-        ServerItem("play4u", "Play4u", "HLS", "https://play4u.org/", "#FB7185", false, true),
-        ServerItem("hdhub4u", "HDHub4u", "SITE", "https://new15.hdhub4u.cl/?utm=mn1", "#34D399", false, true),
-        ServerItem("dramaverse", "DramaVerse", "XCLOUD", "https://mydverse.com/", "#A855F7", false, true),
-        ServerItem("gokuhd", "GokuHD", "PXL/FSL", "https://gokuhd.nl/", "#38BDF8", false, true),
-        ServerItem("nuvio", "Nuvio Addon", "MANIFEST", "https://nuvio.app/", "#A855F7", false, true),
-        ServerItem("moviebox", "MovieBox", "BFF", "https://h5-api.aoneroom.com/wefeed-h5api-bff", "#34D399", false, true),
-        ServerItem("netnaija", "NetNaija", "SITE", "https://www.thenetnaija.net/", "#FACC15", false, false),
-        ServerItem("hicine", "HiCine", "HAPI", "https://hicine.biz/", "#38BDF8", false, true),
-        ServerItem("hindmoviez", "HindMoviez", "SITE", "https://v3.hindmovie.im/", "#FACC15", false, true),
-        ServerItem("movielinkbd", "MovieLinkBD", "SITE", "https://drjuea.movielinkbd.at/", "#818CF8", false, false),
-        ServerItem("netmirror", "NetMirror", "OTT", "https://netmirror.gold/", "#F43F5E", false, true),
-        ServerItem("movy", "Movy", "API", "https://www.movy.sx/", "#22D3EE", false, true),
-        ServerItem("4khdhub", "4KHDHub", "4K", "https://4khdhub.one/", "#C084FC", false, true),
-        ServerItem("movies4u", "Movies4u", "SITE", "https://movies4u.vet/", "#FB923C", false, true),
-        ServerItem("multimovies", "Multimovies", "SITE", "https://m1.multimovies.courses/", "#22D3EE", false, true)
-    )
-
-    private val CF_BYPASS_SITES = listOf(
-        BypassSite("net52.cc", "NetMirror"),
-        BypassSite("netmirror.gold", "NetMirror Gold"),
-        BypassSite("moviefox.pro", "MovieFox"),
-        BypassSite("cinetv.app/en", "CineTV"),
-        BypassSite("vegamovies.lease", "VegaMovies"),
-        BypassSite("bollyflix.frl", "Bollyflix"),
-        BypassSite("prmovies.coupons", "Prmovies"),
-        BypassSite("play4u.org", "Play4u"),
-        BypassSite("sflix.film", "Sflix"),
-        BypassSite("v3.hindmovie.im", "HindMoviez"),
-        BypassSite("drjuea.movielinkbd.at", "MovieLinkBD"),
-        BypassSite("www.movy.sx", "Movy"),
-        BypassSite("new15.hdhub4u.cl", "HDHub4u"),
-        BypassSite("4khdhub.one", "4KHDHub"),
-        BypassSite("movies4u.vet", "Movies4u"),
-        BypassSite("new8.movies4u.garden", "Movies4u Garden"),
-        BypassSite("m1.multimovies.courses", "Multimovies"),
-        BypassSite("mobilejsr.best", "Drive Mirror")
-    )
-
-    private val DEFAULT_HOME_CATEGORIES = listOf(
-        HomeCategoryItem("trending", "Trending Now", true),
-        HomeCategoryItem("popular_movies", "Popular Movies", true),
-        HomeCategoryItem("popular_tv", "Popular TV Shows", true),
-        HomeCategoryItem("hindi_movies", "Indian Movies (Hindi)", true),
-        HomeCategoryItem("hindi_tv", "Indian TV Shows", true),
-        HomeCategoryItem("kdrama", "K-Drama", true),
-        HomeCategoryItem("anime", "Anime", true),
-        HomeCategoryItem("hollywood", "Hollywood Movies", true),
-        HomeCategoryItem("tamil_telugu", "South Indian (Tamil/Telugu)", true),
-        HomeCategoryItem("cdrama", "Chinese & Turkish Dramas", true)
-    )
-
-    private val METADATA_SOURCES = listOf("TMDB", "Cinemeta", "Stremio")
-
-    private val PRESET_CATALOGS = listOf(
-        "Streaming Catalogs Plus" to "https://7a82163c306e-stremio-netflix-catalog-addon.baby-beamup.club/manifest.json",
-        "Anime Kitsu" to "https://anime-kitsu.strem.fun/manifest.json",
-        "Cinemeta" to "https://v3-cinemeta.strem.io/manifest.json"
-    )
-
-    private val AVATAR_PALETTE = listOf(
-        "#38BDF8", "#A855F7", "#F43F5E", "#34D399",
-        "#FB923C", "#818CF8", "#22D3EE", "#EC4899", "#FACC15"
-    )
-
-    val SERVERS: List<ServerItem>
-        get() = BASE_SERVERS + cachedCs3Servers.toList()
-
-    private fun isContextAlive(ctx: Context?): Boolean {
-        if (ctx == null) return false
-        if (ctx is Activity && (ctx.isFinishing || ctx.isDestroyed)) return false
-        return true
-    }
-
-    private fun safeColor(hex: String, fallback: String = "#94A3B8"): Int =
-        runCatching { Color.parseColor(hex) }.getOrElse { Color.parseColor(fallback) }
-
-    private fun safeToast(ctx: Context?, msg: String) {
-        if (!isContextAlive(ctx)) return
-        runCatching { Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show() }
-    }
-
-    private fun dp(ctx: Context, px: Int): Int =
-        (px * ctx.resources.displayMetrics.density).toInt()
-
-    private fun cardBg(
-        bgHex: String = "#141822",
-        strokeHex: String = "#252E42",
-        radius: Float = 22f,
-        strokeWidth: Int = 2
-    ): GradientDrawable = GradientDrawable().apply {
-        setColor(safeColor(bgHex, "#141822"))
-        cornerRadius = radius
-        setStroke(strokeWidth, safeColor(strokeHex, "#252E42"))
-    }
-
-    private fun pillBg(bgHex: String, radius: Float = 16f): GradientDrawable = GradientDrawable().apply {
-        setColor(safeColor(bgHex, "#1C2230"))
-        cornerRadius = radius
-    }
-
-    private fun prefs(ctx: Context): SharedPreferences =
-        cachedPrefs ?: ctx.applicationContext
-            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .also {
-                cachedPrefs = it
-                if (!cs3Loaded) {
-                    cs3Loaded = true
-                    cachedCs3Servers.clear()
-                    cachedCs3Servers.addAll(loadCs3ServersInternal(it))
-                }
-            }
-
-    private fun normalizeHost(urlOrDomain: String): String {
-        val trimmed = urlOrDomain.trim()
-        val host = if (trimmed.contains("://")) {
-            runCatching { Uri.parse(trimmed).host }.getOrNull().orEmpty()
-        } else {
-            trimmed.substringBefore('/')
-        }
-        return host.lowercase().removePrefix("www.").trim()
-    }
-
-    fun saveCookieForDomain(ctx: Context, urlOrDomain: String, cookies: String) {
-        val h = normalizeHost(urlOrDomain)
-        if (h.isNotBlank()) prefs(ctx).edit().putString("$KEY_CF_COOKIE_PREFIX$h", cookies.trim()).apply()
-    }
-
-    fun getCookieForDomain(ctx: Context?, urlOrDomain: String): String? {
-        if (ctx == null) return null
-        val h = normalizeHost(urlOrDomain)
-        if (h.isBlank()) return null
-        return prefs(ctx).getString("$KEY_CF_COOKIE_PREFIX$h", null)?.takeIf { it.isNotBlank() }
-    }
-
-    fun hasSavedCookieForDomain(ctx: Context, urlOrDomain: String): Boolean =
-        !getCookieForDomain(ctx, urlOrDomain).isNullOrBlank()
-
-    fun removeCookieForDomain(ctx: Context, urlOrDomain: String) {
-        val h = normalizeHost(urlOrDomain)
-        if (h.isNotBlank()) prefs(ctx).edit().remove("$KEY_CF_COOKIE_PREFIX$h").apply()
-    }
-
-    fun isHindiOnly(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_HINDI_ONLY, false)
-    fun setHindiOnly(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_HINDI_ONLY, enabled).apply()
-
-    fun isQuality4kEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_Q_4K, true)
-    fun setQuality4kEnabled(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_Q_4K, enabled).apply()
-
-    fun isQuality1080Enabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_Q_1080, true)
-    fun setQuality1080Enabled(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_Q_1080, enabled).apply()
-
-    fun isQuality720Enabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_Q_720, true)
-    fun setQuality720Enabled(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_Q_720, enabled).apply()
-
-    fun isQuality480Enabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_Q_480, true)
-    fun setQuality480Enabled(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_Q_480, enabled).apply()
-
-    fun getPreferredQuality(ctx: Context): String {
-        return when {
-            isQuality4kEnabled(ctx) -> "4K"
-            isQuality1080Enabled(ctx) -> "1080p"
-            isQuality720Enabled(ctx) -> "720p"
-            isQuality480Enabled(ctx) -> "480p"
-            else -> "AUTO"
-        }
-    }
-
-    fun setPreferredQuality(ctx: Context, quality: String) = prefs(ctx).edit().putString(KEY_QUALITY, quality).apply()
-
-    fun isLowBufferMode(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_LOW_BUFFER, true)
-    fun setLowBufferMode(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_LOW_BUFFER, enabled).apply()
-
-    fun isDownloadOnly(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_DOWNLOAD_ONLY, false)
-    fun setDownloadOnly(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_DOWNLOAD_ONLY, enabled).apply()
-
-    fun isFastFetchMode(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_FAST_FETCH, true)
-    fun setFastFetchMode(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_FAST_FETCH, enabled).apply()
-
-    fun isStreamOnly(ctx: Context): Boolean = isLowBufferMode(ctx)
-    fun getParallelServers(ctx: Context): Int = getConcurrency(ctx)
-
-    fun getConcurrency(ctx: Context): Int = prefs(ctx).getInt(KEY_CONCURRENCY, 15)
-    fun setConcurrency(ctx: Context, value: Int) = prefs(ctx).edit().putInt(KEY_CONCURRENCY, value.coerceIn(2, 50)).apply()
-
-    fun getTimeoutSeconds(ctx: Context): Int = prefs(ctx).getInt(KEY_TIMEOUT_SEC, 8)
-    fun setTimeoutSeconds(ctx: Context, sec: Int) = prefs(ctx).edit().putInt(KEY_TIMEOUT_SEC, sec.coerceIn(4, 20)).apply()
-
-    fun getMetadataSource(ctx: Context): String = prefs(ctx).getString(KEY_METADATA_SOURCE, "TMDB") ?: "TMDB"
-    fun setMetadataSource(ctx: Context, src: String) = prefs(ctx).edit().putString(KEY_METADATA_SOURCE, src).apply()
-
-    fun isShuffleHomeCategories(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_SHUFFLE_HOME, false)
-    fun setShuffleHomeCategories(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_SHUFFLE_HOME, enabled).apply()
-
-    fun getHomeCategories(ctx: Context): MutableList<HomeCategoryItem> {
-        val raw = prefs(ctx).getString(KEY_HOME_CATEGORIES, null)
-        if (raw.isNullOrBlank()) return DEFAULT_HOME_CATEGORIES.map { it.copy() }.toMutableList()
-        val list = mutableListOf<HomeCategoryItem>()
+    init {
         runCatching {
-            val arr = JSONArray(raw)
-            for (i in 0 until arr.length()) {
-                val o = arr.optJSONObject(i) ?: continue
-                val id = o.optString("id").trim()
-                val title = o.optString("title").trim()
-                if (id.isNotBlank() && title.isNotBlank()) {
-                    list.add(HomeCategoryItem(id, title, o.optBoolean("visible", true)))
-                }
-            }
-        }
-        return if (list.isEmpty()) DEFAULT_HOME_CATEGORIES.map { it.copy() }.toMutableList() else list
-    }
-
-    fun saveHomeCategories(ctx: Context, list: List<HomeCategoryItem>) {
-        val arr = JSONArray()
-        list.forEach { c ->
-            arr.put(JSONObject().put("id", c.id).put("title", c.title).put("visible", c.visible))
-        }
-        prefs(ctx).edit().putString(KEY_HOME_CATEGORIES, arr.toString()).apply()
-    }
-
-    fun isServerEnabled(ctx: Context, key: String): Boolean {
-        val enabled = prefs(ctx).getBoolean("$KEY_SRV_PREFIX${key.lowercase()}", true)
-        if (!enabled) return false
-        if (isHindiOnly(ctx)) {
-            val item = SERVERS.firstOrNull { it.key.equals(key, true) }
-            if (item != null && !item.isCustom && !item.isHindi) return false
-        }
-        return true
-    }
-
-    fun setServerEnabled(ctx: Context, key: String, enabled: Boolean) {
-        prefs(ctx).edit().putBoolean("$KEY_SRV_PREFIX${key.lowercase()}", enabled).apply()
-    }
-
-    fun getServerOrder(ctx: Context): List<String> {
-        prefs(ctx)
-        val allKeys = SERVERS.map { it.key }
-        val saved = prefs(ctx).getString(KEY_SRV_ORDER, null)?.split(",")?.filter { it.isNotBlank() } ?: return allKeys
-        val valid = saved.filter { it in allKeys }
-        return valid + (allKeys - valid.toSet())
-    }
-
-    fun getOrderedEnabledKeys(ctx: Context): List<String> =
-        getServerOrder(ctx).filter { isServerEnabled(ctx, it) }
-
-    fun reportServerResult(ctx: Context?, key: String, success: Boolean, latencyMs: Long = 0L) {}
-    fun getServerFailCount(ctx: Context, key: String): Int = 0
-    fun getServerLastMs(ctx: Context, key: String): Long = -1L
-    fun resetAllHealthStats(ctx: Context) {}
-
-    private fun toRawGithubUrl(raw: String): String {
-        val trimmed = raw.trim()
-        val fixed = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed else "https://$trimmed"
-        return when {
-            fixed.contains("github.com/") && fixed.contains("/blob/") ->
-                fixed.replace("https://github.com/", "https://raw.githubusercontent.com/").replace("/blob/", "/")
-            fixed.contains("github.com/") && fixed.contains("/raw/") ->
-                fixed.replace("https://github.com/", "https://raw.githubusercontent.com/").replace("/raw/", "/")
-            else -> fixed
+            val dispatcher = app.baseClient.dispatcher
+            if (dispatcher.maxRequestsPerHost < 40) dispatcher.maxRequestsPerHost = 40
+            if (dispatcher.maxRequests < 160) dispatcher.maxRequests = 160
         }
     }
 
-    private fun normalizeNuvioManifestUrl(raw: String): String {
-        var u = raw.trim()
-        if (u.startsWith("stremio://", ignoreCase = true)) u = "https://" + u.substringAfter("://")
-        if (!u.startsWith("http://") && !u.startsWith("https://")) u = "https://$u"
-        val qIdx = u.indexOf('?')
-        val pathPart = if (qIdx >= 0) u.substring(0, qIdx) else u
-        val queryPart = if (qIdx >= 0) u.substring(qIdx) else ""
-        val cleanPath = pathPart.trimEnd('/')
-        val withManifest = if (cleanPath.endsWith("/manifest.json", ignoreCase = true)) cleanPath else "$cleanPath/manifest.json"
-        return "$withManifest$queryPart"
+    private val cineTvUrls = listOf("https://cinetv.app/en", "https://cinetv.app")
+    private val cineTvBaseUrl = "https://cinetv.app"
+    private val cineTvHlsWorker = "https://silent-frost-f2dbv.nxstreamhub.workers.dev/hls"
+
+    private val prmoviesMirrors = listOf(
+        "https://prmovies.com.cv",
+        "https://prmovies.kids",
+        "https://prmovies.coupons",
+        "https://prmovies.com"
+    )
+    private var activePrmoviesBase = "https://prmovies.com.cv"
+
+    private val vegamoviesDomains = listOf(
+        "https://vegamovies.lease",
+        "https://rogmovies.im",
+        "https://rogmovies.autos"
+    )
+
+    private val bollyflixMirrors = listOf("https://bollyflix.frl")
+
+    private val sflixWebDomains = listOf(
+        "https://sflix.film",
+        "https://h5-api.aoneroom.com",
+        "https://movie-box.co",
+        "https://123moviesfree.club"
+    )
+    private val sflixPlayerUrl = "https://mzfi.me"
+    private val sflixSecretB64 = "NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw=="
+
+    private val movieBoxBff = "https://h5-api.aoneroom.com/wefeed-h5api-bff"
+    private val movieBoxSiteUrl = "https://netnaija.film"
+    private val movieBoxUa =
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36"
+
+    private val netnaijaDomains = listOf(
+        "https://www.thenetnaija.net",
+        "https://netnaija.xyz",
+        "https://netnaija.com.ng"
+    )
+    private var activeNetnaijaBase = "https://www.thenetnaija.net"
+
+    private val play4uBaseUrl = "https://play4u.org"
+    private val play4uSealPrefix = "pa!~"
+    private val play4uDefaultSealKey = "pa4u-stream-seal-v1"
+
+    private val hdhub4uDomains = listOf(
+        "https://new15.hdhub4u.cl",
+        "https://new13.hdhub4u.cl"
+    )
+    private val hdhub4uTypesenseUrl = "https://search.pingora.fyi/collections/post/documents/search"
+    private val dramaVerseBaseUrl = "https://mydverse.com"
+    private val gokuHdBaseUrl = "https://gokuhd.nl"
+
+    private val hicineApiBase = "https://hicine.biz"
+    private val hindmoviezDomains = listOf("https://v3.hindmovie.im")
+    private val movielinkbdDomains = listOf("https://drjuea.movielinkbd.at", "https://movielinkbd.com")
+    private val netmirrorDomains = listOf("https://netmirror.gold", "https://net52.cc")
+    private val movyMainUrl = "https://www.movy.sx"
+    private val movyStreamApiBase = "https://api.wecollege.net"
+    private val fourKhdHubDomains = listOf("https://4khdhub.one")
+    private val movies4uDomains = listOf(
+        "https://movies4u.vet",
+        "https://new8.movies4u.garden",
+        "https://new6.movies4u.garden"
+    )
+    private val multimoviesDomains = listOf("https://m1.multimovies.courses", "https://multimovies.garden")
+
+    private val fastWaveKeys = setOf(
+        "purstream", "castle", "watchout", "cinetv_api", "cinetv_hls",
+        "play4u", "sflix", "moviebox", "movy", "nuvio", "hicine"
+    )
+
+    private val cfKillers = ConcurrentHashMap<String, CloudflareKiller>()
+    private val cfLocks = ConcurrentHashMap<String, Mutex>()
+    private val dynamicDomainCache = ConcurrentHashMap<String, String>()
+    private val cs3PluginCache = ConcurrentHashMap<String, List<MainAPI>>()
+
+    private val multiAudioRegex = Regex(
+        """(?i)\b(hindi|english|tamil|telugu|kannada|malayalam|punjabi|marathi|bengali|urdu|gujarati|""" +
+            """japanese|korean|chinese|spanish|french|german|russian|turkish|arabic|""" +
+            """dual[ -]?audio|multi[ -]?audio|hin|eng|tam|tel|mal|kan|kor|jpn|chi|spa|fre|ger)\b"""
+    )
+
+    override val supportedTypes = setOf(
+        TvType.Movie,
+        TvType.TvSeries,
+        TvType.Anime,
+        TvType.AsianDrama
+    )
+
+    override val mainPage = mainPageOf(
+        "$mainUrl/trending" to "Trending Now",
+        "$mainUrl/movies?list=popular" to "Popular Movies",
+        "$mainUrl/movies?list=top_rated" to "Top Rated Movies",
+        "$mainUrl/movies?list=now_playing" to "In Theaters Now",
+        "$mainUrl/tv?list=popular" to "Popular TV Shows",
+        "$mainUrl/tv?list=top_rated" to "Top Rated TV Shows",
+        "$mainUrl/tv?lang=ko" to "K-Drama",
+        "$mainUrl/movies?lang=ko" to "Korean Movies",
+        "$mainUrl/movies?lang=hi" to "Indian Movies (Hindi)",
+        "$mainUrl/tv?lang=hi" to "Indian TV Shows",
+        "$mainUrl/movies?lang=pa" to "Punjabi Movies",
+        "$mainUrl/movies?lang=ta" to "Tamil Movies",
+        "$mainUrl/movies?lang=te" to "Telugu Movies",
+        "$mainUrl/movies?lang=en" to "American / Hollywood Movies",
+        "$mainUrl/tv?lang=en" to "American / English TV Shows",
+        "$mainUrl/movies?lang=ur" to "Pakistani / Urdu Movies",
+        "$mainUrl/tv?lang=ur" to "Pakistani Dramas",
+        "$mainUrl/tv?lang=tr" to "Turkish Dramas",
+        "$mainUrl/tv?lang=zh" to "Chinese Dramas (C-Drama)",
+        "$mainUrl/anime" to "Anime",
+        "$mainUrl/tv?lang=ja" to "Japanese Series",
+        "$mainUrl/movies?lang=ja" to "Japanese Movies",
+        "$mainUrl/movies?lang=es" to "Spanish Movies",
+        "$mainUrl/tv?lang=es" to "Spanish TV Shows",
+        "$mainUrl/dramas" to "Dramas",
+        "$mainUrl/dramas?category=classics" to "Classic Dramas",
+        "$mainUrl/universes" to "Cinematic Universes"
+    )
+
+    private val ignoredLinkTexts = setOf(
+        "where to watch", "more info", "watch now", "view all",
+        "play", "play now", "trailer", "all options", "go home", "search"
+    )
+
+    private fun hostOf(url: String): String = runCatching {
+        URI(url).host?.lowercase().orEmpty()
+    }.getOrDefault("")
+
+    private fun killerFor(url: String): CloudflareKiller =
+        cfKillers.getOrPut(hostOf(url).ifBlank { url }) { CloudflareKiller() }
+
+    private fun lockFor(url: String): Mutex =
+        cfLocks.getOrPut(hostOf(url).ifBlank { url }) { Mutex() }
+
+    private fun isCfChallenge(res: NiceResponse): Boolean {
+        if (res.code in listOf(403, 503)) return true
+        if (res.headers["cf-mitigated"] == "challenge") return true
+        val body = runCatching { res.text.lowercase() }.getOrDefault("")
+        return (body.contains("just a moment") && body.contains("challenge-platform")) ||
+            body.contains("checking your browser") ||
+            body.contains("checking if the site connection is secure")
     }
 
-    private fun loadCs3ServersInternal(p: SharedPreferences): List<ServerItem> {
-        val out = mutableListOf<ServerItem>()
-        val raw = p.getString(KEY_CS3_SERVERS, "[]") ?: "[]"
-        runCatching {
-            val arr = JSONArray(raw)
-            for (i in 0 until arr.length()) {
-                val obj = arr.optJSONObject(i) ?: continue
-                val key = obj.optString("key").trim()
-                val name = obj.optString("name").trim()
-                val probeUrl = obj.optString("probeUrl").trim()
-                if (key.isNotBlank() && name.isNotBlank() && probeUrl.isNotBlank()) {
-                    out.add(ServerItem(key, name, obj.optString("tag", "CS3").ifBlank { "CS3" }, probeUrl, obj.optString("accentHex", "#38BDF8"), true, true))
-                }
-            }
-        }
+    private suspend fun fetchDynamicDomain(fallback: String, key: String): String {
+        dynamicDomainCache[key]?.let { return it }
+        return runCatching {
+            val raw = app.get(
+                "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json",
+                timeout = 8L
+            ).text
+            val resolved = JSONObject(raw).optString(key).trim().trimEnd('/')
+            if (resolved.startsWith("http")) {
+                dynamicDomainCache[key] = resolved
+                resolved
+            } else fallback
+        }.getOrDefault(fallback)
+    }
+
+    private fun currentTimeoutSec(minSec: Long = 10L): Long {
+        val ctx = CloudStreamApp.context ?: return minSec
+        return MovieFoxSettingsDialog.getTimeoutSeconds(ctx).toLong().coerceAtLeast(minSec)
+    }
+
+    private fun directHeaders(url: String, extra: Map<String, String> = emptyMap()): Map<String, String> {
+        val ctx = CloudStreamApp.context
+        val savedCookie = MovieFoxSettingsDialog.getCookieForDomain(ctx, url)
+        val out = mutableMapOf<String, String>()
+        out["User-Agent"] = MovieFoxSettingsDialog.CF_BYPASS_UA
+        out["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        out["Accept-Language"] = "en-US,en;q=0.9"
+        if (!savedCookie.isNullOrBlank()) out["Cookie"] = savedCookie
+        out.putAll(extra)
         return out
     }
 
-    private fun saveCs3Servers(ctx: Context, list: List<ServerItem>) {
-        val deduped = list.distinctBy { it.key }
-        cachedCs3Servers.clear()
-        cachedCs3Servers.addAll(deduped)
-        val arr = JSONArray()
-        deduped.forEach { srv ->
-            arr.put(JSONObject().put("key", srv.key).put("name", srv.name).put("tag", srv.tag).put("probeUrl", srv.probeUrl).put("accentHex", srv.accentHex))
+    private suspend fun safeGetText(
+        url: String,
+        extraHeaders: Map<String, String> = emptyMap(),
+        timeoutSec: Long = currentTimeoutSec(),
+        retries: Int = 2
+    ): String? {
+        val headers = directHeaders(url, extraHeaders)
+        repeat(retries.coerceAtLeast(1)) { attempt ->
+            val first = runCatching {
+                app.get(url, headers = headers, timeout = timeoutSec)
+            }.getOrNull()
+
+            if (first != null && first.code in 200..299 && !isCfChallenge(first)) {
+                return first.text
+            }
+            val needsCf = first != null && isCfChallenge(first)
+            runCatching { first?.okhttpResponse?.close() }
+
+            if (needsCf) {
+                val solvedText = lockFor(url).withLock {
+                    val killer = killerFor(url)
+                    runCatching { killer.savedCookies.remove(hostOf(url)) }
+                    val solved = runCatching {
+                        app.get(url, headers = headers, interceptor = killer, timeout = maxOf(timeoutSec, 35L))
+                    }.getOrNull()
+
+                    if (solved != null && solved.code in 200..299 && !isCfChallenge(solved)) {
+                        val ctx = CloudStreamApp.context
+                        val solvedCookies = solved.cookies.entries.joinToString("; ") { "${it.key}=${it.value}" }
+                        if (ctx != null && solvedCookies.isNotBlank()) {
+                            MovieFoxSettingsDialog.saveCookieForDomain(ctx, url, solvedCookies)
+                        }
+                        solved.text
+                    } else {
+                        runCatching { solved?.okhttpResponse?.close() }
+                        null
+                    }
+                }
+                if (!solvedText.isNullOrBlank()) return solvedText
+            }
+            if (attempt < retries - 1) delay(350L)
         }
-        prefs(ctx).edit().putString(KEY_CS3_SERVERS, arr.toString()).apply()
+        return null
     }
 
-    fun getCs3Repos(ctx: Context): MutableList<Cs3RepoConfig> {
-        cachedCs3Repos?.let { return it }
-        val raw = prefs(ctx).getString(KEY_CS3_REPOS, "[]") ?: "[]"
-        val list = mutableListOf<Cs3RepoConfig>()
-        runCatching {
-            val arr = JSONArray(raw)
-            for (i in 0 until arr.length()) {
-                val obj = arr.optJSONObject(i) ?: continue
-                val url = obj.optString("repoUrl").trim()
-                if (url.isNotBlank()) {
-                    list.add(Cs3RepoConfig(obj.optString("id", System.currentTimeMillis().toString()), obj.optString("name", deriveManifestLabel(url)), url, obj.optBoolean("enabled", true), obj.optInt("serverCount", 0)))
+    private fun isYouTubeOrBlockedStream(url: String, label: String = ""): Boolean {
+        val lowUrl = url.lowercase()
+        val lowLbl = label.lowercase()
+        return mfIsBrokenContainerUrl(url) ||
+            lowUrl.contains("googlevideo.com") ||
+            lowUrl.contains("youtube.com") ||
+            lowUrl.contains("youtu.be") ||
+            lowLbl.contains("youtube")
+    }
+
+    private fun JSONObject.safeStr(key: String, fallback: String = ""): String {
+        if (!has(key) || isNull(key)) return fallback
+        val v = optString(key, "").trim()
+        return if (v.isBlank() || v.equals("null", ignoreCase = true)) fallback else v
+    }
+
+    private fun safeEncode(raw: String?): String {
+        val src = raw.orEmpty()
+        return runCatching { URLEncoder.encode(src, "UTF-8") }.getOrDefault(src)
+    }
+
+    private fun safeUriEncode(raw: String?, allow: String? = null): String {
+        val src = raw.orEmpty()
+        return if (allow != null) Uri.encode(src, allow).orEmpty() else Uri.encode(src).orEmpty()
+    }
+
+    private suspend fun safeSubtitle(langRaw: String?, urlRaw: String?, baseHost: String = mainUrl): SubtitleFile? {
+        val cleanUrl = normalizeUrl(urlRaw.orEmpty().trim(), baseHost)
+        if (!cleanUrl.startsWith("http") || mfIsBrokenContainerUrl(cleanUrl)) return null
+        val cleanLang = langRaw.orEmpty().trim().ifBlank { "English" }
+        return newSubtitleFile(lang = cleanLang, url = cleanUrl)
+    }
+
+    private fun normalizeAudioTag(token: String): String = when (token.lowercase().replace(" ", "").replace("-", "")) {
+        "hindi", "hin" -> "Hindi"
+        "english", "eng" -> "English"
+        "tamil", "tam" -> "Tamil"
+        "telugu", "tel" -> "Telugu"
+        "kannada", "kan" -> "Kannada"
+        "malayalam", "mal" -> "Malayalam"
+        "punjabi" -> "Punjabi"
+        "marathi" -> "Marathi"
+        "bengali" -> "Bengali"
+        "urdu" -> "Urdu"
+        "japanese", "jpn" -> "Japanese"
+        "korean", "kor" -> "Korean"
+        "chinese", "chi" -> "Chinese"
+        "spanish", "spa" -> "Spanish"
+        "dualaudio" -> "Dual Audio"
+        "multiaudio" -> "Multi Audio"
+        else -> token.trim().replaceFirstChar { it.uppercase() }
+    }
+
+    private fun extractAudioSummary(vararg texts: String?): String {
+        val found = LinkedHashSet<String>()
+        texts.forEach { src ->
+            if (src.isNullOrBlank()) return@forEach
+            multiAudioRegex.findAll(src).forEach { m ->
+                found.add(normalizeAudioTag(m.value))
+            }
+        }
+        return found.joinToString("/")
+    }
+
+    private fun encodeLoadData(
+        url: String,
+        title: String,
+        tmdbId: String?,
+        imdbId: String?,
+        isTv: Boolean,
+        season: Int = 1,
+        episode: Int = 1
+    ): String {
+        return JSONObject().apply {
+            put("url", url)
+            put("title", title)
+            if (!tmdbId.isNullOrBlank()) put("tmdbId", tmdbId)
+            if (!imdbId.isNullOrBlank()) put("imdbId", imdbId)
+            put("isTv", isTv)
+            put("season", season)
+            put("episode", episode)
+        }.toString()
+    }
+
+    private fun resolveCategoryLabel(defaultName: String, url: String): String? {
+        val ctx = CloudStreamApp.context ?: return defaultName
+        val cats = MovieFoxSettingsDialog.getHomeCategories(ctx)
+        val match = cats.firstOrNull { c ->
+            when (c.id) {
+                "trending" -> url.contains("/trending", true)
+                "popular_movies" -> url.contains("list=popular", true) && url.contains("/movies", true)
+                "popular_tv" -> url.contains("list=popular", true) && url.contains("/tv", true)
+                "hindi_movies" -> url.contains("lang=hi", true) && url.contains("/movies", true)
+                "hindi_tv" -> url.contains("lang=hi", true) && url.contains("/tv", true)
+                "kdrama" -> url.contains("lang=ko", true) && url.contains("/tv", true)
+                "anime" -> url.contains("/anime", true)
+                "hollywood" -> url.contains("lang=en", true) && url.contains("/movies", true)
+                "tamil_telugu" -> url.contains("lang=ta", true) || url.contains("lang=te", true)
+                "cdrama" -> url.contains("lang=zh", true) || url.contains("lang=tr", true)
+                else -> false
+            }
+        }
+        if (match != null) {
+            if (!match.visible) return null
+            return match.title
+        }
+        return defaultName
+    }
+
+    override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        val ctx = CloudStreamApp.context
+        val categoryLabel = resolveCategoryLabel(request.name, request.data)
+            ?: return newHomePageResponse(emptyList(), hasNext = false)
+
+        val timeoutSec = currentTimeoutSec()
+        val targetUrl = if (page > 1) {
+            val sep = if (request.data.contains("?")) "&" else "?"
+            "${request.data}${sep}page=$page"
+        } else {
+            request.data
+        }
+
+        val rawHtml = safeGetText(targetUrl, timeoutSec = timeoutSec).orEmpty()
+        val document = Jsoup.parse(rawHtml, mainUrl)
+        val cardSelector =
+            "article[data-cf] a[aria-label][href], a[href*=/universes/], a[href*=/universe/], a[href*=/channel/]"
+        val fallbackLinkSelector =
+            "a[href*=/movie/], a[href*=/tv/], a[href*=/dramas/], a[href*=/anime/], a[href*=/series/]"
+
+        val elements = document.select(cardSelector).ifEmpty { document.select(fallbackLinkSelector) }
+        var items = elements.mapNotNull { toSearchResult(it) }.distinctBy { it.url }
+        if (ctx != null && MovieFoxSettingsDialog.isShuffleHomeCategories(ctx)) {
+            items = items.shuffled()
+        }
+
+        val home = if (items.isNotEmpty()) listOf(HomePageList(categoryLabel, items)) else emptyList()
+        return newHomePageResponse(home, hasNext = items.isNotEmpty())
+    }
+
+    private fun toSearchResult(element: Element): SearchResponse? {
+        val href = element.attr("href").trim()
+        if (href.isBlank()) return null
+
+        val rawText = element.text().trim()
+        if (rawText.lowercase() in ignoredLinkTexts) return null
+
+        val article = element.closest("article")
+        val img = element.selectFirst("img") ?: article?.selectFirst("img")
+        val isSpecialCard = href.contains("/universe") || href.contains("/channel/")
+        if (img == null && !isSpecialCard) return null
+
+        val ariaTitle = element.attr("aria-label")
+            .replace(Regex("^Number \\d+:\\s*"), "")
+            .substringBefore(" (20")
+            .substringBefore(" (19")
+            .trim()
+
+        val imgAlt = img?.attr("alt")?.trim().orEmpty()
+        val headingTitle = article?.selectFirst("h3, h4")?.text()?.trim().orEmpty()
+        val title = ariaTitle.ifEmpty { imgAlt }.ifEmpty { headingTitle }.ifEmpty { rawText }
+        if (title.isBlank() || title.lowercase() in ignoredLinkTexts) return null
+
+        val poster: String? = img?.let {
+            it.attr("src").ifEmpty { it.attr("data-src") }.ifEmpty { it.attr("srcset").substringBefore(" ") }
+        }
+
+        val fixedUrl = if (href.startsWith("http")) href else "$mainUrl/${href.trimStart('/')}"
+        val cfType = article?.attr("data-cf-type").orEmpty()
+
+        val type = when {
+            fixedUrl.contains("/anime/") -> TvType.Anime
+            fixedUrl.contains("/dramas/") || fixedUrl.contains("/channel/") -> TvType.AsianDrama
+            cfType.equals("tv", true) ||
+                fixedUrl.contains("/tv/") ||
+                fixedUrl.contains("/series/") ||
+                fixedUrl.contains("/universe") -> TvType.TvSeries
+            else -> TvType.Movie
+        }
+
+        return if (type != TvType.Movie) {
+            newTvSeriesSearchResponse(title, fixedUrl, type) { this.posterUrl = poster }
+        } else {
+            newMovieSearchResponse(title, fixedUrl, type) { this.posterUrl = poster }
+        }
+    }
+
+    override suspend fun search(query: String): List<SearchResponse> {
+        val timeoutSec = currentTimeoutSec()
+        val encoded = safeEncode(query)
+        val html = safeGetText("$mainUrl/search?q=$encoded", timeoutSec = timeoutSec).orEmpty()
+        val document = Jsoup.parse(html, mainUrl)
+        val elements = document.select(
+            "article[data-cf] a[aria-label][href], a[href*=/universes/], a[href*=/universe/], a[href*=/channel/]"
+        ).ifEmpty {
+            document.select("a[href*=/movie/], a[href*=/tv/], a[href*=/dramas/], a[href*=/anime/], a[href*=/series/]")
+        }
+        return elements.mapNotNull { toSearchResult(it) }.distinctBy { it.url }
+    }
+
+    private fun extractSeriesId(url: String): String? {
+        return Regex("-(?:movie|tv|dramas|anime|series)-(\\d+)", RegexOption.IGNORE_CASE).find(url)?.groupValues?.get(1)
+            ?: Regex("/(?:movie|tv|dramas|anime|series)/(\\d+)", RegexOption.IGNORE_CASE).find(url)?.groupValues?.get(1)
+            ?: Regex("(?:movie|tv|dramas|anime|series)-(\\d+)", RegexOption.IGNORE_CASE).find(url)?.groupValues?.get(1)
+            ?: Regex("[?&]id=(\\d+)").find(url)?.groupValues?.get(1)
+            ?: Regex("-(\\d+)(?:\\?|$)").find(url)?.groupValues?.get(1)
+    }
+
+    private fun extractUnescapedFlightText(rawHtml: String): String {
+        val sb = StringBuilder()
+        Regex("""self\.__next_f\.push\(\[\d+,"((?:\\.|[^"\\])*)"\]\)""").findAll(rawHtml).forEach { m ->
+            val unescaped = runCatching { JSONObject("{\"v\":\"${m.groupValues[1]}\"}").getString("v") }
+                .getOrDefault(m.groupValues[1])
+            sb.append(unescaped).append('\n')
+        }
+        return if (sb.isNotEmpty()) sb.toString() else rawHtml
+    }
+
+    private fun extractJsonArrayAfterKey(text: String, key: String): String? {
+        val keyIdx = text.indexOf("\"$key\":")
+        if (keyIdx == -1) return null
+        val start = text.indexOf('[', keyIdx + key.length + 2)
+        if (start == -1) return null
+
+        var depth = 0
+        var inString = false
+        var escape = false
+        for (i in start until text.length) {
+            val c = text[i]
+            if (escape) { escape = false; continue }
+            if (c == '\\' && inString) { escape = true; continue }
+            if (c == '"') { inString = !inString; continue }
+            if (!inString) {
+                if (c == '[') depth++
+                else if (c == ']') {
+                    depth--
+                    if (depth == 0) return text.substring(start, i + 1)
                 }
             }
         }
-        cachedCs3Repos = list
-        return list
+        return null
     }
 
-    fun saveCs3Repos(ctx: Context, list: List<Cs3RepoConfig>) {
-        cachedCs3Repos = list.toMutableList()
-        val arr = JSONArray()
-        list.forEach { r ->
-            arr.put(JSONObject().put("id", r.id).put("name", r.name).put("repoUrl", r.repoUrl).put("enabled", r.enabled).put("serverCount", r.serverCount))
+    override suspend fun load(url: String): LoadResponse {
+        val timeoutSec = currentTimeoutSec()
+        val responseText = safeGetText(url, timeoutSec = timeoutSec).orEmpty()
+        val document = Jsoup.parse(responseText, mainUrl)
+        val flightText = extractUnescapedFlightText(responseText)
+
+        val title = document.selectFirst("h1")?.text()?.trim().orEmpty()
+            .ifEmpty { Regex("\"title\":\"([^\"]+)\"").find(flightText)?.groupValues?.get(1).orEmpty() }
+            .ifEmpty { document.select("title").text().substringBefore("—").substringBefore("|").trim() }
+            .replace(Regex("\\s*\\(\\d{4}\\)\\s*$"), "")
+            .trim()
+
+        val tmdbId = Regex("\"tmdbId\":(\\d+)").find(flightText)?.groupValues?.get(1)
+            ?: extractSeriesId(url)
+            ?: Regex("\"id\":(\\d+)").find(flightText)?.groupValues?.get(1)
+        val imdbId = Regex("\"imdbId\":\"(tt\\d+)\"").find(flightText)?.groupValues?.get(1)
+            ?: Regex("tt\\d{6,10}").find(responseText)?.value
+
+        val posterPath: String? = Regex("\"posterPath\":\"(/[^\"\\\\]+)\"").find(flightText)?.groupValues?.get(1)
+        val poster: String? = if (!posterPath.isNullOrBlank()) {
+            "https://image.tmdb.org/t/p/w500$posterPath"
+        } else {
+            document.select("main img, img.object-cover, img[data-nimg='fill']").firstOrNull()?.let {
+                it.attr("src").ifEmpty { it.attr("data-src") }
+            }
         }
-        prefs(ctx).edit().putString(KEY_CS3_REPOS, arr.toString()).apply()
-    }
 
-    fun getEnabledCs3Servers(ctx: Context): List<ServerItem> {
-        prefs(ctx)
-        return cachedCs3Servers.filter { isServerEnabled(ctx, it.key) }
-    }
+        val jsonOverview = Regex("\"overview\":\"((?:\\\\.|[^\"\\\\])*)\"")
+            .find(flightText)?.groupValues?.get(1)
+            ?.let { raw -> runCatching { JSONObject("{\"v\":\"$raw\"}").getString("v") }.getOrDefault(raw) }
+            ?.trim().orEmpty()
 
-    fun getNuvioManifests(ctx: Context): MutableList<NuvioManifestConfig> {
-        cachedManifests?.let { return it }
-        val raw = prefs(ctx).getString(KEY_NUVIO_MANIFESTS, null)
-        if (raw.isNullOrBlank()) {
-            val seeded = PRESET_CATALOGS.mapIndexed { idx, (label, url) ->
-                NuvioManifestConfig("preset_${idx + 1}", label, url, true)
-            }.toMutableList()
-            cachedManifests = seeded
-            saveNuvioManifests(ctx, seeded)
-            return seeded
+        val description = jsonOverview.ifEmpty {
+            document.select("main p.max-w-3xl, main p")
+                .map { it.text().trim() }
+                .firstOrNull { text ->
+                    text.length > 30 &&
+                        !text.contains("MovieFox indexes third-party content", ignoreCase = true) &&
+                        !text.contains("All rights reserved", ignoreCase = true)
+                }.orEmpty()
         }
-        val list = mutableListOf<NuvioManifestConfig>()
-        runCatching {
-            val arr = JSONArray(raw)
-            for (i in 0 until arr.length()) {
-                val obj = arr.optJSONObject(i) ?: continue
-                val url = obj.optString("manifestUrl").trim()
-                if (url.isNotBlank()) {
-                    list.add(NuvioManifestConfig(obj.optString("id", System.currentTimeMillis().toString()), obj.optString("label", deriveManifestLabel(url)), url, obj.optBoolean("enabled", true)))
+
+        val type = when {
+            url.contains("/anime/") -> TvType.Anime
+            url.contains("/dramas/") || url.contains("/channel/") -> TvType.AsianDrama
+            url.contains("/tv/") || url.contains("/series/") || url.contains("/universe") -> TvType.TvSeries
+            else -> TvType.Movie
+        }
+
+        if (type == TvType.Movie) {
+            val movieData = encodeLoadData(url, title, tmdbId, imdbId, false)
+            return newMovieLoadResponse(title, url, TvType.Movie, movieData) {
+                this.posterUrl = poster
+                this.plot = description
+            }
+        }
+
+        val baseSeriesId = extractSeriesId(url)
+        val baseUrlWithoutQuery = url.substringBefore("?")
+        val episodes = mutableListOf<Episode>()
+
+        extractJsonArrayAfterKey(flightText, "episodes")?.let { arrJson ->
+            runCatching {
+                val arr = JSONArray(arrJson)
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val sNum = obj.optInt("seasonNumber", -1)
+                    val eNum = obj.optInt("episodeNumber", -1)
+                    if (sNum <= 0 || eNum <= 0) continue
+                    val epTitle = obj.safeStr("name", "Episode $eNum")
+                    val epOverview = obj.safeStr("overview").takeIf { it.isNotBlank() }
+                    val stillPath = obj.safeStr("stillPath").takeIf { it.startsWith("/") }
+                    val epData = encodeLoadData("$baseUrlWithoutQuery?season=$sNum&episode=$eNum", title, tmdbId, imdbId, true, sNum, eNum)
+                    episodes.add(newEpisode(epData) {
+                        this.name = epTitle
+                        this.season = sNum
+                        this.episode = eNum
+                        this.description = epOverview
+                        this.posterUrl = stillPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+                    })
                 }
             }
         }
-        cachedManifests = list
-        return list
-    }
 
-    fun saveNuvioManifests(ctx: Context, list: List<NuvioManifestConfig>) {
-        cachedManifests = list.toMutableList()
-        val arr = JSONArray()
-        list.forEach { m ->
-            arr.put(JSONObject().put("id", m.id).put("label", m.label).put("manifestUrl", m.manifestUrl).put("enabled", m.enabled))
-        }
-        prefs(ctx).edit().putString(KEY_NUVIO_MANIFESTS, arr.toString()).apply()
-    }
-
-    fun getCustomSites(ctx: Context): List<CustomExternalSite> =
-        getNuvioManifests(ctx).map { CustomExternalSite(it.id, it.label, it.manifestUrl, it.enabled) }
-
-    fun deriveManifestLabel(rawUrl: String): String = try {
-        val host = URI(normalizeNuvioManifestUrl(rawUrl)).host.orEmpty().removePrefix("www.")
-        host.replaceFirstChar { it.uppercase() }.ifBlank { "Catalog Addon" }
-    } catch (_: Exception) {
-        "Catalog Addon"
-    }
-
-    private fun readHttpBytes(urlStr: String, timeoutMs: Int = 7000): ByteArray? = runCatching {
-        val conn = (URL(toRawGithubUrl(urlStr)).openConnection() as HttpURLConnection).apply {
-            requestMethod = "GET"
-            connectTimeout = timeoutMs
-            readTimeout = timeoutMs
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", CF_BYPASS_UA)
-            setRequestProperty("Accept", "application/json, application/octet-stream, text/plain, */*")
-        }
-        val bytes = if (conn.responseCode in 200..299) conn.inputStream.use { it.readBytes() } else null
-        conn.disconnect()
-        bytes
-    }.getOrNull()
-
-    private fun parseJsonServerEntries(body: String, idTag: String, defaultUrl: String, out: MutableList<ServerItem>) {
-        runCatching {
-            val entries = mutableListOf<JSONObject>()
-            if (body.startsWith("[")) {
-                val arr = JSONArray(body)
-                for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { entries.add(it) }
-            } else if (body.startsWith("{")) {
-                val root = JSONObject(body)
-                listOf("plugins", "items", "providers", "servers", "sources").forEach { key ->
-                    root.optJSONArray(key)?.let { arr ->
-                        for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { entries.add(it) }
+        extractJsonArrayAfterKey(flightText, "seasons")?.let { seasonsJson ->
+            runCatching {
+                val arr = JSONArray(seasonsJson)
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val sNum = obj.optInt("seasonNumber", -1)
+                    val epCount = obj.optInt("episodeCount", 0)
+                    if (sNum <= 0 || epCount <= 0) continue
+                    for (eNum in 1..epCount) {
+                        if (episodes.none { it.season == sNum && it.episode == eNum }) {
+                            val epData = encodeLoadData("$baseUrlWithoutQuery?season=$sNum&episode=$eNum", title, tmdbId, imdbId, true, sNum, eNum)
+                            episodes.add(newEpisode(epData) {
+                                this.name = "Episode $eNum"
+                                this.season = sNum
+                                this.episode = eNum
+                            })
+                        }
                     }
                 }
             }
-            entries.forEachIndexed { idx, pObj ->
-                val finalName = pObj.optString("name").trim().ifBlank { pObj.optString("internalName").trim() }
-                if (finalName.isBlank()) return@forEachIndexed
-                val url = pObj.optString("url").ifBlank { pObj.optString("mainUrl") }.ifBlank { pObj.optString("pluginUrl") }.ifBlank { defaultUrl }.trim()
-                val slug = finalName.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
-                out.add(ServerItem("cs3_${idTag}_${slug.ifBlank { "srv$idx" }}", finalName, "CS3", toRawGithubUrl(url), AVATAR_PALETTE[idx % AVATAR_PALETTE.size], true, true))
+        }
+
+        document.select("a[href*='/watch/']").forEach { element ->
+            val epHref = element.attr("href").trim()
+            if (baseSeriesId != null) {
+                val linkId = extractSeriesId(epHref)
+                if (linkId != null && linkId != baseSeriesId) return@forEach
+            }
+            val sNum = Regex("[?&]s(?:eason)?=(\\d+)", RegexOption.IGNORE_CASE).find(epHref)?.groupValues?.get(1)?.toIntOrNull() ?: return@forEach
+            val eNum = Regex("[?&]e(?:pisode)?=(\\d+)", RegexOption.IGNORE_CASE).find(epHref)?.groupValues?.get(1)?.toIntOrNull() ?: return@forEach
+            if (sNum <= 0 || eNum <= 0) return@forEach
+            if (episodes.none { it.season == sNum && it.episode == eNum }) {
+                val label = element.attr("aria-label")
+                    .replace(Regex("^Watch episode \\d+:\\s*", RegexOption.IGNORE_CASE), "")
+                    .trim()
+                    .ifEmpty { element.parent()?.selectFirst("p")?.text()?.replace(Regex("^\\d+\\.\\s*"), "")?.trim().orEmpty() }
+                    .ifEmpty { "Episode $eNum" }
+                val thumb = element.selectFirst("img")?.attr("src")?.takeIf { it.startsWith("http") }
+                val epData = encodeLoadData("$baseUrlWithoutQuery?season=$sNum&episode=$eNum", title, tmdbId, imdbId, true, sNum, eNum)
+                episodes.add(newEpisode(epData) {
+                    this.name = label
+                    this.season = sNum
+                    this.episode = eNum
+                    this.posterUrl = thumb
+                })
+            }
+        }
+
+        if (episodes.isEmpty()) {
+            for (s in 1..3) {
+                for (e in 1..8) {
+                    val epData = encodeLoadData("$baseUrlWithoutQuery?season=$s&episode=$e", title, tmdbId, imdbId, true, s, e)
+                    episodes.add(newEpisode(epData) {
+                        this.name = "Episode $e"
+                        this.season = s
+                        this.episode = e
+                    })
+                }
+            }
+        }
+
+        val sortedEpisodes = episodes
+            .distinctBy { Pair(it.season, it.episode) }
+            .sortedWith(compareBy({ it.season }, { it.episode }))
+
+        return newTvSeriesLoadResponse(title, url, type, sortedEpisodes) {
+            this.posterUrl = poster
+            this.plot = description
+        }
+    }
+
+    private data class LinkContext(
+        val pageTitle: String,
+        val isTv: Boolean,
+        val season: String,
+        val episode: String,
+        val imdbId: String,
+        val candidateIds: List<String>,
+        val watchUrl: String,
+        val baseHeaders: Map<String, String>,
+        val timeoutSec: Long,
+        val streamOnly: Boolean,
+        val downloadOnly: Boolean,
+        val allow4k: Boolean,
+        val allow1080: Boolean,
+        val allow720: Boolean,
+        val allow480: Boolean,
+        val seenUrls: MutableSet<String>
+    )
+
+    private fun getQuality(value: String?): Int {
+        val quality = value?.uppercase().orEmpty()
+        return when {
+            quality.contains("2160") || quality.contains("4K") -> Qualities.P2160.value
+            quality.contains("1440") -> Qualities.P1440.value
+            quality.contains("1080") -> Qualities.P1080.value
+            quality.contains("720") -> Qualities.P720.value
+            quality.contains("480") -> Qualities.P480.value
+            else -> Qualities.P1080.value
+        }
+    }
+
+    private fun isQualityAllowed(lc: LinkContext, qualityValue: Int, qualityStr: String?): Boolean {
+        val anyToggleEnabled = lc.allow4k || lc.allow1080 || lc.allow720 || lc.allow480
+        if (!anyToggleEnabled) return true
+        val raw = qualityStr.orEmpty()
+        val hasExplicitTag = Regex("""\b(2160|1440|1080|720|480|4k|uhd|fhd|hd)\b""", RegexOption.IGNORE_CASE).containsMatchIn(raw)
+        if (!hasExplicitTag) return true
+        return when {
+            qualityValue >= Qualities.P1440.value -> lc.allow4k
+            qualityValue >= Qualities.P1080.value -> lc.allow1080
+            qualityValue >= Qualities.P720.value -> lc.allow720
+            else -> lc.allow480
+        }
+    }
+
+    private fun normalizeUrl(rawUrl: String, baseHost: String = mainUrl): String {
+        val trimmed = rawUrl.replace("\\/", "/").replace("&amp;", "&").trim()
+        return when {
+            trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("magnet:") -> trimmed
+            trimmed.startsWith("//") -> "https:$trimmed"
+            else -> "${baseHost.trimEnd('/')}/${trimmed.trimStart('/')}"
+        }
+    }
+
+    private fun isAdUrl(url: String): Boolean {
+        return url.contains("backhoemoya", true) ||
+            url.contains("/cx/", true) ||
+            url.contains("?md=[", true) ||
+            url.contains("exoclick", true) ||
+            url.contains("popads", true) ||
+            url.contains("propeller", true) ||
+            url.contains("ardance.org", true) ||
+            url.contains("fifa2026", true)
+    }
+
+    private fun isStreamOrHlsLink(url: String, type: ExtractorLinkType, typeHint: String = ""): Boolean {
+        return type == ExtractorLinkType.M3U8 ||
+            type == ExtractorLinkType.DASH ||
+            typeHint.equals("hls", true) ||
+            typeHint.equals("m3u8", true) ||
+            typeHint.equals("dash", true) ||
+            url.contains(".m3u8", true) ||
+            url.contains(".mpd", true) ||
+            url.contains("type=hls", true) ||
+            url.contains("itsnitrox.tech", true) ||
+            url.contains("nxstreamhub", true) ||
+            url.contains("stream_proxy.php", true) ||
+            url.contains("vibuxer.com", true) ||
+            url.contains("workers.dev", true) ||
+            url.contains("/media?ticket=", true) ||
+            url.contains("/playlist", true) ||
+            url.contains("/manifest", true) ||
+            url.contains("/proxy", true)
+    }
+
+    private fun isM3u8Stream(url: String, typeHint: String): Boolean =
+        isStreamOrHlsLink(url, ExtractorLinkType.M3U8, typeHint)
+
+    private fun normalizeTitleKey(raw: String?): String {
+        if (raw.isNullOrBlank()) return ""
+        return raw.lowercase()
+            .replace(Regex("""\b(19|20)\d{2}\b"""), " ")
+            .replace(Regex("""(?i)\b(season|part|s)\s*\d+\b"""), " ")
+            .replace(Regex("""(?i)\b(480p|720p|1080p|2160p|4k|web-?dl|webrip|bluray|hdrip|hevc|x264|x265|hindi|dubbed|dual\s*audio)\b"""), " ")
+            .replace(Regex("""[^a-z0-9]+"""), " ")
+            .trim()
+    }
+
+    private fun titleMatchesCandidate(candidateTitle: String?, targetTitle: String): Boolean {
+        val cNorm = normalizeTitleKey(candidateTitle)
+        val tNorm = normalizeTitleKey(targetTitle)
+        if (cNorm.isBlank() || tNorm.isBlank()) return false
+        if (cNorm == tNorm || cNorm.contains(tNorm) || tNorm.contains(cNorm)) return true
+        val tWords = tNorm.split(" ").filter { it.length > 1 }.toSet()
+        val cWords = cNorm.split(" ").filter { it.length > 1 }.toSet()
+        if (tWords.isEmpty() || cWords.isEmpty()) return false
+        return (tWords.intersect(cWords).size.toDouble() / tWords.size.toDouble()) >= 0.7
+    }
+
+    private fun buildSourceLabel(siteTag: String, server: String, info: String): String {
+        val cleanServer = server.replace(Regex("(?i)^null$"), "").trim()
+        val audioTag = extractAudioSummary(info, cleanServer, siteTag)
+        val cleanInfo = info.replace(Regex("""\s+"""), " ").trim().let { raw ->
+            if (audioTag.isNotBlank() && !raw.contains(audioTag, ignoreCase = true)) {
+                if (raw.isBlank()) audioTag else "$raw • $audioTag"
+            } else {
+                raw
+            }
+        }
+        return when {
+            cleanServer.isNotBlank() && cleanInfo.isNotBlank() -> "$siteTag • $cleanServer ($cleanInfo)"
+            cleanServer.isNotBlank() -> "$siteTag • $cleanServer"
+            cleanInfo.isNotBlank() -> "$siteTag ($cleanInfo)"
+            else -> siteTag
+        }.take(68)
+    }
+
+    private fun extractCandidateMediaAndEmbedUrls(text: String, baseUrl: String): List<Pair<String, String>> {
+        val found = LinkedHashMap<String, String>()
+        Regex("""https?://[^\s"'<>\\)\]]+\.(?:m3u8|mpd|mp4|mkv|webm)(?:\?[^\s"'<>\\)\]]*)?""", RegexOption.IGNORE_CASE)
+            .findAll(text).forEach { m ->
+                val u = normalizeUrl(m.value, baseUrl)
+                if (!isAdUrl(u) && !isYouTubeOrBlockedStream(u)) found.putIfAbsent(u, "DIRECT")
+            }
+
+        val hostPattern = Regex(
+            """https?://[^\s"'<>\\)\]]*(?:filemoon|streamtape|voe|dood|mixdrop|upstream|vidhide|streamwish|luluvdo|pixeldrain|gofile|hubcloud|vcloud|nexdrive|mobilejsr|xcloud|fastdl|fsl|speedostream|gdflix|gdlink|gdtot|driveseed|driveleech|filepress|hblinks|hubdrive|howblogs|linksmod|wootly|videostr|streameeeeee|megaplay|vidwish|vidtube|modiplay|vibeplayer|vivibebe|bibiemb|iqsmartgames|vidsrc|embedsu|autoembed|nxstreamhub|itsnitrox|vibuxer)[^\s"'<>\\)\]]*""",
+            RegexOption.IGNORE_CASE
+        )
+        hostPattern.findAll(text).forEach { m ->
+            val u = normalizeUrl(m.value.trimEnd('.', ',', ';', ')', ']', '"', '\''), baseUrl)
+            if (!isAdUrl(u) && !isYouTubeOrBlockedStream(u)) found.putIfAbsent(u, "HOST")
+        }
+
+        Regex("""["']?(?:url|file|streamUrl|videoUrl|hls|dash|link|src)["']?\s*[:=]\s*["'](https?://[^"'\s<>\\]+|/[^"'\s<>\\]+)["']""", RegexOption.IGNORE_CASE)
+            .findAll(text).forEach { m ->
+                val u = normalizeUrl(m.groupValues[1], baseUrl)
+                if (u.startsWith("http") && !isAdUrl(u) && !isYouTubeOrBlockedStream(u)) {
+                    val kind = if (Regex("""(?i)\.(m3u8|mpd|mp4|mkv|webm)(\?|$)""").containsMatchIn(u)) "DIRECT" else "HOST"
+                    found.putIfAbsent(u, kind)
+                }
+            }
+        return found.entries.map { it.key to it.value }
+    }
+
+    // Direct custom Extractor.kt router + CloudStream global loadExtractor fallback
+    private fun pickCustomExtractor(url: String): ExtractorApi? {
+        val h = hostOf(url)
+        if (h.isBlank()) return null
+        return when {
+            h.contains("hubcloud") -> HubCloud()
+            h.contains("vcloud") -> VCloud()
+            h.contains("gdflix") -> GDFlix()
+            h.contains("gdlink") -> GDLink()
+            h.contains("fastdlserver") -> fastdlserver()
+            h.contains("hubdrive") -> Hubdrive()
+            h.contains("driveleech") -> Driveleech()
+            h.contains("driveseed") -> Driveseed()
+            h.contains("hblinks") -> Hblinks()
+            h.contains("howblogs") -> Howblogs()
+            h.contains("linksmod") -> Linksmod()
+            h.contains("gofile") -> Gofile()
+            h.contains("pixeldrain.dev") -> PixeldrainDevExtractor()
+            h.contains("pixeldrain") -> PixeldrainExtractor()
+            h.contains("voe.") -> VoeExtractor()
+            h.contains("streamtape") || h.contains("stape.") || h.contains("strtape") -> StreamTapeExtractor()
+            h.contains("nxstreamhub") -> NxStreamHubExtractor()
+            h.contains("itsnitrox") -> NitroxExtractor()
+            h.contains("vibuxer") -> VibuxerExtractor()
+            h.contains("wootly") -> Wootly()
+            h.contains("streameeeeee") -> Streameeeeee()
+            h.contains("videostr") -> Videostr()
+            h.contains("megaplay") -> MegaPlay()
+            h.contains("vidwish") -> Vidwish()
+            h.contains("vidtube") -> Vidtube()
+            h.contains("modiplay") -> Modiplay()
+            h.contains("iqsmartgames") -> Iqsmartgames()
+            h.contains("vibeplayer") -> VibePlayer()
+            h.contains("vivibebe") -> Vivibebe()
+            h.contains("bibiemb") -> Bibiemb()
+            h.contains("nexdrive") -> GokuHDExtractor()
+            else -> null
+        }
+    }
+
+    private suspend fun resolveWithAllExtractors(
+        siteTag: String,
+        embedUrl: String,
+        referer: String,
+        audioTag: String,
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (!embedUrl.startsWith("http") || isAdUrl(embedUrl) || isYouTubeOrBlockedStream(embedUrl)) return
+        val wrappedCallback: (ExtractorLink) -> Unit = { ex ->
+            if (!isYouTubeOrBlockedStream(ex.url, ex.name) && lc.seenUrls.add(ex.url)) {
+                val labeled = buildSourceLabel(siteTag, ex.name.ifBlank { ex.source }, audioTag)
+                val isStream = isStreamOrHlsLink(ex.url, ex.type)
+                val outLink = ExtractorLink(
+                    source = siteTag,
+                    name = if (lc.streamOnly && isStream) "⚡ $labeled" else labeled,
+                    url = ex.url,
+                    referer = ex.referer.ifBlank { referer },
+                    quality = if (ex.quality > 0) ex.quality else getQuality(ex.name),
+                    headers = ex.headers,
+                    extractorData = ex.extractorData,
+                    type = ex.type
+                )
+                emitLink(outLink, isStream)
+            }
+        }
+
+        // 1. Direct GokuHDSources resolution for drive/nexdrive/vcloud/pixeldrain/fsl links
+        if (GokuHDSources.isServerLink(embedUrl)) {
+            val epNum = if (lc.isTv) lc.episode.toIntOrNull()?.coerceAtLeast(1) else null
+            val directList = runCatching { GokuHDSources.resolve(embedUrl, epNum) }.getOrDefault(emptyList())
+            if (directList.isNotEmpty()) {
+                directList.forEach { srv ->
+                    emitStream(
+                        lc,
+                        buildSourceLabel(siteTag, srv.name, audioTag),
+                        srv.url,
+                        isM3u8Stream(srv.url, ""),
+                        "${srv.name} $audioTag",
+                        srv.headers.ifEmpty { mapOf("Referer" to referer, "User-Agent" to USER_AGENT) },
+                        emitLink
+                    )
+                }
+                return
+            }
+        }
+
+        // 2. Custom Extractor.kt implementation directly
+        val customApi = pickCustomExtractor(embedUrl)
+        var anyFromCustom = false
+        if (customApi != null) {
+            runCatching {
+                customApi.getUrl(embedUrl, referer, emitSub) { ex ->
+                    anyFromCustom = true
+                    wrappedCallback(ex)
+                }
+            }
+        }
+
+        // 3. CloudStream global extractor fallback
+        if (!anyFromCustom) {
+            runCatching {
+                loadExtractor(embedUrl, referer, emitSub, wrappedCallback)
             }
         }
     }
 
-    private suspend fun fetchServersFromCs3Repo(repo: Cs3RepoConfig): List<ServerItem> = withContext(Dispatchers.IO) {
-        val out = mutableListOf<ServerItem>()
-        val rawUrl = toRawGithubUrl(repo.repoUrl)
-        val bytes = readHttpBytes(rawUrl) ?: return@withContext emptyList()
-        if (bytes.isEmpty()) return@withContext emptyList()
-        val idTag = repo.id.takeLast(6)
+    private suspend fun resolveCandidatesInParallel(
+        siteTag: String,
+        candidates: List<Pair<String, String>>,
+        referer: String,
+        audioTag: String,
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit,
+        maxItems: Int = 10
+    ) {
+        val gate = Semaphore(5)
+        supervisorScope {
+            candidates.take(maxItems).map { (u, kind) ->
+                async(Dispatchers.IO) {
+                    gate.withPermit {
+                        withTimeoutOrNull(18_000L) {
+                            if (kind == "DIRECT") {
+                                emitStream(
+                                    lc,
+                                    buildSourceLabel(siteTag, "", audioTag),
+                                    u,
+                                    isM3u8Stream(u, ""),
+                                    audioTag,
+                                    mapOf("Referer" to referer, "User-Agent" to USER_AGENT),
+                                    emitLink
+                                )
+                            } else {
+                                resolveWithAllExtractors(siteTag, u, referer, audioTag, lc, emitSub, emitLink)
+                            }
+                        }
+                    }
+                }
+            }.awaitAll()
+        }
+    }
 
-        if (rawUrl.substringBefore("?").endsWith(".cs3", true)) {
-            var pluginName = ""
+    private suspend fun buildLinkContext(data: String, timeoutSec: Long): LinkContext? {
+        val appCtx = CloudStreamApp.context
+        var rawPageUrl = data
+        var pageTitle = ""
+        var tmdbId: String? = null
+        var imdbId = ""
+        var isTv = false
+        var season = "1"
+        var episode = "1"
+
+        if (data.trimStart().startsWith("{")) {
             runCatching {
-                ZipInputStream(ByteArrayInputStream(bytes)).use { zis ->
-                    var entry = zis.nextEntry
-                    while (entry != null) {
-                        if (!entry.isDirectory) {
-                            val lower = entry.name.lowercase()
-                            when {
-                                lower.endsWith("manifest.json") -> {
-                                    val mObj = JSONObject(zis.bufferedReader().readText())
-                                    pluginName = mObj.optString("name").trim().ifBlank { mObj.optString("internalName").trim() }
-                                }
-                                lower.endsWith(".json") -> parseJsonServerEntries(zis.bufferedReader().readText().trim(), idTag, rawUrl, out)
-                                lower.endsWith(".dex") -> {
-                                    val rawDex = String(zis.readBytes(), Charsets.ISO_8859_1)
-                                    val seen = mutableSetOf<String>()
-                                    var idx = 0
-                                    Regex("""L[a-zA-Z0-9_/]+/([A-Z][a-zA-Z0-9]{2,28})(?:Provider|Plugin|Source);""").findAll(rawDex).forEach { m ->
-                                        val sName = m.groupValues[1]
-                                        if (sName !in setOf("Main", "Base", "Abstract", "Custom", "Cloudstream", "Stream") && seen.add(sName.lowercase())) {
-                                            out.add(ServerItem("cs3_${idTag}_${sName.lowercase()}", sName, "CS3", rawUrl, AVATAR_PALETTE[idx % AVATAR_PALETTE.size], true, true))
-                                            idx++
-                                        }
-                                    }
+                val obj = JSONObject(data)
+                rawPageUrl = obj.safeStr("url", data)
+                pageTitle = obj.safeStr("title")
+                tmdbId = obj.safeStr("tmdbId").takeIf { it.isNotBlank() }
+                imdbId = obj.safeStr("imdbId")
+                isTv = obj.optBoolean("isTv", false)
+                season = obj.optInt("season", 1).coerceAtLeast(1).toString()
+                episode = obj.optInt("episode", 1).coerceAtLeast(1).toString()
+            }
+        }
+
+        val cleanPageUrl = rawPageUrl.substringBefore("?")
+        val urlId = extractSeriesId(cleanPageUrl)
+        var jsonId: String? = null
+
+        if (pageTitle.isBlank() || (tmdbId.isNullOrBlank() && urlId.isNullOrBlank() && imdbId.isBlank())) {
+            val rawHtml = withTimeoutOrNull(timeoutSec * 1500L) {
+                safeGetText(cleanPageUrl, timeoutSec = timeoutSec)
+            }.orEmpty()
+            if (rawHtml.isNotBlank()) {
+                val doc = Jsoup.parse(rawHtml, mainUrl)
+                val flightText = extractUnescapedFlightText(rawHtml)
+                if (pageTitle.isBlank()) {
+                    pageTitle = doc.selectFirst("h1")?.text()?.trim().orEmpty()
+                        .ifEmpty { Regex("\"title\":\"([^\"]+)\"").find(flightText)?.groupValues?.get(1).orEmpty() }
+                        .replace(Regex("\\s*\\(\\d{4}\\)\\s*$"), "").trim()
+                }
+                if (tmdbId.isNullOrBlank()) tmdbId = Regex("\"tmdbId\":(\\d+)").find(flightText)?.groupValues?.get(1)
+                jsonId = Regex("\"id\":(\\d+)").find(flightText)?.groupValues?.get(1)
+                if (imdbId.isBlank()) {
+                    imdbId = Regex("\"imdbId\":\"(tt\\d+)\"").find(flightText)?.groupValues?.get(1)
+                        ?: Regex("tt\\d{6,10}").find(rawHtml)?.value.orEmpty()
+                }
+            }
+        }
+
+        if (!data.trimStart().startsWith("{")) {
+            isTv = cleanPageUrl.contains("/tv/") || cleanPageUrl.contains("/dramas/") ||
+                cleanPageUrl.contains("/anime/") || cleanPageUrl.contains("/series/") || rawPageUrl.contains("season=", true)
+            season = Regex("[?&]s(?:eason)?=(\\d+)", RegexOption.IGNORE_CASE).find(rawPageUrl)?.groupValues?.get(1) ?: "1"
+            episode = Regex("[?&]e(?:pisode)?=(\\d+)", RegexOption.IGNORE_CASE).find(rawPageUrl)?.groupValues?.get(1) ?: "1"
+        }
+
+        val candidateIds = listOfNotNull(tmdbId, urlId, jsonId).distinct()
+        val primaryId = candidateIds.firstOrNull()
+        if (primaryId == null && pageTitle.isBlank() && imdbId.isBlank()) return null
+
+        val watchUrl = if (primaryId != null) {
+            if (isTv) "$mainUrl/watch/tv-$primaryId?s=$season&e=$episode" else "$mainUrl/watch/movie-$primaryId"
+        } else {
+            cleanPageUrl
+        }
+
+        val baseHeaders = directHeaders(
+            mainUrl,
+            mapOf(
+                "Referer" to watchUrl,
+                "Origin" to mainUrl,
+                "X-Requested-With" to "XMLHttpRequest",
+                "Accept" to "application/json, text/plain, */*"
+            )
+        )
+
+        return LinkContext(
+            pageTitle = pageTitle,
+            isTv = isTv,
+            season = season,
+            episode = episode,
+            imdbId = imdbId,
+            candidateIds = candidateIds,
+            watchUrl = watchUrl,
+            baseHeaders = baseHeaders,
+            timeoutSec = timeoutSec,
+            streamOnly = appCtx?.let { MovieFoxSettingsDialog.isStreamOnly(it) } ?: false,
+            downloadOnly = appCtx?.let { MovieFoxSettingsDialog.isDownloadOnly(it) } ?: false,
+            allow4k = appCtx?.let { MovieFoxSettingsDialog.isQuality4kEnabled(it) } ?: true,
+            allow1080 = appCtx?.let { MovieFoxSettingsDialog.isQuality1080Enabled(it) } ?: true,
+            allow720 = appCtx?.let { MovieFoxSettingsDialog.isQuality720Enabled(it) } ?: true,
+            allow480 = appCtx?.let { MovieFoxSettingsDialog.isQuality480Enabled(it) } ?: true,
+            seenUrls = ConcurrentHashMap.newKeySet()
+        )
+    }
+
+    // Advance LoadLinks: Priority-ordered concurrent loading with generous per-server budget + supervisorScope
+    override suspend fun loadLinks(
+        data: String,
+        isCasting: Boolean,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        return try {
+            val appCtx = CloudStreamApp.context
+            val timeoutSec = currentTimeoutSec(10L)
+            val fastBudgetMs = maxOf(timeoutSec * 2500L, 24_000L)
+            val deepBudgetMs = maxOf(timeoutSec * 4500L, 45_000L)
+            val maxConcurrency = (appCtx?.let { MovieFoxSettingsDialog.getParallelServers(it) } ?: 18).coerceIn(8, 36)
+            val workerSemaphore = Semaphore(maxConcurrency)
+
+            val lc = buildLinkContext(data, timeoutSec) ?: return false
+
+            val emitLock = Any()
+            val subLock = Any()
+            var found = false
+
+            val emitSub: (SubtitleFile) -> Unit = { sub ->
+                synchronized(subLock) { subtitleCallback(sub) }
+            }
+            val emitLink: (ExtractorLink, Boolean) -> Unit = { link, isStream ->
+                if (!isYouTubeOrBlockedStream(link.url, link.name)) {
+                    val allowedByMode = !(lc.downloadOnly && isStream)
+                    val allowedByQuality = isQualityAllowed(lc, link.quality, link.name)
+                    if (allowedByMode && allowedByQuality && link.url.startsWith("http")) {
+                        synchronized(emitLock) {
+                            found = true
+                            callback(link)
+                        }
+                    }
+                }
+            }
+
+            val orderedKeys = (appCtx?.let { MovieFoxSettingsDialog.getOrderedEnabledKeys(it) }
+                ?: MovieFoxSettingsDialog.BASE_SERVERS.map { it.key }).distinct()
+
+            // Launch fast API servers first, immediately followed by deep scrapers + extractors—all concurrently
+            val prioritizedKeys = orderedKeys.filter { it.lowercase() in fastWaveKeys } +
+                orderedKeys.filterNot { it.lowercase() in fastWaveKeys }
+
+            supervisorScope {
+                val tasks = mutableListOf<Deferred<Unit>>()
+                prioritizedKeys.forEach { srvKey ->
+                    val budget = if (srvKey.lowercase() in fastWaveKeys) fastBudgetMs else deepBudgetMs
+                    tasks.add(async(Dispatchers.IO) {
+                        workerSemaphore.withPermit {
+                            withTimeoutOrNull(budget) {
+                                runCatching {
+                                    runServerKey(srvKey, lc, isCasting, emitSub, emitLink)
                                 }
                             }
                         }
-                        entry = zis.nextEntry
-                    }
+                        Unit
+                    })
                 }
-            }
-            if (out.isEmpty()) {
-                val fName = pluginName.ifBlank { rawUrl.substringBefore("?").substringAfterLast("/").removeSuffix(".cs3") }.ifBlank { "CS3 Plugin" }
-                out.add(ServerItem("cs3_${idTag}_${fName.lowercase().replace(Regex("[^a-z0-9]+"), "_")}", fName, "CS3", rawUrl, "#34D399", true, true))
-            }
-            return@withContext out.distinctBy { it.key }
-        }
-
-        val body = runCatching { String(bytes, Charsets.UTF_8).trim() }.getOrDefault("")
-        if (body.isBlank()) return@withContext emptyList()
-        parseJsonServerEntries(body, idTag, rawUrl, out)
-        runCatching {
-            if (body.startsWith("{")) {
-                val root = JSONObject(body)
-                val listUrls = mutableListOf<String>()
-                root.optJSONArray("pluginLists")?.let { arr ->
-                    for (i in 0 until arr.length()) arr.optString(i).trim().takeIf { it.isNotBlank() }?.let { listUrls.add(it) }
-                }
-                root.optString("manifestList").trim().takeIf { it.isNotBlank() }?.let { listUrls.add(it) }
-                listUrls.distinct().forEach { u ->
-                    val resolved = if (u.startsWith("http")) toRawGithubUrl(u) else "${rawUrl.substringBeforeLast('/')}/${u.trimStart('/')}"
-                    readHttpBytes(resolved)?.let { b -> parseJsonServerEntries(String(b, Charsets.UTF_8).trim(), idTag, rawUrl, out) }
-                }
-            }
-        }
-        out.distinctBy { it.key }
-    }
-
-    @SuppressLint("SetJavaScriptEnabled")
-    fun showCloudflareBypassWebView(ctx: Context, startUrl: String, onCookiesChanged: () -> Unit = {}) {
-        if (!isContextAlive(ctx)) return
-        val mainHandler = Handler(Looper.getMainLooper())
-        val targetUrl = if (startUrl.startsWith("http")) startUrl else "https://$startUrl"
-        var currentUrl = targetUrl
-        var dialogRef: Dialog? = null
-
-        val statusText = TextView(ctx).apply {
-            text = targetUrl; textSize = 10f; setTextColor(safeColor("#94A3B8")); isSingleLine = true
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        val progressBar = ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 3))
-            progressTintList = ColorStateList.valueOf(safeColor("#22C55E"))
-            max = 100; progress = 15
-        }
-        val cookiePreview = TextView(ctx).apply {
-            text = "Solve CAPTCHA / verification, then tap SAVE COOKIES"
-            textSize = 11f; setTextColor(safeColor("#94A3B8")); maxLines = 2; ellipsize = TextUtils.TruncateAt.END
-            setPadding(dp(ctx, 14), dp(ctx, 6), dp(ctx, 14), dp(ctx, 6))
-        }
-
-        val webView = WebView(ctx).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-            setBackgroundColor(Color.WHITE)
-            settings.apply {
-                javaScriptEnabled = true; domStorageEnabled = true
-                mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-                useWideViewPort = true; loadWithOverviewMode = true
-                userAgentString = CF_BYPASS_UA
-            }
-            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
-            webChromeClient = object : WebChromeClient() {
-                override fun onProgressChanged(view: WebView, newProgress: Int) {
-                    progressBar.progress = newProgress
-                    progressBar.visibility = if (newProgress < 100) View.VISIBLE else View.GONE
-                }
-            }
-            webViewClient = object : WebViewClient() {
-                override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
-                    currentUrl = url; mainHandler.post { statusText.text = url }
-                }
-                override fun onPageFinished(view: WebView, url: String) {
-                    currentUrl = url; mainHandler.post { statusText.text = url }
-                    val c = CookieManager.getInstance().getCookie(url).orEmpty()
-                    if (c.isNotBlank()) mainHandler.post { cookiePreview.text = "Cookies detected ✓ Tap SAVE COOKIES" }
-                }
-                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest) = false
-            }
-        }
-
-        val titleBar = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(ctx, 14), dp(ctx, 10), dp(ctx, 10), dp(ctx, 10))
-            background = ColorDrawable(safeColor("#0F131C"))
-            addView(TextView(ctx).apply {
-                text = "🌐 Cloudflare Bypass"; textSize = 14f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            })
-            addView(TextView(ctx).apply {
-                text = "SAVE COOKIES"; textSize = 10.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                background = pillBg("#059669", 14f)
-                setPadding(dp(ctx, 12), dp(ctx, 7), dp(ctx, 12), dp(ctx, 7))
-                setOnClickListener {
-                    val cookies = CookieManager.getInstance().getCookie(currentUrl)
-                    if (!cookies.isNullOrBlank()) {
-                        saveCookieForDomain(ctx, currentUrl, cookies)
-                        saveCookieForDomain(ctx, targetUrl, cookies)
-                        CookieManager.getInstance().flush()
-                        onCookiesChanged()
-                        safeToast(ctx, "✓ Cookies saved! Green dot updated.")
-                        runCatching { dialogRef?.dismiss() }
-                    } else {
-                        safeToast(ctx, "Page poora verify hone dein pehle")
-                    }
-                }
-            })
-            addView(TextView(ctx).apply {
-                text = "✕"; textSize = 14f; setTextColor(safeColor("#94A3B8"))
-                setPadding(dp(ctx, 12), dp(ctx, 6), dp(ctx, 8), dp(ctx, 6))
-                setOnClickListener { runCatching { dialogRef?.dismiss() } }
-            })
-        }
-
-        val root = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL; background = ColorDrawable(safeColor("#07090F"))
-            addView(titleBar); addView(progressBar); addView(webView); addView(cookiePreview)
-            addView(LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL; setPadding(dp(ctx, 14), dp(ctx, 5), dp(ctx, 14), dp(ctx, 7))
-                background = ColorDrawable(safeColor("#0F131C")); addView(statusText)
-            })
-        }
-
-        dialogRef = Dialog(ctx, android.R.style.Theme_Black_NoTitleBar_Fullscreen).apply {
-            requestWindowFeature(Window.FEATURE_NO_TITLE); setContentView(root); setCancelable(true)
-            setOnDismissListener {
-                runCatching { webView.stopLoading(); webView.destroy() }
-                onCookiesChanged()
-            }
-            window?.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT)
-            show()
-        }
-        webView.loadUrl(targetUrl)
-    }
-
-    private class ServerListAdapter(
-        private val ctx: Context,
-        private val onToggleChanged: () -> Unit
-    ) : BaseAdapter() {
-
-        private var items: List<ServerItem> = emptyList()
-
-        fun submitList(newList: List<ServerItem>) {
-            items = newList
-            notifyDataSetChanged()
-        }
-
-        private class VH(
-            val root: LinearLayout,
-            val nameTv: TextView,
-            val tagTv: TextView,
-            val langTv: TextView,
-            val urlTv: TextView,
-            val sw: Switch
-        )
-
-        override fun getCount(): Int = items.size
-        override fun getItem(position: Int): ServerItem = items[position]
-        override fun getItemId(position: Int): Long = position.toLong()
-
-        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
-            val holder: VH
-            val rowView: View
-
-            if (convertView == null) {
-                val card = LinearLayout(ctx).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    background = cardBg("#121621", "#232C40", 20f)
-                    setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-                }
-                val col = LinearLayout(ctx).apply {
-                    orientation = LinearLayout.VERTICAL
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                }
-                val topLine = LinearLayout(ctx).apply {
-                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                }
-                val nameTv = TextView(ctx).apply {
-                    textSize = 13.5f; isSingleLine = true; ellipsize = TextUtils.TruncateAt.END
-                    setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                }
-                val tagTv = TextView(ctx).apply {
-                    textSize = 8.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
-                    setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2))
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                        .apply { marginStart = dp(ctx, 5) }
-                }
-                val langTv = TextView(ctx).apply {
-                    textSize = 8.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
-                    setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2))
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                        .apply { marginStart = dp(ctx, 5) }
-                }
-                topLine.addView(nameTv); topLine.addView(tagTv); topLine.addView(langTv)
-
-                val urlTv = TextView(ctx).apply {
-                    textSize = 10f; isSingleLine = true; ellipsize = TextUtils.TruncateAt.END
-                    setTextColor(safeColor("#7C869C")); setPadding(0, dp(ctx, 2), dp(ctx, 6), 0)
-                }
-                col.addView(topLine); col.addView(urlTv)
-                val sw = Switch(ctx)
-                card.addView(col); card.addView(sw)
-
-                holder = VH(card, nameTv, tagTv, langTv, urlTv, sw)
-                card.tag = holder
-                rowView = card
-            } else {
-                rowView = convertView
-                holder = convertView.tag as VH
+                tasks.awaitAll()
             }
 
-            val srv = items[position]
-            holder.nameTv.text = srv.name
-            holder.tagTv.text = srv.tag
-            holder.tagTv.setTextColor(safeColor(srv.accentHex, "#38BDF8"))
-            holder.tagTv.background = pillBg("#192236", 8f)
-
-            if (srv.isHindi) {
-                holder.langTv.visibility = View.VISIBLE
-                holder.langTv.text = "HI"
-                holder.langTv.setTextColor(safeColor("#34D399"))
-                holder.langTv.background = pillBg("#0D2B22", 8f)
-            } else {
-                holder.langTv.visibility = View.GONE
-            }
-
-            holder.urlTv.text = srv.probeUrl
-            holder.sw.setOnCheckedChangeListener(null)
-            holder.sw.isChecked = prefs(ctx).getBoolean("$KEY_SRV_PREFIX${srv.key.lowercase()}", true)
-            holder.sw.setOnCheckedChangeListener { _, checked ->
-                setServerEnabled(ctx, srv.key, checked)
-                onToggleChanged()
-            }
-            holder.root.setOnClickListener { holder.sw.isChecked = !holder.sw.isChecked }
-            return rowView
+            found
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
         }
     }
 
-    fun show(ctx: Context) {
-        if (!isContextAlive(ctx)) return
-        prefs(ctx)
+    private suspend fun runServerKey(
+        srvKey: String,
+        lc: LinkContext,
+        isCasting: Boolean,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        when (srvKey.lowercase()) {
+            "purstream", "castle", "watchout" -> fetchMovieFoxApi(srvKey.lowercase(), lc, emitSub, emitLink)
+            "cinetv_api" -> fetchCineTvApi(lc, emitSub, emitLink)
+            "cinetv_hls" -> fetchCineTvHls(lc, emitSub, emitLink)
+            "vegamovies", "rogmovies" -> fetchVegaMoviesResolved(lc, emitSub, emitLink)
+            "bollyflix" -> fetchBollyflix(lc, emitSub, emitLink)
+            "sflix" -> fetchSflixFull(lc, emitSub, emitLink)
+            "prmovies" -> fetchPrmoviesFull(lc, emitSub, emitLink)
+            "play4u" -> fetchPlay4u(lc, emitLink)
+            "moviebox" -> fetchMovieBox(lc, emitSub, emitLink)
+            "netnaija" -> fetchNetNaija(lc, emitSub, emitLink)
+            "nuvio" -> fetchNuvioAddons(lc, emitSub, emitLink)
+            "hdhub4u" -> fetchHdHub4u(lc, emitSub, emitLink)
+            "dramaverse" -> fetchDramaVerse(lc, emitSub, emitLink)
+            "gokuhd" -> fetchGokuHd(lc, emitSub, emitLink)
+            "hicine" -> fetchHiCine(lc, emitSub, emitLink)
+            "hindmoviez" -> fetchHindMoviez(lc, emitSub, emitLink)
+            "movielinkbd" -> fetchMoviesLinkBd(lc, emitSub, emitLink)
+            "netmirror" -> fetchNetMirror(lc, emitSub, emitLink)
+            "movy" -> fetchMovy(lc, emitSub, emitLink)
+            "4khdhub" -> fetch4KhdHub(lc, emitSub, emitLink)
+            "movies4u" -> fetchMovies4u(lc, emitSub, emitLink)
+            "multimovies" -> fetchMultimovies(lc, emitSub, emitLink)
+            else -> fetchCustomCs3Server(srvKey, lc, isCasting, emitSub, emitLink)
+        }
+    }
 
-        val dialogScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-        val nuvioList = getNuvioManifests(ctx).toMutableList()
-        val cs3RepoList = getCs3Repos(ctx).toMutableList()
-        val homeCats = getHomeCategories(ctx)
-        val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    private suspend fun emitStream(
+        lc: LinkContext,
+        serverName: String,
+        streamUrl: String,
+        isHls: Boolean,
+        qualityStr: String? = null,
+        customHeaders: Map<String, String> = lc.baseHeaders,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (streamUrl.isBlank() || !streamUrl.startsWith("http") || isAdUrl(streamUrl) || isYouTubeOrBlockedStream(streamUrl, serverName)) return
+        if (!lc.seenUrls.add(streamUrl)) return
+        if (lc.downloadOnly && isHls) return
 
-        var currentQuery = ""
-        var currentConcurrency = getConcurrency(ctx)
-        var currentTimeout = getTimeoutSeconds(ctx)
-        var selectedMeta = getMetadataSource(ctx)
-        var hindiOnly = isHindiOnly(ctx)
-        var downloadOnly = isDownloadOnly(ctx)
-        var shuffleHome = isShuffleHomeCategories(ctx)
-        var q4k = isQuality4kEnabled(ctx)
-        var q1080 = isQuality1080Enabled(ctx)
-        var q720 = isQuality720Enabled(ctx)
-        var q480 = isQuality480Enabled(ctx)
-        var lowBuffer = isLowBufferMode(ctx)
+        val resolvedQuality = getQuality(qualityStr ?: serverName)
+        if (!isQualityAllowed(lc, resolvedQuality, qualityStr ?: serverName)) return
 
-        val root = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            background = cardBg("#07090F", "#1E273B", 34f, 3)
-            setPadding(dp(ctx, 14), dp(ctx, 14), dp(ctx, 14), dp(ctx, 14))
+        val audioSummary = extractAudioSummary(qualityStr, serverName, lc.pageTitle)
+        val withAudio = if (audioSummary.isNotBlank() && !serverName.contains(audioSummary, ignoreCase = true)) {
+            "$serverName [$audioSummary]"
+        } else {
+            serverName
         }
 
-        val header = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(safeColor("#0B192C"), safeColor("#1E153D"), safeColor("#08272E"))
-            ).apply {
-                cornerRadius = 24f
-                setStroke(2, safeColor("#2E3D59"))
-            }
-            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
+        val label = if (lc.streamOnly && isHls) "⚡ $withAudio" else withAudio
+        val link = newExtractorLink(
+            source = serverName,
+            name = label,
+            url = streamUrl,
+            type = if (isHls) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
+        ) {
+            this.referer = customHeaders["Referer"] ?: lc.watchUrl
+            this.quality = resolvedQuality
+            this.headers = customHeaders
         }
+        emitLink(link, isHls)
+    }
 
-        val topRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-        }
-        topRow.addView(TextView(ctx).apply {
-            text = "MOVIEFOX ULTRA MAX"
-            textSize = 17f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        })
-        topRow.addView(TextView(ctx).apply {
-            text = "⚡ TURBO FAST"
-            textSize = 9.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
-            setTextColor(safeColor("#34D399")); background = pillBg("#0D2B22", 14f)
-            setPadding(dp(ctx, 9), dp(ctx, 4), dp(ctx, 9), dp(ctx, 4))
-        })
-        header.addView(topRow)
+    private suspend fun parseAndEmitApiJson(
+        endpointName: String,
+        rawText: String,
+        lc: LinkContext,
+        baseHeaders: Map<String, String>,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ): Boolean {
+        var emitted = false
+        val root = runCatching { JSONObject(rawText) }.getOrNull() ?: return false
+        if (root.has("bid") && root.optJSONArray("domains") != null) return false
 
-        val statsRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                .apply { topMargin = dp(ctx, 10) }
-        }
+        val containers = listOfNotNull(root, root.optJSONObject("data"))
+        val streamObjs = mutableListOf<JSONObject>()
 
-        fun statChip(label: String, colorHex: String, marginEndDp: Int): Pair<LinearLayout, TextView> {
-            val box = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL
-                background = cardBg("#0A0E17", "#26324A", 14f, 2)
-                setPadding(dp(ctx, 9), dp(ctx, 6), dp(ctx, 9), dp(ctx, 6))
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                    if (marginEndDp > 0) marginEnd = dp(ctx, marginEndDp)
+        containers.forEach { obj ->
+            listOf("streams", "sources", "links", "items", "servers").forEach { key ->
+                obj.optJSONArray(key)?.let { arr ->
+                    for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { streamObjs.add(it) }
                 }
             }
-            val valTv = TextView(ctx).apply {
-                text = "-"; textSize = 13f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor(colorHex))
-            }
-            val lblTv = TextView(ctx).apply {
-                text = label; textSize = 8.5f; isSingleLine = true; setTextColor(safeColor("#94A3B8"))
-            }
-            box.addView(valTv); box.addView(lblTv)
-            return box to valTv
-        }
-
-        val (srvChip, srvValTv) = statChip("SERVERS", "#38BDF8", 6)
-        val (catChip, catValTv) = statChip("CATALOGS", "#C084FC", 6)
-        val (spdChip, spdValTv) = statChip("SPEED", "#FBBF24", 0)
-        statsRow.addView(srvChip); statsRow.addView(catChip); statsRow.addView(spdChip)
-        header.addView(statsRow)
-
-        root.addView(
-            header,
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                .apply { bottomMargin = dp(ctx, 10) }
-        )
-
-        fun refreshStats() {
-            val all = SERVERS
-            val srvOn = all.count { isServerEnabled(ctx, it.key) }
-            srvValTv.text = "$srvOn/${all.size}"
-            catValTv.text = "${nuvioList.count { it.enabled }} • $selectedMeta"
-            spdValTv.text = "${currentConcurrency}x • ${getPreferredQuality(ctx)}"
-        }
-        refreshStats()
-
-        val tabBar = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            background = cardBg("#0F131C", "#212A3D", 18f)
-            setPadding(dp(ctx, 4), dp(ctx, 4), dp(ctx, 4), dp(ctx, 4))
-        }
-        val tabTitles = listOf("Servers", "CF Bypass", "Streaming", "Catalogs", "Home Page", "CS3 Repos")
-        val tabButtons = tabTitles.map { title ->
-            Button(ctx).apply {
-                text = title; textSize = 11.5f; isAllCaps = false; isSingleLine = true
-                setTypeface(typeface, Typeface.BOLD)
-                setPadding(dp(ctx, 12), 0, dp(ctx, 12), 0)
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 34))
+            val singleUrl = obj.safeStr("url")
+                .ifBlank { obj.safeStr("file") }
+                .ifBlank { obj.safeStr("streamUrl") }
+                .ifBlank { obj.safeStr("hls") }
+            if (singleUrl.isNotBlank()) {
+                streamObjs.add(JSONObject().put("url", singleUrl).put("quality", obj.safeStr("quality", "HD")))
             }
         }
-        tabButtons.forEach { tabBar.addView(it) }
-        root.addView(
-            HorizontalScrollView(ctx).apply { isHorizontalScrollBarEnabled = false; addView(tabBar) },
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                .apply { bottomMargin = dp(ctx, 8) }
-        )
 
-        val actionRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                .apply { bottomMargin = dp(ctx, 8) }
-        }
-        val searchBox = EditText(ctx).apply {
-            hint = "🔍 Filter servers..."
-            setHintTextColor(safeColor("#64748B")); setTextColor(Color.WHITE); textSize = 12f; isSingleLine = true
-            background = cardBg("#10141E", "#253046", 15f)
-            setPadding(dp(ctx, 10), dp(ctx, 7), dp(ctx, 10), dp(ctx, 7))
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 1f).apply { marginEnd = dp(ctx, 6) }
-        }
-        val allOnBtn = Button(ctx).apply {
-            text = "ALL ON"; textSize = 10f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE); background = pillBg("#0284C7", 14f)
-            setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 36)).apply { marginEnd = dp(ctx, 5) }
-        }
-        val allOffBtn = Button(ctx).apply {
-            text = "ALL OFF"; textSize = 10f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE); background = pillBg("#334155", 14f)
-            setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 36))
-        }
-        actionRow.addView(searchBox); actionRow.addView(allOnBtn); actionRow.addView(allOffBtn)
-        root.addView(actionRow)
+        for (st in streamObjs) {
+            val rawStreamUrl = st.safeStr("url").ifBlank { st.safeStr("file") }.ifBlank { st.safeStr("streamUrl") }
+            if (rawStreamUrl.isBlank()) continue
+            val streamUrl = normalizeUrl(rawStreamUrl)
+            if (isAdUrl(streamUrl) || isYouTubeOrBlockedStream(streamUrl)) continue
 
-        val contentHeight = dp(ctx, 365)
-
-        val serverAdapter = ServerListAdapter(ctx) { refreshStats() }
-        val serversListView = ListView(ctx).apply {
-            adapter = serverAdapter
-            divider = GradientDrawable().apply { setColor(Color.TRANSPARENT) }
-            dividerHeight = dp(ctx, 7)
-            overScrollMode = View.OVER_SCROLL_NEVER
-            isVerticalScrollBarEnabled = false
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, contentHeight)
-        }
-
-        fun applyServerFilter() {
-            val base = if (hindiOnly) SERVERS.filter { it.isHindi || it.isCustom } else SERVERS
-            val filtered = if (currentQuery.isEmpty()) base else base.filter {
-                it.name.lowercase().contains(currentQuery) || it.tag.lowercase().contains(currentQuery)
-            }
-            serverAdapter.submitList(filtered)
-            refreshStats()
-        }
-        applyServerFilter()
-
-        allOnBtn.setOnClickListener {
-            val ed = prefs(ctx).edit()
-            SERVERS.forEach { ed.putBoolean("$KEY_SRV_PREFIX${it.key.lowercase()}", true) }
-            ed.apply(); applyServerFilter(); safeToast(ctx, "All servers ON!")
-        }
-        allOffBtn.setOnClickListener {
-            val ed = prefs(ctx).edit()
-            SERVERS.forEach { ed.putBoolean("$KEY_SRV_PREFIX${it.key.lowercase()}", false) }
-            ed.apply(); applyServerFilter(); safeToast(ctx, "All servers OFF!")
-        }
-        searchBox.addTextChangedListener(object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {
-                currentQuery = s?.toString().orEmpty().trim().lowercase()
-                applyServerFilter()
-            }
-            override fun afterTextChanged(s: Editable?) {}
-        })
-
-        val scrollView = ScrollView(ctx).apply {
-            isVerticalScrollBarEnabled = false; visibility = View.GONE
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, contentHeight)
-        }
-        val wrapper = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-        val cfPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
-        val streamPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
-        val catalogPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
-        val homePane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
-        val cs3Pane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
-
-        cfPane.addView(TextView(ctx).apply {
-            text = "Tap Open Web next to sites with a red dot, complete verification, and tap SAVE COOKIES."
-            textSize = 11.5f; setTextColor(safeColor("#94A3B8"))
-            setPadding(dp(ctx, 4), 0, dp(ctx, 4), dp(ctx, 10))
-        })
-
-        CF_BYPASS_SITES.forEach { site ->
-            val card = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                background = cardBg("#121621", "#232C40", 20f)
-                setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    .apply { bottomMargin = dp(ctx, 7) }
-            }
-            val dotView = View(ctx).apply {
-                layoutParams = LinearLayout.LayoutParams(dp(ctx, 10), dp(ctx, 10)).apply { marginEnd = dp(ctx, 10) }
-            }
-            val col = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            val titleTv = TextView(ctx).apply { text = site.displayName; textSize = 13.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) }
-            val statusTv = TextView(ctx).apply { textSize = 10.5f }
-            col.addView(titleTv); col.addView(statusTv)
-
-            val btnHolder = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-
-            fun refreshSiteRow() {
-                val saved = hasSavedCookieForDomain(ctx, site.domain)
-                dotView.background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(safeColor(if (saved) "#22C55E" else "#EF4444"))
+            st.optJSONArray("subtitles")?.let { subs ->
+                for (k in 0 until subs.length()) {
+                    val sub = subs.optJSONObject(k) ?: continue
+                    val rawSubUrl = sub.safeStr("url").ifBlank { sub.safeStr("file") }
+                    val lang = sub.safeStr("label").ifBlank { sub.safeStr("language") }.ifBlank { sub.safeStr("lang", "English") }
+                    safeSubtitle(lang, rawSubUrl)?.let { emitSub(it) }
                 }
-                statusTv.text = if (saved) "Saved • ${site.domain}" else "Not Saved • ${site.domain}"
-                statusTv.setTextColor(safeColor(if (saved) "#34D399" else "#F87171"))
+            }
 
-                btnHolder.removeAllViews()
-                btnHolder.addView(TextView(ctx).apply {
-                    text = "Open Web"; textSize = 10f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#38BDF8"))
-                    background = pillBg("#0D2338", 12f)
-                    setPadding(dp(ctx, 10), dp(ctx, 6), dp(ctx, 10), dp(ctx, 6))
-                    setOnClickListener {
-                        showCloudflareBypassWebView(ctx, "https://${site.domain}") { refreshSiteRow() }
+            val extraHeaders = mutableMapOf<String, String>()
+            st.optJSONObject("headers")?.let { hObj ->
+                val keysArr = hObj.names()
+                if (keysArr != null) {
+                    for (ki in 0 until keysArr.length()) {
+                        val k = keysArr.optString(ki)
+                        val v = hObj.safeStr(k)
+                        if (v.isNotBlank()) extraHeaders[k] = v
                     }
-                })
-                if (saved) {
-                    btnHolder.addView(TextView(ctx).apply {
-                        text = "✕"; textSize = 10f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#F87171"))
-                        background = pillBg("#2B1216", 12f)
-                        setPadding(dp(ctx, 8), dp(ctx, 6), dp(ctx, 8), dp(ctx, 6))
-                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                            .apply { marginStart = dp(ctx, 5) }
-                        setOnClickListener {
-                            removeCookieForDomain(ctx, site.domain)
-                            refreshSiteRow()
-                            safeToast(ctx, "Cookies cleared for ${site.displayName}")
-                        }
-                    })
                 }
             }
 
-            refreshSiteRow()
-            card.addView(dotView); card.addView(col); card.addView(btnHolder)
-            cfPane.addView(card)
-        }
+            val mergedHeaders = baseHeaders + extraHeaders
+            val isHls = isM3u8Stream(streamUrl, st.safeStr("type"))
+            val qualityStr = st.safeStr("quality", "HD")
+            val finalLabel = st.safeStr("label").ifBlank { st.safeStr("title") }.ifBlank { "${endpointName.uppercase()} ($qualityStr)" }
 
-        fun makeToggleCard(parent: LinearLayout, title: String, desc: String, initial: Boolean, onChange: (Boolean) -> Unit) {
-            val card = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                background = cardBg("#121621", "#232C40", 20f)
-                setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    .apply { bottomMargin = dp(ctx, 7) }
+            emitStream(lc, finalLabel, streamUrl, isHls, qualityStr, mergedHeaders, emitLink)
+            emitted = true
+        }
+        return emitted
+    }
+
+    private suspend fun fetchMovieFoxApi(
+        srvKey: String,
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        val contentType = if (lc.isTv) "tv" else "movie"
+        val tvQuery = if (lc.isTv) "&season=${safeEncode(lc.season)}&episode=${safeEncode(lc.episode)}" else ""
+        val imdbQuery = if (lc.imdbId.isNotBlank()) "&imdbId=${safeEncode(lc.imdbId)}" else ""
+
+        for (cid in lc.candidateIds) {
+            val apiUrl = "$mainUrl/api/stream/$srvKey?type=$contentType&id=${safeEncode(cid)}$imdbQuery$tvQuery"
+            val rawText = safeGetText(apiUrl, lc.baseHeaders, lc.timeoutSec) ?: continue
+            if (rawText.isBlank()) continue
+            if (rawText.trimStart().startsWith("#EXTM3U")) {
+                emitStream(lc, "MovieFox ${srvKey.uppercase()} HLS", apiUrl, true, null, lc.baseHeaders, emitLink)
+                break
             }
-            val col = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            col.addView(TextView(ctx).apply { text = title; textSize = 13.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
-            col.addView(TextView(ctx).apply { text = desc; textSize = 10.5f; setTextColor(safeColor("#8B93A7")) })
-            val sw = Switch(ctx).apply {
-                isChecked = initial
-                setOnCheckedChangeListener { _, checked -> onChange(checked) }
-            }
-            card.setOnClickListener { sw.isChecked = !sw.isChecked }
-            card.addView(col); card.addView(sw)
-            parent.addView(card)
+            if (parseAndEmitApiJson(srvKey, rawText, lc, lc.baseHeaders, emitSub, emitLink)) break
         }
+    }
 
-        streamPane.addView(TextView(ctx).apply {
-            text = "Preferred Quality Toggles"
-            textSize = 12f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#38BDF8"))
-            setPadding(dp(ctx, 4), 0, dp(ctx, 4), dp(ctx, 6))
-        })
-        makeToggleCard(streamPane, "4K + 1440p", "Ultra HD & QHD streams", q4k) { q4k = it; setQuality4kEnabled(ctx, it); refreshStats() }
-        makeToggleCard(streamPane, "1080p FHD", "Full HD streams", q1080) { q1080 = it; setQuality1080Enabled(ctx, it); refreshStats() }
-        makeToggleCard(streamPane, "720p HD & Web", "Standard HD & WebRip", q720) { q720 = it; setQuality720Enabled(ctx, it); refreshStats() }
-        makeToggleCard(streamPane, "480p & Below", "Data saver streams", q480) { q480 = it; setQuality480Enabled(ctx, it); refreshStats() }
-
-        streamPane.addView(TextView(ctx).apply {
-            text = "Provider & Performance Controls"
-            textSize = 12f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#C084FC"))
-            setPadding(dp(ctx, 4), dp(ctx, 6), dp(ctx, 4), dp(ctx, 6))
-        })
-        makeToggleCard(streamPane, "Hindi Providers Only 🇮🇳", "Hide English-only providers, show Hindi links only", hindiOnly) {
-            hindiOnly = it; setHindiOnly(ctx, it); applyServerFilter()
-        }
-        makeToggleCard(streamPane, "Download Only Links", "Prefer direct MP4/MKV links optimized for downloading", downloadOnly) {
-            downloadOnly = it; setDownloadOnly(ctx, it)
-        }
-        makeToggleCard(streamPane, "Zero-Buffer Mode", "Prioritize fast HLS/DASH streams first", lowBuffer) {
-            lowBuffer = it; setLowBufferMode(ctx, it)
-        }
-
-        fun makeStepper(title: String, desc: String, initVal: Int, minV: Int, maxV: Int, step: Int, suffix: String, onChange: (Int) -> Unit) {
-            var v = initVal
-            val card = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                background = cardBg("#121621", "#232C40", 20f)
-                setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                    .apply { bottomMargin = dp(ctx, 7) }
-            }
-            val col = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            col.addView(TextView(ctx).apply { text = title; textSize = 13.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
-            col.addView(TextView(ctx).apply { text = desc; textSize = 10.5f; setTextColor(safeColor("#8B93A7")) })
-            val valTv = TextView(ctx).apply {
-                text = "$v$suffix"; textSize = 14f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#38BDF8"))
-                setPadding(dp(ctx, 9), 0, dp(ctx, 9), 0)
-            }
-            card.addView(col)
-            card.addView(Button(ctx).apply {
-                text = "−"; setTextColor(Color.WHITE); background = pillBg("#1D263B", 14f)
-                layoutParams = LinearLayout.LayoutParams(dp(ctx, 35), dp(ctx, 35))
-                setOnClickListener { if (v - step >= minV) { v -= step; valTv.text = "$v$suffix"; onChange(v) } }
-            })
-            card.addView(valTv)
-            card.addView(Button(ctx).apply {
-                text = "+"; setTextColor(Color.WHITE); background = pillBg("#1D263B", 14f)
-                layoutParams = LinearLayout.LayoutParams(dp(ctx, 35), dp(ctx, 35))
-                setOnClickListener { if (v + step <= maxV) { v += step; valTv.text = "$v$suffix"; onChange(v) } }
-            })
-            streamPane.addView(card)
-        }
-
-        makeStepper("Concurrent Threads", "Up to 50 parallel requests (10-15 optimal)", currentConcurrency, 2, 50, 1, "x") {
-            currentConcurrency = it; setConcurrency(ctx, it); refreshStats()
-        }
-        makeStepper("Server Timeout", "Wait limit per source", currentTimeout, 4, 20, 1, "s") {
-            currentTimeout = it; setTimeoutSeconds(ctx, it)
-        }
-
-        val metaCard = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            background = cardBg("#121621", "#253046", 20f)
-            setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                .apply { bottomMargin = dp(ctx, 8) }
-        }
-        metaCard.addView(TextView(ctx).apply { text = "Active Metadata Source"; textSize = 13.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
-        val metaRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(ctx, 8) }
-        }
-        val metaChips = mutableMapOf<String, TextView>()
-        fun refreshMetaChips() {
-            metaChips.forEach { (m, tv) ->
-                tv.background = if (m == selectedMeta) pillBg("#2563EB", 14f) else cardBg("#0B0E16", "#232C40", 14f)
-                tv.setTextColor(if (m == selectedMeta) Color.WHITE else safeColor("#94A3B8"))
-            }
-        }
-        METADATA_SOURCES.forEach { m ->
-            val tv = TextView(ctx).apply {
-                text = m; textSize = 11.5f; setTypeface(typeface, Typeface.BOLD)
-                setPadding(dp(ctx, 14), dp(ctx, 6), dp(ctx, 14), dp(ctx, 6))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 6) }
-                setOnClickListener { selectedMeta = m; setMetadataSource(ctx, m); refreshMetaChips(); refreshStats() }
-            }
-            metaChips[m] = tv; metaRow.addView(tv)
-        }
-        refreshMetaChips()
-        metaCard.addView(metaRow)
-        catalogPane.addView(metaCard)
-
-        val nuvioAddBox = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            background = cardBg("#131826", "#314161", 22f)
-            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
-        }
-        nuvioAddBox.addView(TextView(ctx).apply { text = "+ Add Stremio / Nuvio manifest.json"; textSize = 13.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#C084FC")) })
-
-        val presetRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
-        val nuvioListHolder = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-        lateinit var renderNuvioList: () -> Unit
-
-        PRESET_CATALOGS.forEach { (pName, pUrl) ->
-            presetRow.addView(TextView(ctx).apply {
-                text = "+ $pName"; textSize = 10f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#E9D5FF"))
-                background = cardBg("#241738", "#9333EA", 12f)
-                setPadding(dp(ctx, 9), dp(ctx, 5), dp(ctx, 9), dp(ctx, 5))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 6) }
-                setOnClickListener {
-                    if (nuvioList.none { it.manifestUrl.equals(pUrl, true) }) {
-                        nuvioList.add(NuvioManifestConfig(System.currentTimeMillis().toString(), pName, pUrl, true))
-                        saveNuvioManifests(ctx, nuvioList); renderNuvioList(); refreshStats()
-                        safeToast(ctx, "$pName added!")
-                    } else safeToast(ctx, "$pName already added")
-                }
-            })
-        }
-        nuvioAddBox.addView(
-            HorizontalScrollView(ctx).apply { isHorizontalScrollBarEnabled = false; addView(presetRow) },
-            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(ctx, 8); bottomMargin = dp(ctx, 8) }
-        )
-
-        val labelInput = EditText(ctx).apply {
-            hint = "Catalog Name (optional)"; setHintTextColor(safeColor("#64748B")); setTextColor(Color.WHITE); textSize = 12f; isSingleLine = true
-            background = cardBg("#080B12", "#2B354B", 14f); setPadding(dp(ctx, 11), dp(ctx, 8), dp(ctx, 11), dp(ctx, 8))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
-        }
-        val manifestUrlInput = EditText(ctx).apply {
-            hint = "https://.../manifest.json"; setHintTextColor(safeColor("#64748B")); setTextColor(Color.WHITE); textSize = 12f; isSingleLine = true
-            background = cardBg("#080B12", "#323E57", 14f); setPadding(dp(ctx, 11), dp(ctx, 8), dp(ctx, 11), dp(ctx, 8))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(ctx, 6) }
-        }
-        val manifestRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
-            addView(manifestUrlInput)
-            addView(Button(ctx).apply {
-                text = "PASTE"; textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
-                setTextColor(safeColor("#E9D5FF")); background = cardBg("#241738", "#9333EA", 14f)
-                layoutParams = LinearLayout.LayoutParams(dp(ctx, 62), dp(ctx, 38))
-                setOnClickListener {
-                    val clip = clipboard?.primaryClip?.getItemAt(0)?.text?.toString().orEmpty().trim()
-                    if (clip.isNotBlank()) { manifestUrlInput.setText(clip); manifestUrlInput.setSelection(clip.length) }
-                }
-            })
-        }
-
-        renderNuvioList = {
-            nuvioListHolder.removeAllViews()
-            if (nuvioList.isEmpty()) {
-                nuvioListHolder.addView(TextView(ctx).apply {
-                    text = "No custom Stremio/Nuvio manifests added yet."
-                    textSize = 11.5f; setTextColor(safeColor("#64748B")); gravity = Gravity.CENTER
-                    setPadding(dp(ctx, 12), dp(ctx, 14), dp(ctx, 12), dp(ctx, 14))
-                })
-            } else {
-                nuvioList.forEachIndexed { idx, item ->
-                    val card = LinearLayout(ctx).apply {
-                        orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#232C40", 20f)
-                        setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
-                    }
-                    val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-                    row.addView(TextView(ctx).apply {
-                        text = item.label; textSize = 13f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                    })
-                    row.addView(TextView(ctx).apply {
-                        text = "DELETE"; textSize = 9.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#F87171"))
-                        background = pillBg("#2A1519", 12f); setPadding(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4))
-                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 8) }
-                        setOnClickListener { nuvioList.removeAt(idx); saveNuvioManifests(ctx, nuvioList); renderNuvioList(); refreshStats() }
-                    })
-                    row.addView(Switch(ctx).apply {
-                        isChecked = item.enabled
-                        setOnCheckedChangeListener { _, checked -> item.enabled = checked; saveNuvioManifests(ctx, nuvioList); refreshStats() }
-                    })
-                    card.addView(row)
-                    card.addView(TextView(ctx).apply {
-                        text = item.manifestUrl; textSize = 10f; isSingleLine = true; ellipsize = TextUtils.TruncateAt.END
-                        setTextColor(safeColor("#94A3B8")); setPadding(0, dp(ctx, 4), 0, 0)
-                    })
-                    nuvioListHolder.addView(card)
-                }
-            }
-        }
-
-        nuvioAddBox.addView(labelInput); nuvioAddBox.addView(manifestRow)
-        nuvioAddBox.addView(Button(ctx).apply {
-            text = "ADD MANIFEST"; textSize = 11f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            background = pillBg("#9333EA", 15f)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 38))
-            setOnClickListener {
-                val raw = manifestUrlInput.text.toString().trim()
-                if (raw.isBlank()) { safeToast(ctx, "Manifest URL dalein"); return@setOnClickListener }
-                val norm = normalizeNuvioManifestUrl(raw)
-                val lbl = labelInput.text.toString().trim().ifEmpty { deriveManifestLabel(norm) }
-                nuvioList.add(NuvioManifestConfig(System.currentTimeMillis().toString(), lbl, norm, true))
-                saveNuvioManifests(ctx, nuvioList); labelInput.setText(""); manifestUrlInput.setText("")
-                renderNuvioList(); refreshStats(); safeToast(ctx, "$lbl added!")
-            }
-        })
-        catalogPane.addView(nuvioAddBox); catalogPane.addView(nuvioListHolder)
-        renderNuvioList()
-
-        makeToggleCard(homePane, "Shuffle Categories", "Randomize home screen categories on every load", shuffleHome) {
-            shuffleHome = it; setShuffleHomeCategories(ctx, it)
-        }
-        val homeCatHolder = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-        lateinit var renderHomeCats: () -> Unit
-
-        fun showRenameCategoryDialog(cat: HomeCategoryItem) {
-            val inp = EditText(ctx).apply {
-                setText(cat.title); setSelection(cat.title.length)
-                setTextColor(Color.WHITE); background = cardBg("#0B0E16", "#2B354B", 12f)
-                setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-            }
-            val box = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL; setPadding(dp(ctx, 18), dp(ctx, 14), dp(ctx, 18), dp(ctx, 8))
-                background = ColorDrawable(safeColor("#0F131C"))
-                addView(TextView(ctx).apply { text = "Rename Category"; textSize = 14f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE); setPadding(0, 0, 0, dp(ctx, 8)) })
-                addView(inp)
-            }
-            AlertDialog.Builder(ctx).setView(box)
-                .setPositiveButton("Rename") { _, _ ->
-                    val newName = inp.text.toString().trim()
-                    if (newName.isNotBlank()) { cat.title = newName; saveHomeCategories(ctx, homeCats); renderHomeCats() }
-                }
-                .setNegativeButton("Cancel", null)
-                .show()
-        }
-
-        renderHomeCats = {
-            homeCatHolder.removeAllViews()
-            homeCats.forEachIndexed { idx, cat ->
-                val card = LinearLayout(ctx).apply {
-                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                    background = cardBg("#121621", "#232C40", 18f)
-                    setPadding(dp(ctx, 11), dp(ctx, 9), dp(ctx, 11), dp(ctx, 9))
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
-                }
-                card.addView(TextView(ctx).apply {
-                    text = cat.title; textSize = 13f; isSingleLine = true; ellipsize = TextUtils.TruncateAt.END
-                    setTypeface(typeface, Typeface.BOLD); setTextColor(if (cat.visible) Color.WHITE else safeColor("#64748B"))
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                })
-                card.addView(TextView(ctx).apply {
-                    text = "↑"; textSize = 15f; setTextColor(safeColor(if (idx > 0) "#38BDF8" else "#334155"))
-                    setPadding(dp(ctx, 7), dp(ctx, 4), dp(ctx, 7), dp(ctx, 4))
-                    if (idx > 0) setOnClickListener {
-                        homeCats[idx] = homeCats[idx - 1].also { homeCats[idx - 1] = homeCats[idx] }
-                        saveHomeCategories(ctx, homeCats); renderHomeCats()
-                    }
-                })
-                card.addView(TextView(ctx).apply {
-                    text = "↓"; textSize = 15f; setTextColor(safeColor(if (idx < homeCats.lastIndex) "#38BDF8" else "#334155"))
-                    setPadding(dp(ctx, 7), dp(ctx, 4), dp(ctx, 7), dp(ctx, 4))
-                    if (idx < homeCats.lastIndex) setOnClickListener {
-                        homeCats[idx] = homeCats[idx + 1].also { homeCats[idx + 1] = homeCats[idx] }
-                        saveHomeCategories(ctx, homeCats); renderHomeCats()
-                    }
-                })
-                card.addView(TextView(ctx).apply {
-                    text = "✏️"; textSize = 12.5f; setPadding(dp(ctx, 6), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4))
-                    setOnClickListener { showRenameCategoryDialog(cat) }
-                })
-                card.addView(Switch(ctx).apply {
-                    isChecked = cat.visible
-                    setOnCheckedChangeListener { _, checked -> cat.visible = checked; saveHomeCategories(ctx, homeCats); renderHomeCats() }
-                })
-                homeCatHolder.addView(card)
-            }
-        }
-        renderHomeCats()
-        homePane.addView(homeCatHolder)
-        homePane.addView(Button(ctx).apply {
-            text = "RESET DEFAULT HOME CATEGORIES"; textSize = 10.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            background = pillBg("#334155", 14f)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 38)).apply { topMargin = dp(ctx, 6) }
-            setOnClickListener {
-                homeCats.clear(); homeCats.addAll(DEFAULT_HOME_CATEGORIES.map { it.copy() })
-                saveHomeCategories(ctx, homeCats); renderHomeCats(); safeToast(ctx, "Home categories reset!")
-            }
-        })
-
-        val cs3AddBox = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL; background = cardBg("#131826", "#2563EB", 22f)
-            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 10) }
-        }
-        cs3AddBox.addView(TextView(ctx).apply { text = "+ Add CS3 Repository / .cs3 & Fetch Servers"; textSize = 13.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#38BDF8")) })
-        val cs3NameInput = EditText(ctx).apply {
-            hint = "Repo Name (optional)"; setHintTextColor(safeColor("#64748B")); setTextColor(Color.WHITE); textSize = 12f; isSingleLine = true
-            background = cardBg("#080B12", "#2B354B", 14f); setPadding(dp(ctx, 11), dp(ctx, 8), dp(ctx, 11), dp(ctx, 8))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(ctx, 8); bottomMargin = dp(ctx, 8) }
-        }
-        val cs3UrlInput = EditText(ctx).apply {
-            hint = "https://.../repo.json or StreamHubOne.cs3"; setHintTextColor(safeColor("#64748B")); setTextColor(Color.WHITE); textSize = 12f; isSingleLine = true
-            background = cardBg("#080B12", "#323E57", 14f); setPadding(dp(ctx, 11), dp(ctx, 8), dp(ctx, 11), dp(ctx, 8))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(ctx, 6) }
-        }
-        val cs3UrlRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
-            addView(cs3UrlInput)
-            addView(Button(ctx).apply {
-                text = "PASTE"; textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
-                setTextColor(safeColor("#BAE6FD")); background = cardBg("#0D2338", "#0284C7", 14f)
-                layoutParams = LinearLayout.LayoutParams(dp(ctx, 62), dp(ctx, 38))
-                setOnClickListener {
-                    val clip = clipboard?.primaryClip?.getItemAt(0)?.text?.toString().orEmpty().trim()
-                    if (clip.isNotBlank()) { cs3UrlInput.setText(clip); cs3UrlInput.setSelection(clip.length) }
-                }
-            })
-        }
-
-        val cs3RepoListHolder = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-        lateinit var renderCs3Repos: () -> Unit
-
-        fun fetchAndApplyCs3(repo: Cs3RepoConfig) {
-            safeToast(ctx, "Fetching CS3 servers...")
-            dialogScope.launch {
-                val fetched = fetchServersFromCs3Repo(repo)
-                val prefix = "cs3_${repo.id.takeLast(6)}_"
-                val updated = (cachedCs3Servers.filterNot { it.key.startsWith(prefix) } + fetched).distinctBy { it.key }
-                saveCs3Servers(ctx, updated)
-                repo.serverCount = fetched.size
-                saveCs3Repos(ctx, cs3RepoList)
-                if (isContextAlive(ctx)) {
-                    renderCs3Repos(); applyServerFilter(); safeToast(ctx, "${fetched.size} CS3 servers loaded!")
-                }
-            }
-        }
-
-        renderCs3Repos = {
-            cs3RepoListHolder.removeAllViews()
-            if (cs3RepoList.isEmpty()) {
-                cs3RepoListHolder.addView(TextView(ctx).apply {
-                    text = "No CS3 repository added yet."; textSize = 11.5f; setTextColor(safeColor("#64748B")); gravity = Gravity.CENTER
-                    setPadding(dp(ctx, 12), dp(ctx, 14), dp(ctx, 12), dp(ctx, 14))
-                })
-            } else {
-                cs3RepoList.forEachIndexed { idx, repo ->
-                    val card = LinearLayout(ctx).apply {
-                        orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#232C40", 20f)
-                        setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
-                    }
-                    val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-                    row.addView(TextView(ctx).apply {
-                        text = "${repo.name} (${repo.serverCount})"; textSize = 13f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                        layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                    })
-                    row.addView(TextView(ctx).apply {
-                        text = "FETCH"; textSize = 9.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#38BDF8"))
-                        background = pillBg("#0D2338", 12f); setPadding(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4))
-                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 6) }
-                        setOnClickListener { fetchAndApplyCs3(repo) }
-                    })
-                    row.addView(TextView(ctx).apply {
-                        text = "DELETE"; textSize = 9.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#F87171"))
-                        background = pillBg("#2A1519", 12f); setPadding(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4))
-                        setOnClickListener {
-                            val removed = cs3RepoList.removeAt(idx)
-                            val prefix = "cs3_${removed.id.takeLast(6)}_"
-                            saveCs3Servers(ctx, cachedCs3Servers.filterNot { it.key.startsWith(prefix) })
-                            saveCs3Repos(ctx, cs3RepoList); renderCs3Repos(); applyServerFilter()
-                        }
-                    })
-                    card.addView(row)
-                    card.addView(TextView(ctx).apply {
-                        text = repo.repoUrl; textSize = 10f; isSingleLine = true; ellipsize = TextUtils.TruncateAt.END
-                        setTextColor(safeColor("#94A3B8")); setPadding(0, dp(ctx, 4), 0, 0)
-                    })
-                    cs3RepoListHolder.addView(card)
-                }
-            }
-        }
-
-        cs3AddBox.addView(cs3NameInput); cs3AddBox.addView(cs3UrlRow)
-        cs3AddBox.addView(Button(ctx).apply {
-            text = "ADD & FETCH CS3 SERVERS"; textSize = 11f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            background = pillBg("#0284C7", 15f)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 38))
-            setOnClickListener {
-                var u = cs3UrlInput.text.toString().trim()
-                if (u.isBlank()) { safeToast(ctx, "CS3 repo URL dalein"); return@setOnClickListener }
-                if (!u.startsWith("http")) u = "https://$u"
-                val n = cs3NameInput.text.toString().trim().ifEmpty { u.substringBefore("?").substringAfterLast("/").removeSuffix(".cs3").ifBlank { deriveManifestLabel(u) } }
-                val newRepo = Cs3RepoConfig(System.currentTimeMillis().toString(), n, u, true, 0)
-                cs3RepoList.add(newRepo); saveCs3Repos(ctx, cs3RepoList)
-                cs3NameInput.setText(""); cs3UrlInput.setText(""); renderCs3Repos(); fetchAndApplyCs3(newRepo)
-            }
-        })
-        cs3Pane.addView(cs3AddBox); cs3Pane.addView(cs3RepoListHolder)
-        renderCs3Repos()
-
-        val scrollPanes = listOf(cfPane, streamPane, catalogPane, homePane, cs3Pane)
-        scrollPanes.forEach { wrapper.addView(it) }
-        scrollView.addView(wrapper)
-
-        fun selectTab(idx: Int) {
-            if (idx == 0) {
-                serversListView.visibility = View.VISIBLE
-                actionRow.visibility = View.VISIBLE
-                scrollView.visibility = View.GONE
-            } else {
-                serversListView.visibility = View.GONE
-                actionRow.visibility = View.GONE
-                scrollView.visibility = View.VISIBLE
-                scrollPanes.forEachIndexed { i, p -> p.visibility = if (i == idx - 1) View.VISIBLE else View.GONE }
-            }
-            tabButtons.forEachIndexed { i, btn ->
-                if (i == idx) {
-                    btn.background = pillBg("#2563EB", 15f)
-                    btn.setTextColor(Color.WHITE)
+    private suspend fun fetchCineTvApi(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        val sNum = lc.season.toIntOrNull()?.coerceAtLeast(1) ?: 1
+        val eNum = lc.episode.toIntOrNull()?.coerceAtLeast(1) ?: 1
+        val headers = mapOf("Referer" to "${cineTvUrls.first()}", "Origin" to cineTvBaseUrl, "Accept" to "application/json, text/html, */*")
+        val endpoints = buildList {
+            lc.candidateIds.forEach { cid ->
+                if (lc.isTv) {
+                    add("$cineTvBaseUrl/api/stream/tv/$cid/$sNum/$eNum")
+                    add("$cineTvBaseUrl/api/sources?type=tv&id=$cid&season=$sNum&episode=$eNum")
                 } else {
-                    btn.setBackgroundColor(Color.TRANSPARENT)
-                    btn.setTextColor(safeColor("#8B93A7"))
+                    add("$cineTvBaseUrl/api/stream/movie/$cid")
+                    add("$cineTvBaseUrl/api/sources?type=movie&id=$cid")
+                }
+            }
+            if (lc.imdbId.startsWith("tt")) {
+                if (lc.isTv) add("$cineTvBaseUrl/api/stream/tv/${lc.imdbId}/$sNum/$eNum")
+                else add("$cineTvBaseUrl/api/stream/movie/${lc.imdbId}")
+            }
+        }.distinct()
+
+        for (ep in endpoints) {
+            val body = safeGetText(ep, headers, lc.timeoutSec)?.trim().orEmpty()
+            if (body.isBlank()) continue
+            if (body.startsWith("#EXTM3U")) {
+                emitStream(lc, "CineTV API HLS", ep, true, null, headers, emitLink)
+                break
+            }
+            if (body.startsWith("{") && parseAndEmitApiJson("CineTV API", body, lc, headers, emitSub, emitLink)) break
+        }
+    }
+
+    private suspend fun fetchCineTvHls(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        val sNum = lc.season.toIntOrNull()?.coerceAtLeast(1) ?: 1
+        val eNum = lc.episode.toIntOrNull()?.coerceAtLeast(1) ?: 1
+        val headers = mapOf("Referer" to "$cineTvBaseUrl/en", "Origin" to cineTvBaseUrl, "Accept" to "*/*")
+        val urls = buildList {
+            lc.candidateIds.forEach { cid ->
+                if (lc.isTv) {
+                    add("$cineTvHlsWorker/tv/$cid/$sNum/$eNum")
+                    add("$cineTvHlsWorker/tv/$cid/$sNum/$eNum/master.m3u8")
+                } else {
+                    add("$cineTvHlsWorker/movie/$cid")
+                    add("$cineTvHlsWorker/movie/$cid/master.m3u8")
+                }
+            }
+        }.distinct()
+
+        for (wUrl in urls) {
+            val body = safeGetText(wUrl, headers, lc.timeoutSec)?.trim().orEmpty()
+            if (body.isBlank()) continue
+            if (body.startsWith("#EXTM3U")) {
+                emitStream(lc, "CineTV HLS", wUrl, true, "1080p", headers, emitLink)
+                break
+            } else if (body.startsWith("{") && parseAndEmitApiJson("CineTV HLS", body, lc, headers, emitSub, emitLink)) {
+                break
+            }
+        }
+    }
+
+    // --- VegaMovies / RogMovies (pixeldrain.dev, FSL, FSLv2, V-Cloud, HubCloud, GoFile) ---
+    private suspend fun fetchVegaMoviesResolved(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (lc.pageTitle.isBlank()) return
+        val q = safeUriEncode(lc.pageTitle)
+
+        supervisorScope {
+            vegamoviesDomains.map { dom ->
+                async(Dispatchers.IO) {
+                    val raw = safeGetText("$dom/ts-search.php?q=$q&page=1", mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+                    val hits = runCatching { JSONObject(raw).optJSONArray("hits") }.getOrNull() ?: return@async
+                    var chosenUrl = ""
+                    var chosenTitle = ""
+                    for (i in 0 until hits.length()) {
+                        val doc = hits.optJSONObject(i)?.optJSONObject("document") ?: continue
+                        val t = doc.safeStr("post_title")
+                        val p = doc.safeStr("permalink")
+                        if (t.isNotBlank() && p.isNotBlank() && titleMatchesCandidate(t, lc.pageTitle)) {
+                            chosenTitle = t
+                            chosenUrl = normalizeUrl(p, dom)
+                            break
+                        }
+                    }
+                    if (chosenUrl.isBlank()) return@async
+
+                    val postHtml = safeGetText(chosenUrl, mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+                    if (postHtml.isBlank()) return@async
+                    val audioTag = extractAudioSummary(chosenTitle)
+                    val siteTag = if (dom.contains("rogmovies", true)) "RogMovies" else "VegaMovies"
+
+                    val candidateHrefs = Jsoup.parse(postHtml, chosenUrl).select("a[href]")
+                        .map { it.attr("href").trim() }
+                        .filter { GokuHDSources.isServerLink(it) }
+                        .distinct()
+                        .take(10)
+
+                    val pairs = candidateHrefs.map { it to "HOST" }
+                    resolveCandidatesInParallel(siteTag, pairs, chosenUrl, audioTag, lc, emitSub, emitLink, maxItems = 10)
+                }
+            }.awaitAll()
+        }
+    }
+
+    // --- Bollyflix (bollyflix.frl + dynamic urls.json + web.sidexfee.com bypass + parallel extractors) ---
+    private suspend fun fetchBollyflix(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (lc.pageTitle.isBlank()) return
+        val q = safeEncode(lc.pageTitle)
+        val dynUrl = fetchDynamicDomain("https://bollyflix.frl", "bollyflix")
+        val domains = (listOf(dynUrl) + bollyflixMirrors).distinct()
+
+        for (dom in domains) {
+            val searchHtml = safeGetText("$dom/search/$q/page/1/", mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+            if (searchHtml.isBlank()) continue
+            val doc = Jsoup.parse(searchHtml, dom)
+            val card = doc.select("div.post-cards > article, article").firstOrNull { art ->
+                val t = art.select("a").attr("title").replace("Download ", "").trim()
+                    .ifBlank { art.selectFirst("img")?.attr("alt").orEmpty() }
+                t.isNotBlank() && titleMatchesCandidate(t, lc.pageTitle)
+            } ?: continue
+
+            val cardTitle = card.select("a").attr("title").replace("Download ", "").trim()
+            val audioTag = extractAudioSummary(cardTitle)
+            val postUrl = normalizeUrl(card.select("a").attr("href"), dom)
+            if (postUrl.isBlank()) continue
+
+            val postHtml = safeGetText(postUrl, mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+            if (postHtml.isBlank()) continue
+            val postDoc = Jsoup.parse(postHtml, postUrl)
+
+            val resolvedTargets = supervisorScope {
+                postDoc.select("a.dl, a.maxbutton-download-links, a.btnn").map { el ->
+                    async(Dispatchers.IO) {
+                        var href = el.attr("href").trim()
+                        if (href.isBlank()) return@async null
+                        if (!href.contains("fastdlserver", true) && href.contains("?id=")) {
+                            val id = href.substringAfterLast("id=")
+                            val bypassHtml = safeGetText("https://web.sidexfee.com/?id=$id", mapOf("Referer" to postUrl), lc.timeoutSec).orEmpty()
+                            val encUrl = Regex("""link":"([^"]+)""").find(bypassHtml)?.groupValues?.get(1).orEmpty()
+                            if (encUrl.isNotBlank()) {
+                                val decoded = runCatching { base64Decode(encUrl.replace("\\/", "/")) }.getOrNull().orEmpty()
+                                if (decoded.startsWith("http")) href = decoded
+                            }
+                        }
+                        normalizeUrl(href, dom)
+                    }
+                }.awaitAll().filterNotNull().distinct().take(10)
+            }
+
+            resolveCandidatesInParallel(
+                "Bollyflix",
+                resolvedTargets.map { it to "HOST" },
+                postUrl,
+                audioTag,
+                lc,
+                emitSub,
+                emitLink,
+                maxItems = 10
+            )
+            break
+        }
+    }
+
+    private fun sflixMd5(input: ByteArray): String =
+        MessageDigest.getInstance("MD5").digest(input).joinToString("") { "%02x".format(it) }
+
+    private fun sflixClientToken(ts: Long = System.currentTimeMillis()): String {
+        val s = ts.toString()
+        return "$s,${sflixMd5(s.reversed().toByteArray())}"
+    }
+
+    private fun sflixSignature(url: String, ts: Long): String {
+        return runCatching {
+            val parsed = URI(url)
+            val path = parsed.path.orEmpty()
+            val query = parsed.rawQuery.orEmpty().split("&").filter { it.isNotBlank() }.sorted().joinToString("&")
+            val canonicalUrl = if (query.isNotEmpty()) "$path?$query" else path
+            val canonical = "GET\napplication/json\napplication/json\n\n$ts\n\n$canonicalUrl"
+            val secretBytes = Base64.decode(String(Base64.decode(sflixSecretB64, Base64.DEFAULT)), Base64.DEFAULT)
+            val mac = Mac.getInstance("HmacMD5")
+            mac.init(SecretKeySpec(secretBytes, "HmacMD5"))
+            val sig = Base64.encodeToString(mac.doFinal(canonical.toByteArray()), Base64.NO_WRAP)
+            "$ts|2|$sig"
+        }.getOrDefault("")
+    }
+
+    private suspend fun fetchSflixFull(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (lc.pageTitle.isBlank()) return
+        val sflixMainUrl = "https://sflix.film"
+        val encodedTitle = safeEncode(lc.pageTitle)
+        val searchHtml = safeGetText(
+            "$sflixMainUrl/search-result?keyword=$encodedTitle",
+            mapOf("Referer" to "$sflixMainUrl/"),
+            lc.timeoutSec
+        ).orEmpty()
+        if (searchHtml.isBlank()) return
+
+        val doc = Jsoup.parse(searchHtml, sflixMainUrl)
+        val detailLink = doc.select("a.video-item[href*='/detail/'], a[href*='/detail/']").firstOrNull { el ->
+            val t = (el.selectFirst("h3.text, .video-name, h3")?.text() ?: el.attr("title")).trim()
+            titleMatchesCandidate(t, lc.pageTitle)
+        }?.attr("href").orEmpty()
+        if (detailLink.isBlank()) return
+
+        val fullDetailUrl = normalizeUrl(detailLink, sflixMainUrl)
+        val subjectId = Regex("""[?&]id=(\d+)""").find(fullDetailUrl)?.groupValues?.get(1).orEmpty()
+        val detailPath = fullDetailUrl.substringAfter("/detail/").substringBefore("?")
+        if (subjectId.isEmpty()) return
+
+        val se = if (lc.isTv) lc.season.toIntOrNull()?.coerceAtLeast(1) ?: 1 else 0
+        val ep = if (lc.isTv) lc.episode.toIntOrNull()?.coerceAtLeast(1) ?: 1 else 0
+        val referer = "$sflixPlayerUrl/spa/videoPlayPage/movies/$detailPath?id=$subjectId&type=/movie/detail&lang=en"
+
+        for (domain in sflixWebDomains) {
+            val playUrl = "$domain/wefeed-h5api-bff/subject/play?subjectId=$subjectId&se=$se&ep=$ep&detailPath=$detailPath&streamSignType=1"
+            val ts = System.currentTimeMillis()
+            val playHeaders = mapOf(
+                "User-Agent" to MovieFoxSettingsDialog.CF_BYPASS_UA,
+                "Referer" to referer,
+                "Origin" to sflixPlayerUrl,
+                "Accept" to "application/json",
+                "x-client-token" to sflixClientToken(ts),
+                "x-tr-signature" to sflixSignature(playUrl, ts),
+                "x-client-info" to "{\"timezone\":\"Asia/Calcutta\"}",
+                "x-request-lang" to "en"
+            )
+            val playText = safeGetText(playUrl, playHeaders, lc.timeoutSec).orEmpty()
+            val dataObj = runCatching { JSONObject(playText).optJSONObject("data") }.getOrNull() ?: continue
+            var any = false
+
+            listOf("dash" to "DASH", "hls" to "HLS", "streams" to "MP4").forEach { (k, kind) ->
+                dataObj.optJSONArray(k)?.let { arr ->
+                    for (i in 0 until arr.length()) {
+                        val item = arr.optJSONObject(i) ?: continue
+                        val sUrl = item.safeStr("url")
+                        if (sUrl.isBlank() || isYouTubeOrBlockedStream(sUrl)) continue
+                        val signCookie = item.safeStr("signCookie")
+                        val signHeaderKey = item.safeStr("signHeaderKey", "X-MB-Token")
+                        val maxRes = item.safeStr("resolutions").split(",").mapNotNull { it.trim().toIntOrNull() }.maxOrNull() ?: 720
+                        val stHeaders = mutableMapOf(
+                            "Origin" to sflixPlayerUrl,
+                            "Referer" to "$sflixPlayerUrl/",
+                            "User-Agent" to MovieFoxSettingsDialog.CF_BYPASS_UA
+                        )
+                        if (signCookie.isNotBlank()) {
+                            stHeaders[signHeaderKey] = signCookie
+                            stHeaders["Cookie"] = signCookie
+                        }
+                        emitStream(lc, "Sflix [$kind ${maxRes}p]", sUrl, kind != "MP4", "${maxRes}p", stHeaders, emitLink)
+                        any = true
+                    }
+                }
+            }
+            if (any) break
+        }
+    }
+
+    private suspend fun fetchPrmoviesFull(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (lc.pageTitle.isBlank()) return
+        val q = lc.pageTitle.trim().replace(Regex("\\s+"), "+")
+        val candidates = (listOf(activePrmoviesBase) + prmoviesMirrors).distinct()
+
+        for (dom in candidates) {
+            val searchHtml = safeGetText("$dom/?s=$q", mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+            if (searchHtml.isBlank()) continue
+            activePrmoviesBase = dom
+
+            val card = Jsoup.parse(searchHtml, dom).select(".ml-item").firstOrNull { c ->
+                val a = c.selectFirst("a.ml-mask") ?: return@firstOrNull false
+                val t = (a.attr("oldtitle").ifBlank { a.attr("title") }.ifBlank { c.selectFirst(".mli-info h2")?.text().orEmpty() }).trim()
+                t.isNotBlank() && titleMatchesCandidate(t, lc.pageTitle)
+            } ?: continue
+
+            val detailUrl = card.selectFirst("a.ml-mask")?.attr("href")?.let { normalizeUrl(it, dom) }.orEmpty()
+            if (detailUrl.isBlank()) continue
+            val detailHtml = safeGetText(detailUrl, mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+            if (detailHtml.isBlank()) continue
+            val doc = Jsoup.parse(detailHtml, detailUrl)
+
+            val embedPairs = mutableListOf<Pair<String, String>>()
+            doc.select("#player2 iframe[src], #content-embed iframe[src], div.movieplay iframe[src], #list-downloads a[href*=speedostream]")
+                .forEach { el ->
+                    val src = (el.attr("src").ifBlank { el.attr("href") }).trim()
+                    if (src.isBlank()) return@forEach
+                    val cleanEmbed = normalizeUrl(src, dom)
+                    if (cleanEmbed.contains("speedostream", true)) {
+                        val spHtml = safeGetText(cleanEmbed, mapOf("Referer" to detailUrl), lc.timeoutSec).orEmpty()
+                        val m3u8 = Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""").find(spHtml)?.groupValues?.get(1)
+                        if (!m3u8.isNullOrBlank()) {
+                            emitStream(lc, "Prmovies • Speedostream", m3u8, true, "1080p", mapOf("Referer" to cleanEmbed), emitLink)
+                        }
+                    } else if (!isYouTubeOrBlockedStream(cleanEmbed)) {
+                        embedPairs.add(cleanEmbed to "HOST")
+                    }
+                }
+
+            val allPairs = (embedPairs + extractCandidateMediaAndEmbedUrls(detailHtml, detailUrl)).distinctBy { it.first }
+            resolveCandidatesInParallel("Prmovies", allPairs, detailUrl, "", lc, emitSub, emitLink, maxItems = 10)
+            break
+        }
+    }
+
+    private suspend fun fetchDramaVerse(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (lc.pageTitle.isBlank()) return
+        val q = safeEncode(lc.pageTitle)
+        val searchHtml = safeGetText("$dramaVerseBaseUrl/?s=$q", mapOf("Referer" to "$dramaVerseBaseUrl/"), lc.timeoutSec).orEmpty()
+        if (searchHtml.isBlank()) return
+        val doc = Jsoup.parse(searchHtml, dramaVerseBaseUrl)
+        val postUrl = doc.select("h2.post-title a, h3.post-title a, a.post-thumb")
+            .firstOrNull { el ->
+                val t = el.text().trim().ifEmpty { el.attr("aria-label").substringBefore("|").trim() }
+                t.isNotBlank() && titleMatchesCandidate(t, lc.pageTitle)
+            }?.attr("href")?.let { normalizeUrl(it, dramaVerseBaseUrl) }.orEmpty()
+        if (postUrl.isBlank()) return
+
+        val postHtml = safeGetText(postUrl, mapOf("Referer" to "$dramaVerseBaseUrl/"), lc.timeoutSec).orEmpty()
+        if (postHtml.isBlank()) return
+        val candidates = extractCandidateMediaAndEmbedUrls(postHtml, postUrl)
+        resolveCandidatesInParallel("DramaVerse", candidates, postUrl, "", lc, emitSub, emitLink, maxItems = 10)
+    }
+
+    private suspend fun fetchGokuHd(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (lc.pageTitle.isBlank()) return
+        val q = safeEncode(lc.pageTitle)
+        val raw = safeGetText("$gokuHdBaseUrl/search.php?q=$q&page=1", mapOf("Referer" to "$gokuHdBaseUrl/"), lc.timeoutSec).orEmpty()
+        val hits = runCatching { JSONObject(raw).optJSONArray("hits") }.getOrNull() ?: return
+
+        for (i in 0 until hits.length()) {
+            val d = hits.optJSONObject(i)?.optJSONObject("document") ?: continue
+            val t = d.safeStr("post_title")
+            val p = d.safeStr("permalink")
+            if (t.isBlank() || p.isBlank() || !titleMatchesCandidate(t, lc.pageTitle)) continue
+            val postUrl = normalizeUrl(p, gokuHdBaseUrl)
+            val postHtml = safeGetText(postUrl, mapOf("Referer" to "$gokuHdBaseUrl/"), lc.timeoutSec).orEmpty()
+            if (postHtml.isBlank()) continue
+            val audioTag = extractAudioSummary(t)
+            val links = Jsoup.parse(postHtml, postUrl).select("a[href]")
+                .map { it.attr("href").trim() }
+                .filter { GokuHDSources.isServerLink(it) }
+                .distinct()
+                .map { it to "HOST" }
+            resolveCandidatesInParallel("GokuHD", links, postUrl, audioTag, lc, emitSub, emitLink, maxItems = 10)
+            break
+        }
+    }
+
+    private fun extractWindowJsonObject(html: String, varName: String): JSONObject? {
+        val marker = "window.$varName = "
+        val at = html.indexOf(marker)
+        if (at < 0) return null
+        var start = html.indexOf('=', at) + 1
+        while (start < html.length && html[start].isWhitespace()) start++
+        if (start >= html.length || html[start] != '{') return null
+        var depth = 0
+        var inString = false
+        var escaped = false
+        for (i in start until html.length) {
+            val c = html[i]
+            if (escaped) { escaped = false; continue }
+            when (c) {
+                '\\' -> escaped = true
+                '"' -> inString = !inString
+                '{', '[' -> if (!inString) depth++
+                '}', ']' -> if (!inString) {
+                    depth--
+                    if (depth == 0) return runCatching { JSONObject(html.substring(start, i + 1)) }.getOrNull()
                 }
             }
         }
-        tabButtons.forEachIndexed { i, btn -> btn.setOnClickListener { selectTab(i) } }
-        selectTab(0)
+        return null
+    }
 
-        root.addView(serversListView)
-        root.addView(scrollView)
+    private fun play4uUnseal(value: String?, key: String): String {
+        if (value.isNullOrBlank()) return ""
+        if (!value.startsWith(play4uSealPrefix)) return value
+        var b64 = value.substring(play4uSealPrefix.length).replace("-", "+").replace("_", "/")
+        when (b64.length % 4) { 1 -> return ""; 2 -> b64 += "=="; 3 -> b64 += "=" }
+        return try {
+            val raw = Base64.decode(b64, Base64.NO_WRAP)
+            val kb = key.toByteArray(Charsets.UTF_8)
+            val out = StringBuilder(raw.size)
+            for (i in raw.indices) out.append(((raw[i].toInt() and 0xFF) xor (kb[i % kb.size].toInt() and 0xFF)).toChar())
+            val text = out.toString()
+            if (text.isEmpty() || text.any { it < ' ' || it > '~' }) "" else text
+        } catch (_: IllegalArgumentException) { "" }
+    }
 
-        val dialog = AlertDialog.Builder(ctx).setView(root).create()
-        dialog.setOnDismissListener { runCatching { dialogScope.cancel() } }
+    private suspend fun fetchPlay4u(lc: LinkContext, emitLink: (ExtractorLink, Boolean) -> Unit) {
+        if (lc.pageTitle.isBlank()) return
+        val targetSeason = lc.season.toIntOrNull()?.coerceAtLeast(1) ?: 1
+        val targetEpisode = lc.episode.toIntOrNull()?.coerceAtLeast(1) ?: 1
+        val p4Headers = mapOf("Referer" to "$play4uBaseUrl/", "Accept" to "application/json, text/html;q=0.9, */*;q=0.8")
+        val p4StreamHeaders = mapOf("Referer" to "$play4uBaseUrl/", "Origin" to play4uBaseUrl, "User-Agent" to USER_AGENT)
 
-        val footer = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                .apply { topMargin = dp(ctx, 10) }
-        }
-        footer.addView(Button(ctx).apply {
-            text = "CLOSE"; textSize = 12f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            background = pillBg("#1C2333", 16f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 42), 1f).apply { marginEnd = dp(ctx, 8) }
-            setOnClickListener { runCatching { dialog.dismiss() } }
-        })
-        footer.addView(Button(ctx).apply {
-            text = "SAVE & APPLY"; textSize = 12f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            background = pillBg("#2563EB", 16f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 42), 1.3f).apply { marginStart = dp(ctx, 8) }
-            setOnClickListener {
-                saveNuvioManifests(ctx, nuvioList)
-                saveCs3Repos(ctx, cs3RepoList)
-                saveHomeCategories(ctx, homeCats)
-                setQuality4kEnabled(ctx, q4k)
-                setQuality1080Enabled(ctx, q1080)
-                setQuality720Enabled(ctx, q720)
-                setQuality480Enabled(ctx, q480)
-                setLowBufferMode(ctx, lowBuffer)
-                setConcurrency(ctx, currentConcurrency)
-                setTimeoutSeconds(ctx, currentTimeout)
-                setMetadataSource(ctx, selectedMeta)
-                setHindiOnly(ctx, hindiOnly)
-                setDownloadOnly(ctx, downloadOnly)
-                setShuffleHomeCategories(ctx, shuffleHome)
-                safeToast(ctx, "Settings applied!")
-                runCatching { dialog.dismiss() }
+        var pageHtml: String? = null
+        if (lc.imdbId.startsWith("tt") && lc.imdbId.length > 2) {
+            val directUrl = if (lc.isTv) "$play4uBaseUrl/series/${lc.imdbId}" else "$play4uBaseUrl/watch/${lc.imdbId}"
+            val cand = safeGetText(directUrl, p4Headers, lc.timeoutSec)
+            if (!cand.isNullOrBlank()) {
+                val ok = if (lc.isTv) extractWindowJsonObject(cand, "__PA_SERIES__") != null
+                else extractWindowJsonObject(cand, "__PA_PLAY__")?.optBoolean("ok") == true
+                if (ok) pageHtml = cand
             }
-        })
-        root.addView(footer)
+        }
 
-        runCatching {
-            dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
-            dialog.show()
-            val width = (ctx.resources.displayMetrics.widthPixels * 0.94).toInt()
-            dialog.window?.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT)
+        if (pageHtml == null) {
+            val searchText = safeGetText("$play4uBaseUrl/api/search.php?q=${safeEncode(lc.pageTitle)}&page=1&per_page=30", p4Headers, lc.timeoutSec).orEmpty()
+            val itemsArr = runCatching { JSONObject(searchText).optJSONArray("items") }.getOrNull()
+            if (itemsArr != null) {
+                for (i in 0 until itemsArr.length()) {
+                    val item = itemsArr.optJSONObject(i) ?: continue
+                    val mType = item.safeStr("media_type")
+                    if (mType == "series" && !lc.isTv) continue
+                    if (mType == "movie" && lc.isTv) continue
+                    val itemTitle = item.safeStr("title").replace(Regex("""\s*\((19|20)\d{2}\)\s*$"""), "").trim()
+                    if (!titleMatchesCandidate(itemTitle, lc.pageTitle)) continue
+                    val watchPath = item.safeStr("watch").takeIf { it.startsWith("/") } ?: continue
+                    val cand = safeGetText("$play4uBaseUrl$watchPath", p4Headers, lc.timeoutSec) ?: continue
+                    val ok = if (lc.isTv) extractWindowJsonObject(cand, "__PA_SERIES__") != null
+                    else extractWindowJsonObject(cand, "__PA_PLAY__")?.optBoolean("ok") == true
+                    if (ok) { pageHtml = cand; break }
+                }
+            }
+        }
+
+        if (pageHtml.isNullOrBlank()) return
+        val sealKey = Regex("""window\.__PA_SEAL_KEY__\s*=\s*"([^"]*)"""").find(pageHtml)?.groupValues?.get(1)?.takeIf { it.isNotBlank() } ?: play4uDefaultSealKey
+
+        if (!lc.isTv) {
+            val streamsArr = extractWindowJsonObject(pageHtml, "__PA_PLAY__")?.optJSONArray("streams") ?: return
+            for (i in 0 until streamsArr.length()) {
+                val sObj = streamsArr.optJSONObject(i) ?: continue
+                val linkUrl = play4uUnseal(sObj.safeStr("m3u8_url"), sealKey).ifBlank {
+                    val dName = sObj.safeStr("domain_name")
+                    val mPath = sObj.safeStr("m3u8_path")
+                    if (dName.isNotBlank() && mPath.startsWith("/")) "https://$dName$mPath" else ""
+                }.let { if (it.isNotBlank()) normalizeUrl(it, play4uBaseUrl) else "" }
+                if (linkUrl.isBlank() || !linkUrl.startsWith("http")) continue
+                val srvLabel = sObj.safeStr("label", "Play4u")
+                emitStream(lc, buildSourceLabel("Play4u", srvLabel, ""), linkUrl, true, null, p4StreamHeaders, emitLink)
+            }
+        } else {
+            val seasonsObj = extractWindowJsonObject(pageHtml, "__PA_SERIES__")?.optJSONObject("seasons") ?: return
+            var matchedSeason: JSONObject? = null
+            val sKeys = seasonsObj.names()
+            if (sKeys != null) {
+                for (si in 0 until sKeys.length()) {
+                    val k = sKeys.optString(si)
+                    val o = seasonsObj.optJSONObject(k) ?: continue
+                    if (o.optInt("number", -1) == targetSeason || k.toIntOrNull() == targetSeason) { matchedSeason = o; break }
+                }
+            }
+            val episodesObj = (matchedSeason ?: if (seasonsObj.length() == 1 && sKeys != null) seasonsObj.optJSONObject(sKeys.optString(0)) else null)
+                ?.optJSONObject("episodes") ?: return
+            val eKeys = episodesObj.names()
+            if (eKeys != null) {
+                for (ei in 0 until eKeys.length()) {
+                    val epObj = episodesObj.optJSONObject(eKeys.optString(ei)) ?: continue
+                    if (epObj.optInt("number", -1) != targetEpisode) continue
+                    val linkUrl = play4uUnseal(epObj.safeStr("hls"), sealKey).let { if (it.isNotBlank()) normalizeUrl(it, play4uBaseUrl) else "" }
+                    if (linkUrl.startsWith("http")) {
+                        emitStream(lc, buildSourceLabel("Play4u", "HLS", "Ep $targetEpisode"), linkUrl, true, null, p4StreamHeaders, emitLink)
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun fetchHdHub4u(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (lc.pageTitle.isBlank()) return
+        val q = safeUriEncode(lc.pageTitle)
+        val activeBase = fetchDynamicDomain(hdhub4uDomains.first(), "hdhub4u")
+        val tsUrl = "$hdhub4uTypesenseUrl?q=$q&query_by=post_title,category&query_by_weights=4,2&sort_by=sort_by_date:desc&limit=15&highlight_fields=none&use_cache=true&page=1"
+        val tsRaw = safeGetText(tsUrl, mapOf("Referer" to "$activeBase/"), lc.timeoutSec).orEmpty()
+        val hits = runCatching { JSONObject(tsRaw).optJSONArray("hits") }.getOrNull()
+        val detailEntries = mutableListOf<Pair<String, String>>()
+
+        if (hits != null) {
+            for (i in 0 until hits.length()) {
+                val d = hits.optJSONObject(i)?.optJSONObject("document") ?: continue
+                val t = d.safeStr("post_title")
+                val p = d.safeStr("permalink")
+                if (t.isNotBlank() && p.isNotBlank() && titleMatchesCandidate(t, lc.pageTitle)) {
+                    val fixed = if (p.startsWith("http", true)) {
+                        val path = runCatching { URI(p).path }.getOrNull().orEmpty()
+                        if (path.isNotBlank()) activeBase + path else p
+                    } else {
+                        normalizeUrl(p, activeBase)
+                    }
+                    detailEntries.add(fixed to extractAudioSummary(t))
+                }
+            }
+        }
+
+        if (detailEntries.isEmpty()) {
+            for (dom in (listOf(activeBase) + hdhub4uDomains).distinct()) {
+                val html = safeGetText("$dom/?s=$q", mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+                if (html.isBlank()) continue
+                val hit = Jsoup.parse(html, dom).select("a[href]").firstOrNull { a ->
+                    val t = a.attr("title").ifBlank { a.text() }.trim()
+                    t.isNotBlank() && titleMatchesCandidate(t, lc.pageTitle)
+                }
+                if (hit != null) {
+                    val t = hit.attr("title").ifBlank { hit.text() }.trim()
+                    detailEntries.add(normalizeUrl(hit.attr("href"), dom) to extractAudioSummary(t))
+                }
+                if (detailEntries.isNotEmpty()) break
+            }
+        }
+
+        for ((dUrl, audioTag) in detailEntries.distinctBy { it.first }.take(2)) {
+            val html = safeGetText(dUrl, mapOf("Referer" to "$activeBase/"), lc.timeoutSec).orEmpty()
+            if (html.isBlank()) continue
+            val candidates = extractCandidateMediaAndEmbedUrls(html, dUrl)
+            resolveCandidatesInParallel("HDHub4u", candidates, dUrl, audioTag, lc, emitSub, emitLink, maxItems = 10)
+        }
+    }
+
+    private fun movieBoxClientToken(): String {
+        val ts = System.currentTimeMillis() / 1000
+        val md5 = MessageDigest.getInstance("MD5").digest(ts.toString().reversed().toByteArray()).joinToString("") { "%02x".format(it) }
+        return "$ts,$md5"
+    }
+
+    private suspend fun fetchMovieBox(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (lc.pageTitle.isBlank()) return
+        val se = if (lc.isTv) lc.season.toIntOrNull()?.coerceAtLeast(1) ?: 1 else 0
+        val ep = if (lc.isTv) lc.episode.toIntOrNull()?.coerceAtLeast(1) ?: 1 else 0
+        val headers = mapOf(
+            "User-Agent" to movieBoxUa, "Accept" to "application/json",
+            "Origin" to movieBoxSiteUrl, "Referer" to "$movieBoxSiteUrl/",
+            "X-Request-Lang" to "en", "X-Client-Info" to "{\"timezone\":\"Asia/Kolkata\"}",
+            "X-Client-Token" to movieBoxClientToken(), "Content-Type" to "application/json"
+        )
+        val searchRaw = runCatching {
+            app.post("$movieBoxBff/subject/search", headers = headers, json = mapOf("keyword" to lc.pageTitle, "page" to 1, "perPage" to 15), timeout = lc.timeoutSec).text
+        }.getOrNull().orEmpty()
+        val itemsArr = runCatching { JSONObject(searchRaw).optJSONObject("data")?.optJSONArray("items") }.getOrNull() ?: return
+
+        var matchedPath: String? = null
+        for (i in 0 until itemsArr.length()) {
+            val item = itemsArr.optJSONObject(i) ?: continue
+            val t = item.safeStr("title")
+            val dPath = item.safeStr("detailPath")
+            if (dPath.isBlank() || t.isBlank()) continue
+            val itemIsTv = item.optInt("subjectType", 1) == 2
+            if (itemIsTv != lc.isTv) continue
+            if (titleMatchesCandidate(t, lc.pageTitle)) { matchedPath = dPath; break }
+        }
+        val detailPath = matchedPath ?: return
+        val detailRaw = safeGetText("$movieBoxBff/detail?detailPath=${safeEncode(detailPath)}", headers, lc.timeoutSec).orEmpty()
+        val subjectObj = runCatching { JSONObject(detailRaw).optJSONObject("data")?.optJSONObject("subject") }.getOrNull() ?: return
+        val dubsArr = subjectObj.optJSONArray("dubs") ?: JSONArray().apply {
+            put(JSONObject().put("subjectId", subjectObj.safeStr("subjectId")).put("detailPath", detailPath).put("lanName", "Original").put("type", 0).put("original", true))
+        }
+        val seenSubs = Collections.synchronizedSet(mutableSetOf<String>())
+        val playHeaders = mapOf("Referer" to "$movieBoxSiteUrl/", "Origin" to movieBoxSiteUrl, "User-Agent" to movieBoxUa)
+
+        for (dIdx in 0 until dubsArr.length()) {
+            val dub = dubsArr.optJSONObject(dIdx) ?: continue
+            val dubId = dub.safeStr("subjectId")
+            val dubPath = dub.safeStr("detailPath", detailPath)
+            if (dubId.isBlank()) continue
+            val label = dub.safeStr("lanName").substringBefore(" dub").substringBefore(" sub").trim().ifBlank { "Original" }
+            val playRaw = safeGetText(
+                "$movieBoxBff/subject/play?subjectId=${safeEncode(dubId)}&se=$se&ep=$ep&detailPath=${safeEncode(dubPath)}",
+                headers + mapOf("X-Source" to "webNetnaijaSite"),
+                lc.timeoutSec
+            ).orEmpty()
+            val playData = runCatching { JSONObject(playRaw).optJSONObject("data") }.getOrNull() ?: continue
+            var firstId: String? = null
+
+            playData.optJSONArray("streams")?.let { stArr ->
+                for (j in 0 until stArr.length()) {
+                    val st = stArr.optJSONObject(j) ?: continue
+                    if (st.optBoolean("vipLocked")) continue
+                    val sUrl = st.safeStr("url")
+                    val resStr = st.safeStr("resolutions")
+                    if (sUrl.isBlank() || resStr.isBlank()) continue
+                    if (firstId == null) firstId = st.safeStr("id").takeIf { it.isNotBlank() }
+                    val qLabel = "${resStr.toIntOrNull() ?: resStr}p"
+                    emitStream(lc, "MovieBox $label $qLabel", sUrl, false, "$qLabel $label", playHeaders, emitLink)
+                }
+            }
+            if (firstId != null && (dub.optBoolean("original") || seenSubs.isEmpty())) {
+                runCatching {
+                    val capRaw = safeGetText(
+                        "$movieBoxBff/subject/caption?format=MP4&id=${safeEncode(firstId)}&subjectId=${safeEncode(dubId)}&detailPath=${safeEncode(dubPath)}",
+                        headers,
+                        lc.timeoutSec
+                    ).orEmpty()
+                    val capsArr = JSONObject(capRaw).optJSONObject("data")?.optJSONArray("captions")
+                    if (capsArr != null) {
+                        for (c in 0 until capsArr.length()) {
+                            val cObj = capsArr.optJSONObject(c) ?: continue
+                            val subUrl = cObj.safeStr("url")
+                            if (subUrl.isNotBlank() && seenSubs.add(subUrl)) {
+                                safeSubtitle(cObj.safeStr("lanName", "English"), subUrl)?.let { emitSub(it) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun fetchNetNaija(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (lc.pageTitle.isBlank()) return
+        val q = safeEncode(lc.pageTitle)
+        for (dom in (listOf(activeNetnaijaBase) + netnaijaDomains).distinct()) {
+            val html = safeGetText("$dom/search?t=$q", mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+            if (html.isBlank()) continue
+            activeNetnaijaBase = dom
+            val postHref = Jsoup.parse(html, dom).select("article.sr-one h2 a, article h2.entry-title a, .search-results article a[href]")
+                .firstOrNull { titleMatchesCandidate(it.text().trim(), lc.pageTitle) }
+                ?.attr("href")?.let { normalizeUrl(it, dom) }.orEmpty()
+            if (postHref.isBlank()) continue
+            val postHtml = safeGetText(postHref, mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+            if (postHtml.isBlank()) continue
+            resolveCandidatesInParallel("NetNaija", extractCandidateMediaAndEmbedUrls(postHtml, postHref), postHref, "", lc, emitSub, emitLink)
+            break
+        }
+    }
+
+    private suspend fun fetchNuvioAddons(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        val ctx = CloudStreamApp.context ?: return
+        val manifests = MovieFoxSettingsDialog.getNuvioManifests(ctx).filter { it.enabled }
+        if (manifests.isEmpty()) return
+        val sNum = lc.season.toIntOrNull()?.coerceAtLeast(1) ?: 1
+        val eNum = lc.episode.toIntOrNull()?.coerceAtLeast(1) ?: 1
+        val stremioType = if (lc.isTv) "series" else "movie"
+
+        for (m in manifests) {
+            val withoutQ = m.manifestUrl.substringBefore("?")
+            val base = if (withoutQ.endsWith("/manifest.json", true)) withoutQ.dropLast("/manifest.json".length) else withoutQ.trimEnd('/')
+            val qSuffix = if (m.manifestUrl.contains("?")) m.manifestUrl.substring(m.manifestUrl.indexOf('?')) else ""
+            val ids = buildList {
+                if (lc.imdbId.startsWith("tt")) add(lc.imdbId)
+                lc.candidateIds.forEach { add("tmdb:$it"); add(it) }
+            }.distinct()
+
+            for (rawId in ids) {
+                val sid = if (lc.isTv) "$rawId:$sNum:$eNum" else rawId
+                val epUrl = "$base/stream/$stremioType/${safeUriEncode(sid, ":")}.json$qSuffix"
+                val raw = safeGetText(epUrl, timeoutSec = lc.timeoutSec).orEmpty()
+                val arr = runCatching { JSONObject(raw).optJSONArray("streams") }.getOrNull() ?: continue
+                for (i in 0 until arr.length()) {
+                    val sObj = arr.optJSONObject(i) ?: continue
+                    val u = normalizeUrl(sObj.safeStr("url"), base)
+                    if (u.startsWith("http")) {
+                        val lbl = sObj.safeStr("name", m.label)
+                        val titleLine = sObj.safeStr("title").lines().firstOrNull().orEmpty()
+                        emitStream(lc, buildSourceLabel("Nuvio • ${m.label}", lbl, titleLine), u, isM3u8Stream(u, ""), "$lbl $titleLine", mapOf("Referer" to "$base/", "User-Agent" to USER_AGENT), emitLink)
+                    }
+                    sObj.optJSONArray("subtitles")?.let { subs ->
+                        for (k in 0 until subs.length()) {
+                            val sub = subs.optJSONObject(k) ?: continue
+                            safeSubtitle(sub.safeStr("lang", "English"), sub.safeStr("url"), base)?.let { emitSub(it) }
+                        }
+                    }
+                }
+                break
+            }
+        }
+    }
+
+    private suspend fun fetchHiCine(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (lc.pageTitle.isBlank()) return
+        val headers = mapOf("Referer" to "$hicineApiBase/", "Accept" to "application/json")
+        val searchRaw = safeGetText("$hicineApiBase/hapi/search?q=${safeEncode(lc.pageTitle)}&page=1", headers, lc.timeoutSec).orEmpty()
+        val items = runCatching { JSONObject(searchRaw).optJSONArray("items") }.getOrNull() ?: return
+        var pickedId: String? = null
+        for (i in 0 until items.length()) {
+            val obj = items.optJSONObject(i) ?: continue
+            val id = obj.safeStr("id")
+            val t = obj.safeStr("title")
+            if (id.isNotBlank() && t.isNotBlank() && titleMatchesCandidate(t, lc.pageTitle)) {
+                pickedId = id
+                break
+            }
+        }
+        val titleId = pickedId ?: return
+        val detailRaw = safeGetText("$hicineApiBase/hapi/t?c=${safeEncode(titleId)}", headers, lc.timeoutSec).orEmpty()
+        val groups = runCatching { JSONObject(detailRaw).optJSONArray("groups") }.getOrNull() ?: return
+        val targetEp = lc.episode.toIntOrNull()?.coerceAtLeast(1) ?: 1
+
+        for (gIdx in 0 until minOf(groups.length(), 4)) {
+            val grp = groups.optJSONObject(gIdx) ?: continue
+            val gKey = grp.safeStr("k")
+            if (gKey.isBlank()) continue
+            val head = grp.safeStr("head")
+            val qStr = grp.safeStr("quality", head)
+            val grpRaw = safeGetText("$hicineApiBase/hapi/g?k=${safeEncode(gKey)}", headers, lc.timeoutSec).orEmpty()
+            val gItems = runCatching { JSONObject(grpRaw).optJSONArray("items") }.getOrNull() ?: continue
+            val chosenItem = (0 until gItems.length()).mapNotNull { gItems.optJSONObject(it) }
+                .firstOrNull { !lc.isTv || it.optInt("ep", -1) == targetEp }
+                ?: gItems.optJSONObject(0)
+                ?: continue
+            val hosts = chosenItem.optJSONArray("hosts") ?: continue
+            for (hIdx in 0 until minOf(hosts.length(), 2)) {
+                val hKey = hosts.optJSONObject(hIdx)?.safeStr("k").orEmpty()
+                if (hKey.isBlank()) continue
+                val dlRaw = safeGetText("$hicineApiBase/hapi/dl?k=${safeEncode(hKey)}", headers, lc.timeoutSec).orEmpty()
+                val opts = runCatching { JSONObject(dlRaw).optJSONArray("options") }.getOrNull() ?: continue
+                for (oIdx in 0 until minOf(opts.length(), 2)) {
+                    val opt = opts.optJSONObject(oIdx) ?: continue
+                    val goKey = opt.safeStr("ks").ifBlank { opt.safeStr("k") }
+                    if (goKey.isBlank()) continue
+                    val goRaw = safeGetText("$hicineApiBase/hapi/go?k=${safeEncode(goKey)}&m=u", headers, lc.timeoutSec).orEmpty()
+                    val resolved = runCatching { JSONObject(goRaw).safeStr("url") }.getOrNull().orEmpty()
+                    if (resolved.startsWith("http")) {
+                        val srvLbl = opt.safeStr("name", "HiCine")
+                        if (resolved.contains("pixeldrain", true)) {
+                            val pid = resolved.substringBefore("?").trimEnd('/').substringAfterLast("/")
+                            if (pid.isNotBlank()) emitStream(lc, buildSourceLabel("HiCine", "PixelDrain", qStr), "https://pixeldrain.dev/api/file/$pid", false, qStr, headers, emitLink)
+                        } else if (resolved.contains("gofile.io", true)) {
+                            resolveWithAllExtractors("HiCine", resolved, "$hicineApiBase/", qStr, lc, emitSub, emitLink)
+                        } else {
+                            emitStream(lc, buildSourceLabel("HiCine", srvLbl, qStr), resolved, isM3u8Stream(resolved, ""), qStr, headers, emitLink)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun fetchHindMoviez(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (lc.pageTitle.isBlank()) return
+        val q = safeEncode(lc.pageTitle)
+        for (dom in hindmoviezDomains) {
+            val html = safeGetText("$dom/?s=$q", mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+            if (html.isBlank()) continue
+            val postHref = Jsoup.parse(html, dom).select("h2.entry-title > a[href], article a[href]")
+                .firstOrNull { titleMatchesCandidate(it.text().trim(), lc.pageTitle) }
+                ?.attr("href")?.let { normalizeUrl(it, dom) }.orEmpty()
+            if (postHref.isBlank()) continue
+            val postHtml = safeGetText(postHref, mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+            if (postHtml.isBlank()) continue
+            resolveCandidatesInParallel("HindMoviez", extractCandidateMediaAndEmbedUrls(postHtml, postHref), postHref, "", lc, emitSub, emitLink)
+            break
+        }
+    }
+
+    private suspend fun fetchMoviesLinkBd(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (lc.pageTitle.isBlank()) return
+        val q = safeUriEncode(lc.pageTitle)
+        for (dom in movielinkbdDomains) {
+            val html = safeGetText("$dom/search?q=$q", mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+            if (html.isBlank()) continue
+            val card = Jsoup.parse(html, dom).select("div.movie-card, article").firstOrNull { el ->
+                val img = el.selectFirst("img")
+                val t = img?.attr("title")?.trim()?.takeIf { it.isNotBlank() } ?: el.selectFirst("a")?.text()?.trim().orEmpty()
+                t.isNotBlank() && titleMatchesCandidate(t, lc.pageTitle)
+            } ?: continue
+            val detailHref = card.selectFirst("a[href]")?.attr("href")?.let { normalizeUrl(it, dom) }.orEmpty()
+            if (detailHref.isBlank()) continue
+            val detailHtml = safeGetText(detailHref, mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+            if (detailHtml.isBlank()) continue
+            resolveCandidatesInParallel("MovieLinkBD", extractCandidateMediaAndEmbedUrls(detailHtml, detailHref), detailHref, "", lc, emitSub, emitLink)
+            break
+        }
+    }
+
+    private suspend fun fetchNetMirror(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (lc.pageTitle.isBlank()) return
+        val q = safeUriEncode(lc.pageTitle)
+        for (dom in netmirrorDomains) {
+            val headers = mapOf("Referer" to "$dom/home", "User-Agent" to USER_AGENT)
+            for (path in listOf("/mobile", "/mobile/hs", "/mobile/pv")) {
+                val raw = safeGetText("$dom$path/search.php?s=$q", headers, lc.timeoutSec).orEmpty()
+                val arr = runCatching { JSONObject(raw).optJSONArray("searchResult") }.getOrNull() ?: continue
+                for (i in 0 until minOf(arr.length(), 3)) {
+                    val item = arr.optJSONObject(i) ?: continue
+                    val t = item.safeStr("t")
+                    val id = item.safeStr("id")
+                    if (id.isNotBlank() && t.isNotBlank() && titleMatchesCandidate(t, lc.pageTitle)) {
+                        val plRaw = safeGetText("$dom$path/playlist.php?id=${safeEncode(id)}&t=${safeEncode(t)}", headers, lc.timeoutSec).orEmpty()
+                        extractCandidateMediaAndEmbedUrls(plRaw, dom).take(6).forEach { (u, kind) ->
+                            if (kind == "DIRECT") emitStream(lc, "NetMirror", u, isM3u8Stream(u, ""), null, headers, emitLink)
+                        }
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun fetchMovy(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        val tmdbId = lc.candidateIds.firstOrNull() ?: return
+        if (lc.pageTitle.isBlank()) return
+        val headers = mapOf("Referer" to "$movyMainUrl/", "Origin" to movyMainUrl, "User-Agent" to USER_AGENT)
+        val seedRaw = safeGetText("$movyStreamApiBase/seed?mediaId=${safeEncode(tmdbId)}", headers, lc.timeoutSec).orEmpty()
+        val seed = runCatching { JSONObject(seedRaw).safeStr("seed") }.getOrNull().orEmpty()
+        if (seed.isBlank()) return
+
+        val mType = if (lc.isTv) "tv" else "movie"
+        val sNum = lc.season.toIntOrNull()?.coerceAtLeast(1) ?: 1
+        val eNum = lc.episode.toIntOrNull()?.coerceAtLeast(1) ?: 1
+        val encTitle = safeEncode(lc.pageTitle).replace("+", "%20")
+        for (city in listOf("miami", "boise", "vegas", "delhi", "atlanta", "dallas")) {
+            val u = "$movyStreamApiBase/$city/sources?title=$encTitle&mediaType=$mType&year=0&episodeId=$eNum&seasonId=$sNum&tmdbId=${safeEncode(tmdbId)}&enc=2&seed=${safeEncode(seed)}"
+            val body = safeGetText(u, headers, lc.timeoutSec).orEmpty()
+            if (body.startsWith("{")) parseAndEmitApiJson("Movy • $city", body, lc, headers, emitSub, emitLink)
+        }
+    }
+
+    private suspend fun fetch4KhdHub(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (lc.pageTitle.isBlank()) return
+        val q = safeUriEncode(lc.pageTitle)
+        for (dom in fourKhdHubDomains) {
+            val html = safeGetText("$dom/?s=$q", mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+            if (html.isBlank()) continue
+            val card = Jsoup.parse(html, dom).select("div.card-grid > a.movie-card, a.movie-card[href], a[href]").firstOrNull { el ->
+                val text = el.selectFirst("div.movie-card-content")?.text()?.trim().orEmpty().ifBlank { el.attr("title").ifBlank { el.text() } }
+                text.isNotBlank() && titleMatchesCandidate(text, lc.pageTitle)
+            } ?: continue
+            val detailHref = normalizeUrl(card.attr("href").trim(), dom)
+            val detailHtml = safeGetText(detailHref, mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+            if (detailHtml.isBlank()) continue
+            resolveCandidatesInParallel("4KHDHub", extractCandidateMediaAndEmbedUrls(detailHtml, detailHref), detailHref, "4K", lc, emitSub, emitLink)
+            break
+        }
+    }
+
+    private suspend fun fetchMovies4u(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (lc.pageTitle.isBlank()) return
+        val q = safeUriEncode(lc.pageTitle)
+        for (dom in movies4uDomains) {
+            val raw = safeGetText("$dom/lookup.php?q=$q&page=1&per_page=25", mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+            val hits = runCatching { JSONObject(raw).optJSONArray("hits") }.getOrNull() ?: continue
+            val chosen = (0 until hits.length()).mapNotNull { hits.optJSONObject(it) }
+                .firstOrNull { hit -> titleMatchesCandidate(hit.safeStr("post_title"), lc.pageTitle) } ?: continue
+            val postUrl = normalizeUrl(chosen.safeStr("permalink"), dom)
+            val postHtml = safeGetText(postUrl, mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+            if (postHtml.isBlank()) continue
+            resolveCandidatesInParallel("Movies4u", extractCandidateMediaAndEmbedUrls(postHtml, postUrl), postUrl, "", lc, emitSub, emitLink)
+            break
+        }
+    }
+
+    private suspend fun fetchMultimovies(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (lc.pageTitle.isBlank()) return
+        val q = safeUriEncode(lc.pageTitle)
+        for (dom in multimoviesDomains) {
+            val html = safeGetText("$dom/search?q=$q", mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+            if (html.isBlank()) continue
+            val cardHref = Jsoup.parse(html, dom).select("article.poster-card a[href], a[href*=/movies/], a[href*=/series/]")
+                .firstOrNull { a -> titleMatchesCandidate(a.attr("title").ifBlank { a.text() }, lc.pageTitle) }
+                ?.attr("href")?.let { normalizeUrl(it, dom) }.orEmpty()
+            if (cardHref.isBlank()) continue
+            val postHtml = safeGetText(cardHref, mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
+            if (postHtml.isBlank()) continue
+            resolveCandidatesInParallel("Multimovies", extractCandidateMediaAndEmbedUrls(postHtml, cardHref), cardHref, "", lc, emitSub, emitLink)
+            break
+        }
+    }
+
+    private suspend fun fetchCustomCs3Server(
+        srvKey: String,
+        lc: LinkContext,
+        isCasting: Boolean,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        val ctx = CloudStreamApp.context ?: return
+        val cs3Srv = MovieFoxSettingsDialog.getEnabledCs3Servers(ctx).firstOrNull { it.key == srvKey } ?: return
+        val baseProbe = normalizeUrl(cs3Srv.probeUrl, mainUrl)
+        if (baseProbe.isBlank()) return
+
+        if (baseProbe.substringBefore("?").endsWith(".cs3", true)) {
+            val plugins = cs3PluginCache.getOrPut(baseProbe) {
+                runCatching {
+                    val dir = File(ctx.codeCacheDir, "mf_cs3_plugins").apply { mkdirs() }
+                    val hash = MessageDigest.getInstance("MD5").digest(baseProbe.toByteArray()).joinToString("") { "%02x".format(it) }
+                    val file = File(dir, "$hash.cs3")
+                    if (!file.exists() || file.length() == 0L) {
+                        val res = app.get(baseProbe, headers = mapOf("User-Agent" to USER_AGENT), timeout = lc.timeoutSec)
+                        if (res.code in 200..299) {
+                            val bytes = res.body.bytes()
+                            if (bytes.isNotEmpty()) file.writeBytes(bytes)
+                        } else {
+                            runCatching { res.okhttpResponse.close() }
+                        }
+                    }
+                    if (!file.exists() || file.length() == 0L) return@runCatching emptyList()
+                    val clsNames = mutableListOf<String>()
+                    ZipFile(file).use { zf ->
+                        val en = zf.entries()
+                        while (en.hasMoreElements()) {
+                            val entry = en.nextElement()
+                            if (!entry.isDirectory && entry.name.endsWith(".dex", true)) {
+                                val dexStr = String(zf.getInputStream(entry).readBytes(), Charsets.ISO_8859_1)
+                                Regex("""L([a-zA-Z0-9_/]+/[A-Z][a-zA-Z0-9_]+(?:Provider|Plugin|Source));""").findAll(dexStr).forEach {
+                                    clsNames.add(it.groupValues[1].replace('/', '.'))
+                                }
+                            }
+                        }
+                    }
+                    val optDir = File(dir, "opt_$hash").apply { mkdirs() }
+                    val loader = DexClassLoader(file.absolutePath, optDir.absolutePath, null, MovieFoxProvider::class.java.classLoader)
+                    clsNames.distinct().mapNotNull { name ->
+                        runCatching {
+                            val clz = loader.loadClass(name)
+                            if (!Modifier.isAbstract(clz.modifiers) && MainAPI::class.java.isAssignableFrom(clz)) {
+                                clz.getDeclaredConstructor().newInstance() as MainAPI
+                            } else null
+                        }.getOrNull()
+                    }
+                }.getOrDefault(emptyList())
+            }
+
+            withContext(Dispatchers.IO) {
+                for (plugin in plugins) {
+                    if (lc.pageTitle.isBlank()) continue
+                    val hits = runCatching { plugin.search(lc.pageTitle) }.getOrNull().orEmpty()
+                    val hit = hits.firstOrNull { titleMatchesCandidate(it.name, lc.pageTitle) } ?: hits.firstOrNull() ?: continue
+                    val loadRes = runCatching { plugin.load(hit.url) }.getOrNull() ?: continue
+                    val targetData = if (loadRes is TvSeriesLoadResponse) {
+                        val sN = lc.season.toIntOrNull() ?: 1
+                        val eN = lc.episode.toIntOrNull() ?: 1
+                        loadRes.episodes.firstOrNull { it.season == sN && it.episode == eN }?.data ?: loadRes.episodes.firstOrNull()?.data
+                    } else (loadRes as? MovieLoadResponse)?.dataUrl ?: hit.url
+                    if (targetData != null) {
+                        runCatching {
+                            plugin.loadLinks(targetData, isCasting, emitSub) { ex ->
+                                if (!isYouTubeOrBlockedStream(ex.url, ex.name) && lc.seenUrls.add(ex.url) && isQualityAllowed(lc, ex.quality, ex.name)) {
+                                    emitLink(ex, isStreamOrHlsLink(ex.url, ex.type))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return
+        }
+
+        val sep = if (baseProbe.contains("?")) "&" else "?"
+        val queryUrl = if (lc.pageTitle.isNotBlank()) "$baseProbe${sep}q=${safeEncode(lc.pageTitle)}" else baseProbe
+        val body = safeGetText(queryUrl, timeoutSec = lc.timeoutSec)?.trim().orEmpty()
+        if (body.isBlank()) return
+        if (body.startsWith("{")) {
+            parseAndEmitApiJson("CS3 • ${cs3Srv.name}", body, lc, lc.baseHeaders, emitSub, emitLink)
+        } else {
+            resolveCandidatesInParallel("CS3 • ${cs3Srv.name}", extractCandidateMediaAndEmbedUrls(body, queryUrl), queryUrl, "", lc, emitSub, emitLink)
         }
     }
 }
