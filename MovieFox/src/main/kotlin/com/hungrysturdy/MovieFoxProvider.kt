@@ -1,5 +1,6 @@
 package com.hungrysturdy
 
+import android.content.Context
 import android.net.Uri
 import android.util.Base64
 import android.util.Log
@@ -79,14 +80,14 @@ class MovieFoxProvider : MainAPI() {
         "https://bollyflix.frl"
     )
 
-    private val extraIndianMirrors = listOf(
-        "BollyHQ" to "https://bolly-hq.info",
-        "MoviesDrive" to "https://new4.moviesdrive.cyou",
-        "FilmyFly" to "https://filmyfly.kred",
-        "FilmyKing" to "https://filmyking.co",
-        "MyFilms" to "https://myfilms.pro",
-        "VipFilm" to "https://vipfilm.pro",
-        "KMmovies" to "https://kmmovies.quest"
+    private val singleIndianMirrors = mapOf(
+        "bollyhq" to ("BollyHQ" to "https://bolly-hq.info"),
+        "moviesdrive" to ("MoviesDrive" to "https://new4.moviesdrive.cyou"),
+        "filmyfly" to ("FilmyFly" to "https://filmyfly.kred"),
+        "filmyking" to ("FilmyKing" to "https://filmyking.co"),
+        "myfilms" to ("MyFilms" to "https://myfilms.pro"),
+        "vipfilm" to ("VipFilm" to "https://vipfilm.pro"),
+        "kmmovies" to ("KMmovies" to "https://kmmovies.quest")
     )
 
     private val sflixWebDomains = listOf(
@@ -274,7 +275,7 @@ class MovieFoxProvider : MainAPI() {
                 val first = app.get(url, headers = headers, timeout = timeoutSec)
                 val ms = System.currentTimeMillis() - start
                 if (first.code in 200..299 && !isCfChallenge(first)) {
-                    MovieFoxSettingsDialog.reportServerStatus(sourceTag, "LIVE", first.code, ms, url)
+                    MovieFoxSettingsDialog.reportServerStatus(sourceTag, "LIVE", true, first.code, ms, url)
                     return first.text
                 }
                 val needsCf = isCfChallenge(first)
@@ -288,7 +289,7 @@ class MovieFoxProvider : MainAPI() {
                         val solved = app.get(url, headers = headers, interceptor = killer, timeout = maxOf(timeoutSec, 35L))
                         val sMs = System.currentTimeMillis() - start
                         if (solved.code in 200..299 && !isCfChallenge(solved)) {
-                            MovieFoxSettingsDialog.reportServerStatus(sourceTag, "LIVE", solved.code, sMs, url)
+                            MovieFoxSettingsDialog.reportServerStatus(sourceTag, "LIVE", true, solved.code, sMs, url)
                             solved.text
                         } else {
                             logError(sourceTag, url, null, "CF BLOCKED HTTP ${solved.code}")
@@ -503,30 +504,28 @@ class MovieFoxProvider : MainAPI() {
         return out
     }
 
-    // Safely renders imported Nuvio/TMDB custom collection JSON rows without OOM or crash
     private suspend fun fetchImportedCollectionHomeLists(ctx: Context, timeoutSec: Long): List<HomePageList> {
-        val items = MovieFoxSettingsDialog.getPersonalCollection(ctx)
-        if (items.isEmpty()) return emptyList()
+        val folders = MovieFoxSettingsDialog.getImportedCollectionFolders(ctx)
+        if (folders.isEmpty()) return emptyList()
         val out = mutableListOf<HomePageList>()
 
-        for (item in items.take(6)) {
+        for (folder in folders.take(8)) {
             try {
-                if (item.sourceJson.isBlank()) continue
-                val srcObj = JSONObject(item.sourceJson)
-                val mediaType = srcObj.optString("mediaType", "MOVIE").uppercase()
-                val isTv = mediaType == "TV"
-                val sortBy = srcObj.optString("sortBy", "popularity.desc")
-                val filters = srcObj.optJSONObject("filters")
-                val genres = filters?.optString("withGenres").orEmpty()
-                val langCode = filters?.optString("withOriginalLanguage").orEmpty()
+                val isTv = folder.mediaType.equals("TV", true)
+                val apiUrl = if (folder.sourceType == "COLLECTION" && folder.tmdbCollectionId > 0) {
+                    "https://api.themoviedb.org/3/collection/${folder.tmdbCollectionId}?api_key=$tmdbApiKey"
+                } else {
+                    val endpoint = if (isTv) "discover/tv" else "discover/movie"
+                    val sb = StringBuilder("https://api.themoviedb.org/3/$endpoint?api_key=$tmdbApiKey&sort_by=${safeEncode(folder.sortBy)}&page=1")
+                    if (folder.withGenres.isNotBlank()) sb.append("&with_genres=${safeEncode(folder.withGenres)}")
+                    if (folder.withKeywords.isNotBlank()) sb.append("&with_keywords=${safeEncode(folder.withKeywords)}")
+                    if (folder.withLang.isNotBlank()) sb.append("&with_original_language=${safeEncode(folder.withLang)}")
+                    sb.toString()
+                }
 
-                val endpoint = if (isTv) "discover/tv" else "discover/movie"
-                val queryBuilder = StringBuilder("https://api.themoviedb.org/3/$endpoint?api_key=$tmdbApiKey&sort_by=${safeEncode(sortBy)}&page=1")
-                if (genres.isNotBlank()) queryBuilder.append("&with_genres=${safeEncode(genres)}")
-                if (langCode.isNotBlank()) queryBuilder.append("&with_original_language=${safeEncode(langCode)}")
-
-                val raw = safeGetText(queryBuilder.toString(), timeoutSec = timeoutSec, sourceTag = "Collection").orEmpty()
-                val results = runCatching { JSONObject(raw).optJSONArray("results") }.getOrNull() ?: continue
+                val raw = safeGetText(apiUrl, timeoutSec = timeoutSec, sourceTag = "Collection").orEmpty()
+                val root = runCatching { JSONObject(raw) }.getOrNull() ?: continue
+                val results = root.optJSONArray("results") ?: root.optJSONArray("parts") ?: continue
                 val responses = mutableListOf<SearchResponse>()
                 for (i in 0 until minOf(results.length(), 18)) {
                     val r = results.optJSONObject(i) ?: continue
@@ -544,10 +543,10 @@ class MovieFoxProvider : MainAPI() {
                     }
                 }
                 if (responses.isNotEmpty()) {
-                    out.add(HomePageList("⭐ ${item.title}", responses))
+                    out.add(HomePageList("⭐ ${folder.folderTitle}", responses))
                 }
             } catch (e: Exception) {
-                logError("Collection", item.title, e, "Collection row render failed")
+                logError("Collection", folder.folderTitle, e, "Collection row render failed")
             }
         }
         return out
@@ -558,7 +557,6 @@ class MovieFoxProvider : MainAPI() {
         val movieFoxEnabled = ctx?.let { MovieFoxSettingsDialog.isServerEnabled(it, "moviefox") } ?: true
         val timeoutSec = currentTimeoutSec()
 
-        // When MovieFox is OFF, hide MovieFox categories on Home, and show only enabled Stremio Addon & Collection catalogs
         if (!movieFoxEnabled) {
             if (ctx == null || page > 1 || !request.data.contains("/trending", true)) {
                 return newHomePageResponse(emptyList(), hasNext = false)
@@ -1351,20 +1349,6 @@ class MovieFoxProvider : MainAPI() {
                         Unit
                     })
                 }
-                if (lc.searchQueryTitle.isNotBlank()) {
-                    tasks.add(async(Dispatchers.IO) {
-                        workerSemaphore.withPermit {
-                            withTimeoutOrNull(deepBudgetMs) {
-                                try {
-                                    fetchExtraIndianMirrors(lc, emitSub, emitLink)
-                                } catch (e: Exception) {
-                                    logError("ExtraIndianMirrors", lc.watchUrl, e, "Mirror batch error")
-                                }
-                            }
-                        }
-                        Unit
-                    })
-                }
                 tasks.awaitAll()
             }
 
@@ -1382,9 +1366,10 @@ class MovieFoxProvider : MainAPI() {
         emitSub: (SubtitleFile) -> Unit,
         emitLink: (ExtractorLink, Boolean) -> Unit
     ) {
-        when (srvKey.lowercase()) {
+        val keyLow = srvKey.lowercase()
+        when (keyLow) {
             "moviefox" -> fetchMovieFoxApi("purstream", lc, emitSub, emitLink)
-            "purstream", "castle", "watchout" -> fetchMovieFoxApi(srvKey.lowercase(), lc, emitSub, emitLink)
+            "purstream", "castle", "watchout" -> fetchMovieFoxApi(keyLow, lc, emitSub, emitLink)
             "cinetv_api" -> fetchCineTvApi(lc, emitSub, emitLink)
             "cinetv_hls" -> fetchCineTvHls(lc, emitSub, emitLink)
             "vegamovies", "rogmovies" -> fetchVegaMoviesResolved(lc, emitSub, emitLink)
@@ -1407,43 +1392,45 @@ class MovieFoxProvider : MainAPI() {
             "4khdhub" -> fetch4KhdHub(lc, emitSub, emitLink)
             "movies4u" -> fetchMovies4u(lc, emitSub, emitLink)
             "multimovies" -> fetchMultimovies(lc, emitSub, emitLink)
+            in singleIndianMirrors -> {
+                val (tag, base) = singleIndianMirrors[keyLow] ?: return
+                fetchSingleIndianMirror(keyLow, tag, base, lc, emitSub, emitLink)
+            }
             else -> fetchCustomCs3Server(srvKey, lc, isCasting, emitSub, emitLink)
         }
     }
 
-    private suspend fun fetchExtraIndianMirrors(
+    private suspend fun fetchSingleIndianMirror(
+        key: String,
+        tag: String,
+        base: String,
         lc: LinkContext,
         emitSub: (SubtitleFile) -> Unit,
         emitLink: (ExtractorLink, Boolean) -> Unit
     ) {
-        val q = safeEncode(lc.searchQueryTitle)
-        supervisorScope {
-            extraIndianMirrors.map { (tag, base) ->
-                async(Dispatchers.IO) {
-                    try {
-                        val searchUrl = "$base/?s=$q"
-                        val searchHtml = safeGetText(searchUrl, mapOf("Referer" to "$base/"), lc.timeoutSec, sourceTag = tag).orEmpty()
-                        if (searchHtml.isBlank()) return@async
-                        val doc = Jsoup.parse(searchHtml, base)
-                        val matched = doc.select("article a[href], .post a[href], .ml-item a[href], h2 a[href], h3 a[href]")
-                            .firstOrNull { a ->
-                                val t = (a.attr("title").ifBlank { a.selectFirst("h2, h3")?.text().orEmpty() }.ifBlank { a.text() }).trim()
-                                val href = a.attr("href").trim()
-                                href.startsWith("http") && !href.contains("/category/") && !href.contains("/tag/") &&
-                                    t.isNotBlank() && titleMatchesCandidate(t, lc.pageTitle)
-                            } ?: return@async
+        if (lc.searchQueryTitle.isBlank()) return
+        try {
+            val q = safeEncode(lc.searchQueryTitle)
+            val searchUrl = "$base/?s=$q"
+            val searchHtml = safeGetText(searchUrl, mapOf("Referer" to "$base/"), lc.timeoutSec, sourceTag = key).orEmpty()
+            if (searchHtml.isBlank()) return
+            val doc = Jsoup.parse(searchHtml, base)
+            val matched = doc.select("article a[href], .post a[href], .ml-item a[href], h2 a[href], h3 a[href]")
+                .firstOrNull { a ->
+                    val t = (a.attr("title").ifBlank { a.selectFirst("h2, h3")?.text().orEmpty() }.ifBlank { a.text() }).trim()
+                    val href = a.attr("href").trim()
+                    href.startsWith("http") && !href.contains("/category/") && !href.contains("/tag/") &&
+                        t.isNotBlank() && titleMatchesCandidate(t, lc.pageTitle)
+                } ?: return
 
-                        val postUrl = normalizeUrl(matched.attr("href"), base)
-                        val postHtml = safeGetText(postUrl, mapOf("Referer" to "$base/"), lc.timeoutSec, sourceTag = tag).orEmpty()
-                        if (postHtml.isBlank()) return@async
-                        val audioTag = extractAudioSummary(matched.text(), lc.pageTitle)
-                        val candidates = extractCandidateMediaAndEmbedUrls(postHtml, postUrl)
-                        resolveCandidatesInParallel(tag, candidates, postUrl, audioTag, lc, emitSub, emitLink, maxItems = 8)
-                    } catch (e: Exception) {
-                        logError(tag, base, e, "Mirror fetch exception")
-                    }
-                }
-            }.awaitAll()
+            val postUrl = normalizeUrl(matched.attr("href"), base)
+            val postHtml = safeGetText(postUrl, mapOf("Referer" to "$base/"), lc.timeoutSec, sourceTag = key).orEmpty()
+            if (postHtml.isBlank()) return
+            val audioTag = extractAudioSummary(matched.text(), lc.pageTitle)
+            val candidates = extractCandidateMediaAndEmbedUrls(postHtml, postUrl)
+            resolveCandidatesInParallel(tag, candidates, postUrl, audioTag, lc, emitSub, emitLink, maxItems = 8)
+        } catch (e: Exception) {
+            logError(key, base, e, "$tag fetch failed")
         }
     }
 
@@ -2807,9 +2794,9 @@ class MovieFoxProvider : MainAPI() {
                 for (plugin in plugins) {
                     if (lc.searchQueryTitle.isBlank()) continue
                     try {
-                        val hits = plugin.search(lc.searchQueryTitle)
+                        val hits = runCatching { plugin.search(lc.searchQueryTitle) }.getOrNull().orEmpty()
                         val hit = hits.firstOrNull { titleMatchesCandidate(it.name, lc.pageTitle) } ?: hits.firstOrNull() ?: continue
-                        val loadRes = plugin.load(hit.url) ?: continue
+                        val loadRes = runCatching { plugin.load(hit.url) }.getOrNull() ?: continue
                         val targetData = if (loadRes is TvSeriesLoadResponse) {
                             val sN = lc.season.toIntOrNull() ?: 1
                             val eN = lc.episode.toIntOrNull() ?: 1
