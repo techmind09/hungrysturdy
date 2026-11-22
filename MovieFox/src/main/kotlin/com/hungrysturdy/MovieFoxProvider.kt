@@ -230,32 +230,44 @@ class MovieFoxProvider : MainAPI() {
     private fun isExtOn(key: String): Boolean =
         CloudStreamApp.context?.let { MovieFoxSettingsDialog.isExtractorEnabled(it, key) } ?: true
 
+    private fun isJunkDynamicUrl(url: String): Boolean {
+        val low = url.lowercase()
+        return low.contains("google.com") ||
+            low.contains("gstatic.com") ||
+            low.contains("gravatar.com") ||
+            low.contains("cloudflare.com") ||
+            low.length < 10
+    }
+
     private suspend fun fetchDynamicDomain(fallback: String, key: String, registryKey: String = key): String {
-        dynamicDomainCache[key]?.let { return it }
+        dynamicDomainCache[key]?.let { if (!isJunkDynamicUrl(it)) return it }
         return try {
-            val fbRaw = runCatching { app.get(firebaseDomainsUrl, timeout = 5L).text }.getOrNull().orEmpty()
+            val fbRaw = runCatching { app.get(firebaseDomainsUrl, timeout = 4L).text }.getOrNull().orEmpty()
             val fbObj = runCatching { JSONObject(fbRaw) }.getOrNull()
             val fromFb = listOf(key, "${key}_url", "${key}_domain", registryKey)
-                .firstNotNullOfOrNull { k -> fbObj?.optString(k)?.trim()?.trimEnd('/')?.takeIf { it.startsWith("http") } }
+                .firstNotNullOfOrNull { k ->
+                    fbObj?.optString(k)?.trim()?.trimEnd('/')
+                        ?.takeIf { it.startsWith("http") && !isJunkDynamicUrl(it) }
+                }
             if (fromFb != null) {
                 dynamicDomainCache[key] = fromFb
                 return fromFb
             }
 
-            val raw = app.get(kaperwanUrlsJson, timeout = 6L).text
+            val raw = app.get(kaperwanUrlsJson, timeout = 5L).text
             val resolved = JSONObject(raw).optString(registryKey).trim().trimEnd('/')
-            if (resolved.startsWith("http")) {
+            if (resolved.startsWith("http") && !isJunkDynamicUrl(resolved)) {
                 dynamicDomainCache[key] = resolved
-                resolved
+                return resolved
+            }
+
+            val phRaw = runCatching { app.get(phisherDomainsUrl, timeout = 5L).text }.getOrNull().orEmpty()
+            val phResolved = runCatching { JSONObject(phRaw).optString(registryKey).trim().trimEnd('/') }.getOrNull().orEmpty()
+            if (phResolved.startsWith("http") && !isJunkDynamicUrl(phResolved)) {
+                dynamicDomainCache[key] = phResolved
+                phResolved
             } else {
-                val phRaw = runCatching { app.get(phisherDomainsUrl, timeout = 6L).text }.getOrNull().orEmpty()
-                val phResolved = runCatching { JSONObject(phRaw).optString(registryKey).trim().trimEnd('/') }.getOrNull().orEmpty()
-                if (phResolved.startsWith("http")) {
-                    dynamicDomainCache[key] = phResolved
-                    phResolved
-                } else {
-                    fallback
-                }
+                fallback
             }
         } catch (_: Exception) {
             fallback
@@ -346,6 +358,20 @@ class MovieFoxProvider : MainAPI() {
             lowUrl.contains("youtube.com") ||
             lowUrl.contains("youtu.be") ||
             lowLbl.contains("youtube")
+    }
+
+    private fun isJunkCandidateUrl(url: String): Boolean {
+        val low = url.lowercase()
+        return isAdUrl(url) ||
+            isYouTubeOrBlockedStream(url) ||
+            low.contains("gravatar.com") ||
+            low.contains("/assets/img/") ||
+            low.contains("/images/") ||
+            low.contains(".svg") ||
+            low.contains(".ico") ||
+            low.contains(".woff") ||
+            low.contains("&#038;") ||
+            low.contains("&amp;#038;")
     }
 
     private fun JSONObject.safeStr(key: String, fallback: String = ""): String {
@@ -1156,7 +1182,7 @@ class MovieFoxProvider : MainAPI() {
         Regex("""https?://[^\s"'<>\\)\]]+\.(?:m3u8|mpd|mp4|mkv|webm)(?:\?[^\s"'<>\\)\]]*)?""", RegexOption.IGNORE_CASE)
             .findAll(text).forEach { m ->
                 val u = normalizeUrl(m.value, baseUrl)
-                if (!isAdUrl(u) && !isYouTubeOrBlockedStream(u)) found.putIfAbsent(u, "DIRECT")
+                if (!isJunkCandidateUrl(u)) found.putIfAbsent(u, "DIRECT")
             }
 
         val hostPattern = Regex(
@@ -1165,13 +1191,13 @@ class MovieFoxProvider : MainAPI() {
         )
         hostPattern.findAll(text).forEach { m ->
             val u = normalizeUrl(m.value.trimEnd('.', ',', ';', ')', ']', '"', '\''), baseUrl)
-            if (!isAdUrl(u) && !isYouTubeOrBlockedStream(u)) found.putIfAbsent(u, "HOST")
+            if (!isJunkCandidateUrl(u)) found.putIfAbsent(u, "HOST")
         }
 
         Regex("""["']?(?:url|file|streamUrl|videoUrl|hls|dash|link|src|videoSource|securedLink)["']?\s*[:=]\s*["'](https?://[^"'\s<>\\]+|/[^"'\s<>\\]+)["']""", RegexOption.IGNORE_CASE)
             .findAll(text).forEach { m ->
                 val u = normalizeUrl(m.groupValues[1], baseUrl)
-                if (u.startsWith("http") && !isAdUrl(u) && !isYouTubeOrBlockedStream(u)) {
+                if (u.startsWith("http") && !isJunkCandidateUrl(u)) {
                     val kind = if (Regex("""(?i)\.(m3u8|mpd|mp4|mkv|webm)(\?|$)""").containsMatchIn(u)) "DIRECT" else "HOST"
                     found.putIfAbsent(u, kind)
                 }
@@ -1253,7 +1279,7 @@ class MovieFoxProvider : MainAPI() {
         emitLink: (ExtractorLink, Boolean) -> Unit,
         vegaOnlyFilter: Boolean = false
     ) {
-        if (!embedUrl.startsWith("http") || isAdUrl(embedUrl) || isYouTubeOrBlockedStream(embedUrl)) return
+        if (!embedUrl.startsWith("http") || isJunkCandidateUrl(embedUrl)) return
         if (embedUrl.contains("iqsmartgames", true)) {
             resolveIqsmartgamesDirect(siteTag, embedUrl, referer, audioTag, lc, emitLink)
             return
@@ -1262,7 +1288,7 @@ class MovieFoxProvider : MainAPI() {
         val wrappedCallback: (ExtractorLink) -> Unit = { ex ->
             val passVega = !vegaOnlyFilter ||
                 MovieFoxSettingsDialog.isVegaAllowedHost("${ex.name} ${ex.source} ${ex.url}")
-            if (passVega && !isYouTubeOrBlockedStream(ex.url, ex.name) && lc.seenUrls.add(ex.url)) {
+            if (passVega && !isJunkCandidateUrl(ex.url) && lc.seenUrls.add(ex.url)) {
                 val labeled = buildSourceLabel(siteTag, ex.name.ifBlank { ex.source }, audioTag)
                 val isStream = isStreamOrHlsLink(ex.url, ex.type)
                 val outLink = ExtractorLink(
@@ -1291,7 +1317,7 @@ class MovieFoxProvider : MainAPI() {
                 directList.forEach { srv ->
                     val passVega = !vegaOnlyFilter ||
                         MovieFoxSettingsDialog.isVegaAllowedHost("${srv.name} ${srv.url}")
-                    if (passVega) {
+                    if (passVega && !isJunkCandidateUrl(srv.url)) {
                         emitStream(
                             lc,
                             buildSourceLabel(siteTag, srv.name, audioTag),
@@ -1337,15 +1363,15 @@ class MovieFoxProvider : MainAPI() {
         lc: LinkContext,
         emitSub: (SubtitleFile) -> Unit,
         emitLink: (ExtractorLink, Boolean) -> Unit,
-        maxItems: Int = 10,
+        maxItems: Int = 6,
         vegaOnlyFilter: Boolean = false
     ) {
         val gate = Semaphore(5)
         supervisorScope {
-            candidates.take(maxItems).map { (u, kind) ->
+            candidates.filterNot { isJunkCandidateUrl(it.first) }.take(maxItems).map { (u, kind) ->
                 async(Dispatchers.IO) {
                     gate.withPermit {
-                        withTimeoutOrNull(14_000L) {
+                        withTimeoutOrNull(8_000L) {
                             try {
                                 if (kind == "DIRECT") {
                                     if (!vegaOnlyFilter || MovieFoxSettingsDialog.isVegaAllowedHost(u)) {
@@ -1495,7 +1521,7 @@ class MovieFoxProvider : MainAPI() {
                 synchronized(subLock) { subtitleCallback(sub) }
             }
             val emitLink: (ExtractorLink, Boolean) -> Unit = { link, isStream ->
-                if (!isYouTubeOrBlockedStream(link.url, link.name)) {
+                if (!isJunkCandidateUrl(link.url)) {
                     val allowedByMode = !(lc.downloadOnly && isStream)
                     val allowedByQuality = isQualityAllowed(lc, link.quality, link.name)
                     if (allowedByMode && allowedByQuality && link.url.startsWith("http")) {
@@ -1789,7 +1815,7 @@ class MovieFoxProvider : MainAPI() {
         emitLink: (ExtractorLink, Boolean) -> Unit,
         forceType: ExtractorLinkType? = null
     ) {
-        if (streamUrl.isBlank() || !streamUrl.startsWith("http") || isAdUrl(streamUrl) || isYouTubeOrBlockedStream(streamUrl, serverName)) return
+        if (streamUrl.isBlank() || !streamUrl.startsWith("http") || isJunkCandidateUrl(streamUrl) || serverName.contains("youtube", true)) return
         if (!lc.seenUrls.add(streamUrl)) return
         if (lc.downloadOnly && isHls) return
 
@@ -1864,7 +1890,7 @@ class MovieFoxProvider : MainAPI() {
             val rawStreamUrl = st.safeStr("url").ifBlank { st.safeStr("file") }.ifBlank { st.safeStr("streamUrl") }
             if (rawStreamUrl.isBlank()) continue
             val streamUrl = normalizeUrl(rawStreamUrl)
-            if (isAdUrl(streamUrl) || isYouTubeOrBlockedStream(streamUrl)) continue
+            if (isJunkCandidateUrl(streamUrl)) continue
 
             st.optJSONArray("subtitles")?.let { subs ->
                 for (k in 0 until subs.length()) {
@@ -2022,7 +2048,7 @@ class MovieFoxProvider : MainAPI() {
                                 .mapNotNull { el ->
                                     val href = el.attr("href").trim()
                                     val btnText = el.text().trim()
-                                    if (href.startsWith("http") &&
+                                    if (href.startsWith("http") && !isJunkCandidateUrl(href) &&
                                         (MovieFoxSettingsDialog.isVegaAllowedHost("$btnText $href") || GokuHDSources.isServerLink(href))
                                     ) href else null
                                 }
@@ -3185,7 +3211,7 @@ class MovieFoxProvider : MainAPI() {
                         } else (loadRes as? MovieLoadResponse)?.dataUrl ?: hit.url
                         if (targetData != null) {
                             plugin.loadLinks(targetData, isCasting, emitSub) { ex ->
-                                if (!isYouTubeOrBlockedStream(ex.url, ex.name) && lc.seenUrls.add(ex.url) && isQualityAllowed(lc, ex.quality, ex.name)) {
+                                if (!isJunkCandidateUrl(ex.url) && lc.seenUrls.add(ex.url) && isQualityAllowed(lc, ex.quality, ex.name)) {
                                     emitLink(ex, isStreamOrHlsLink(ex.url, ex.type))
                                 }
                             }
