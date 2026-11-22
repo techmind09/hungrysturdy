@@ -1,3 +1,4 @@
+
 package com.hungrysturdy
 
 import android.content.Context
@@ -419,8 +420,32 @@ object MovieFoxCineStream {
         var emitted = false
         val lock = Any()
 
+        val runnerPayload = CsAllLoadLinksData(
+            title = title.ifBlank { null },
+            imdbId = imdbId.takeIf { it.startsWith("tt") },
+            tmdbId = tmdbId?.toIntOrNull(),
+            season = if (isTv) season else null,
+            episode = if (isTv) episode else null,
+            isAnime = title.contains("anime", true),
+            isAsian = title.contains("drama", true) || title.contains("k-drama", true)
+        )
+
         supervisorScope {
-            addonBases.map { base ->
+            val runnerJob = async(Dispatchers.IO) {
+                withTimeoutOrNull(timeoutSec * 1000L) {
+                    val wrappedCb: (ExtractorLink) -> Unit = { ex ->
+                        synchronized(lock) { emitted = true }
+                        callback(ex)
+                    }
+                    if (runnerPayload.isAnime) {
+                        MovieFoxCineStreamExtractors.runAnimeSources(runnerPayload, subtitleCallback, wrappedCb)
+                    } else {
+                        MovieFoxCineStreamExtractors.runStandardSources(runnerPayload, subtitleCallback, wrappedCb)
+                    }
+                }
+            }
+
+            val addonJobs = addonBases.map { base ->
                 async(Dispatchers.IO) {
                     gate.withPermit {
                         withTimeoutOrNull(timeoutSec * 1000L) {
@@ -490,9 +515,9 @@ object MovieFoxCineStream {
                         }
                     }
                 }
-            }.awaitAll()
+            }
+            (listOf(runnerJob) + addonJobs).awaitAll()
         }
         return emitted
     }
 }
-
