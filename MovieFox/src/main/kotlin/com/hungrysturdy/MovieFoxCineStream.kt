@@ -1,3 +1,4 @@
+
 package com.hungrysturdy
 
 import android.content.Context
@@ -222,7 +223,9 @@ object MovieFoxCineStream {
                                     isTv -> TvType.TvSeries
                                     else -> TvType.Movie
                                 }
-                                val poster = posterOf(m.optString("poster"))
+                                val rawPoster = m.optString("poster").trim().takeIf { it.isNotBlank() && it != "null" }
+                                    ?: if (id.startsWith("tt")) "https://images.metahub.space/poster/medium/$id/img" else null
+                                val poster = posterOf(rawPoster)
                                 val rating = m.optString("imdbRating").takeIf { it.isNotBlank() && it != "null" }
                                 val encoded = encodePassData(id, rawType, cat.isAnime || tvType == TvType.Anime, title, poster, rating)
                                 if (isTv) {
@@ -241,7 +244,7 @@ object MovieFoxCineStream {
                                     )
                                 }
                             }
-                            if (items.isEmpty()) null else HomePageList("🎬 ${cat.name}", items)
+                            if (items.isEmpty()) null else HomePageList(cat.name, items)
                         } catch (e: Exception) {
                             Log.d("MovieFoxCineStream", "Catalog ${cat.name} failed: ${e.message}")
                             null
@@ -328,12 +331,17 @@ object MovieFoxCineStream {
         }
 
         val aliases = parseStringList(meta?.optJSONArray("aliases"))
-        val title = aliases.firstOrNull()
-            ?: meta?.optString("name")?.trim().orEmpty().ifBlank { pass.title }.ifBlank { "CineStream Title" }
-        val posterUrl = posterOf(meta?.optString("poster")) ?: pass.poster
-        val backgroundUrl = posterOf(meta?.optString("background"))
+        val title = meta?.optString("name")?.trim()?.takeIf { it.isNotBlank() && it != "null" }
+            ?: aliases.firstOrNull()
+            ?: pass.title.takeIf { it.isNotBlank() }
+            ?: pass.id
+        val posterUrl = posterOf(meta?.optString("poster"))
+            ?: pass.poster
+            ?: if (resolvedImdb.startsWith("tt")) posterOf("https://images.metahub.space/poster/medium/$resolvedImdb/img") else null
+        val backgroundUrl = posterOf(meta?.optString("background")) ?: posterUrl
         val logoUrl = posterOf(meta?.optString("logo"))
         val plot = meta?.optString("description")?.trim()?.takeIf { it.isNotBlank() && it != "null" }
+            ?: "$title (${pass.type.replaceFirstChar { it.uppercase() }})"
         val genres = parseStringList(meta?.optJSONArray("genre")).ifEmpty { parseStringList(meta?.optJSONArray("genres")) }
         val ratingStr = meta?.optString("imdbRating")?.trim()?.takeIf { it.isNotBlank() && it != "null" } ?: pass.rating
         val yearStr = meta?.optString("year")?.trim()?.takeIf { it.isNotBlank() && it != "null" }
@@ -378,7 +386,7 @@ object MovieFoxCineStream {
                 val eNum = v.optInt("episode", 0)
                 if (sNum <= 0 || eNum <= 0) continue
                 val epName = v.optString("name").trim().ifBlank { v.optString("title").trim() }.ifBlank { "Episode $eNum" }
-                val epThumb = posterOf(v.optString("thumbnail"))
+                val epThumb = posterOf(v.optString("thumbnail")) ?: posterUrl
                 val epDesc = v.optString("overview").trim().takeIf { it.isNotBlank() && it != "null" }
                 val epData = JSONObject().apply {
                     put("url", rawUrl)
