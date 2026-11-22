@@ -71,7 +71,20 @@ class MovieFoxProvider : MainAPI() {
         "https://rogmovies.autos"
     )
 
-    private val bollyflixMirrors = listOf("https://bollyflix.frl")
+    private val bollyflixMirrors = listOf(
+        "https://new1.bollyflix.tours",
+        "https://bollyflix.frl"
+    )
+
+    private val extraIndianMirrors = listOf(
+        "BollyHQ" to "https://bolly-hq.info",
+        "MoviesDrive" to "https://new4.moviesdrive.cyou",
+        "FilmyFly" to "https://filmyfly.kred",
+        "FilmyKing" to "https://filmyking.co",
+        "MyFilms" to "https://myfilms.pro",
+        "VipFilm" to "https://vipfilm.pro",
+        "KMmovies" to "https://kmmovies.quest"
+    )
 
     private val sflixWebDomains = listOf(
         "https://sflix.film",
@@ -269,7 +282,6 @@ class MovieFoxProvider : MainAPI() {
         return null
     }
 
-    // Prevents ExoPlayer 3002 (ERROR_CODE_PARSING_MANIFEST_MALFORMED) when server returns HTML error instead of M3U8/MPD
     private suspend fun isValidManifestResponse(url: String, headers: Map<String, String>): Boolean {
         val isManifest = url.contains(".m3u8", true) || url.contains(".mpd", true) || url.contains("/playlist", true)
         if (!isManifest) return true
@@ -771,7 +783,6 @@ class MovieFoxProvider : MainAPI() {
     private fun isM3u8Stream(url: String, typeHint: String): Boolean =
         isStreamOrHlsLink(url, ExtractorLinkType.M3U8, typeHint)
 
-    // Flexible title normalization so MovieFox titles with colons, years, or subtitles match every server
     private fun cleanSearchTitle(raw: String): String {
         return raw
             .replace(Regex("""\s*\((?:19|20)\d{2}\)\s*"""), " ")
@@ -797,7 +808,6 @@ class MovieFoxProvider : MainAPI() {
         if (cNorm.isBlank() || tNorm.isBlank()) return false
         if (cNorm == tNorm || cNorm.contains(tNorm) || tNorm.contains(cNorm)) return true
 
-        // Also compare main title before colon/dash (e.g., "Dune: Part Two" vs "Dune")
         val tBase = normalizeTitleKey(targetTitle.substringBefore(":").substringBefore(" - "))
         val cBase = normalizeTitleKey(candidateTitle?.substringBefore(":")?.substringBefore(" - "))
         if (tBase.length >= 3 && cBase.isNotBlank() && (cBase == tBase || cBase.contains(tBase) || tBase.contains(cBase))) {
@@ -1161,6 +1171,18 @@ class MovieFoxProvider : MainAPI() {
                         Unit
                     })
                 }
+                if (lc.searchQueryTitle.isNotBlank()) {
+                    tasks.add(async(Dispatchers.IO) {
+                        workerSemaphore.withPermit {
+                            withTimeoutOrNull(deepBudgetMs) {
+                                runCatching {
+                                    fetchExtraIndianMirrors(lc, emitSub, emitLink)
+                                }
+                            }
+                        }
+                        Unit
+                    })
+                }
                 tasks.awaitAll()
             }
 
@@ -1206,6 +1228,37 @@ class MovieFoxProvider : MainAPI() {
         }
     }
 
+    private suspend fun fetchExtraIndianMirrors(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        val q = safeEncode(lc.searchQueryTitle)
+        supervisorScope {
+            extraIndianMirrors.map { (tag, base) ->
+                async(Dispatchers.IO) {
+                    val searchHtml = safeGetText("$base/?s=$q", mapOf("Referer" to "$base/"), lc.timeoutSec).orEmpty()
+                    if (searchHtml.isBlank()) return@async
+                    val doc = Jsoup.parse(searchHtml, base)
+                    val matched = doc.select("article a[href], .post a[href], .ml-item a[href], h2 a[href], h3 a[href]")
+                        .firstOrNull { a ->
+                            val t = (a.attr("title").ifBlank { a.selectFirst("h2, h3")?.text().orEmpty() }.ifBlank { a.text() }).trim()
+                            val href = a.attr("href").trim()
+                            href.startsWith("http") && !href.contains("/category/") && !href.contains("/tag/") &&
+                                t.isNotBlank() && titleMatchesCandidate(t, lc.pageTitle)
+                        } ?: return@async
+
+                    val postUrl = normalizeUrl(matched.attr("href"), base)
+                    val postHtml = safeGetText(postUrl, mapOf("Referer" to "$base/"), lc.timeoutSec).orEmpty()
+                    if (postHtml.isBlank()) return@async
+                    val audioTag = extractAudioSummary(matched.text(), lc.pageTitle)
+                    val candidates = extractCandidateMediaAndEmbedUrls(postHtml, postUrl)
+                    resolveCandidatesInParallel(tag, candidates, postUrl, audioTag, lc, emitSub, emitLink, maxItems = 8)
+                }
+            }.awaitAll()
+        }
+    }
+
     private suspend fun emitStream(
         lc: LinkContext,
         serverName: String,
@@ -1223,7 +1276,6 @@ class MovieFoxProvider : MainAPI() {
         val resolvedQuality = getQuality(qualityStr ?: serverName)
         if (!isQualityAllowed(lc, resolvedQuality, qualityStr ?: serverName)) return
 
-        // Validate manifest before sending to ExoPlayer to stop 3002 MALFORMED errors
         if (isHls && !isValidManifestResponse(streamUrl, customHeaders)) return
 
         val audioSummary = extractAudioSummary(qualityStr, serverName, lc.pageTitle)
@@ -1410,7 +1462,6 @@ class MovieFoxProvider : MainAPI() {
         }
     }
 
-    // --- VegaMovies / RogMovies: Strictly Pixeldrain, FSL, FSL2, GDrive only ---
     private suspend fun fetchVegaMoviesResolved(
         lc: LinkContext,
         emitSub: (SubtitleFile) -> Unit,
@@ -1440,7 +1491,6 @@ class MovieFoxProvider : MainAPI() {
                         val audioTag = extractAudioSummary(chosenTitle)
                         val siteTag = if (dom.contains("rogmovies", true)) "RogMovies" else "VegaMovies"
 
-                        // Strictly filter links to Pixeldrain, FSL, FSL2, GDrive/GDFlix/HubCloud
                         val candidateHrefs = Jsoup.parse(postHtml, chosenUrl).select("a[href]")
                             .mapNotNull { el ->
                                 val href = el.attr("href").trim()
@@ -1470,7 +1520,6 @@ class MovieFoxProvider : MainAPI() {
         }
     }
 
-    // --- HindiDrama (hindidrama.net) ---
     private suspend fun fetchHindiDrama(
         lc: LinkContext,
         emitSub: (SubtitleFile) -> Unit,
@@ -1576,7 +1625,6 @@ class MovieFoxProvider : MainAPI() {
         }
     }
 
-    // --- Bollyflix ---
     private suspend fun fetchBollyflix(
         lc: LinkContext,
         emitSub: (SubtitleFile) -> Unit,
@@ -1584,8 +1632,8 @@ class MovieFoxProvider : MainAPI() {
     ) {
         if (lc.searchQueryTitle.isBlank()) return
         val q = safeEncode(lc.searchQueryTitle)
-        val dynUrl = fetchDynamicDomain("https://bollyflix.frl", "bollyflix")
-        val domains = (listOf(dynUrl) + bollyflixMirrors).distinct()
+        val dynUrl = fetchDynamicDomain("https://new1.bollyflix.tours", "bollyflix")
+        val domains = (bollyflixMirrors + listOf(dynUrl)).distinct()
 
         for (dom in domains) {
             val searchHtml = safeGetText("$dom/search/$q/page/1/", mapOf("Referer" to "$dom/"), lc.timeoutSec).orEmpty()
@@ -1714,7 +1762,6 @@ class MovieFoxProvider : MainAPI() {
                 val dataObj = runCatching { JSONObject(playText).optJSONObject("data") }.getOrNull() ?: continue
                 var any = false
 
-                // Emit HLS and MP4 first before DASH to prevent 4001 MediaCodec decoder crash
                 listOf("hls" to "HLS", "streams" to "MP4", "dash" to "DASH").forEach { (k, kind) ->
                     dataObj.optJSONArray(k)?.let { arr ->
                         for (i in 0 until arr.length()) {
