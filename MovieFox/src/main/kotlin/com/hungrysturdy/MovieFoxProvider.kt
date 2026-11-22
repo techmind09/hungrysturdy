@@ -700,6 +700,13 @@ class MovieFoxProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
+        val ctx = CloudStreamApp.context
+        val movieFoxEnabled = ctx?.let { MovieFoxSettingsDialog.isServerEnabled(it, "moviefox") } ?: true
+        if (!movieFoxEnabled && ctx != null && MovieFoxSettingsDialog.isServerEnabled(ctx, "cinestream")) {
+            val csResults = MovieFoxCineStream.search(this, query)
+            if (csResults.isNotEmpty()) return csResults
+        }
+
         val timeoutSec = currentTimeoutSec()
         val encoded = safeEncode(query)
         val html = safeGetText("$mainUrl/search?q=$encoded", timeoutSec = timeoutSec, sourceTag = "moviefox").orEmpty()
@@ -783,6 +790,10 @@ class MovieFoxProvider : MainAPI() {
 
     override suspend fun load(url: String): LoadResponse {
         val timeoutSec = currentTimeoutSec()
+        if (MovieFoxCineStream.isCineStreamData(url)) {
+            MovieFoxCineStream.load(this, url, timeoutSec)?.let { return it }
+        }
+
         val responseText = safeGetText(url, timeoutSec = timeoutSec, sourceTag = "moviefox").orEmpty()
         val type = when {
             url.contains("/anime/") -> TvType.Anime
