@@ -14,6 +14,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
@@ -156,6 +157,7 @@ class MovieFoxProvider : MainAPI() {
 
     private val dynamicDomainCache = ConcurrentHashMap<String, String>()
     private val cs3PluginCache = ConcurrentHashMap<String, List<MainAPI>>()
+    private val cs3DownloadLocks = ConcurrentHashMap<String, Mutex>()
 
     private val multiAudioRegex = Regex(
         """(?i)\b(hindi|english|tamil|telugu|kannada|malayalam|punjabi|marathi|bengali|urdu|gujarati|""" +
@@ -1566,7 +1568,7 @@ class MovieFoxProvider : MainAPI() {
             }
 
             val orderedKeys = (appCtx?.let { MovieFoxSettingsDialog.getOrderedEnabledKeys(it) }
-                ?: MovieFoxDialogHelperFallbackKeys).distinct()
+                ?: MovieFoxSettingsDialog.BASE_SERVERS.map { it.key }).distinct()
 
             val prioritizedKeys = orderedKeys.filter { it.lowercase() in fastWaveKeys } +
                 orderedKeys.filterNot { it.lowercase() in fastWaveKeys }
@@ -1601,9 +1603,6 @@ class MovieFoxProvider : MainAPI() {
             false
         }
     }
-
-    private val MovieFoxDialogHelperFallbackKeys: List<String>
-        get() = MovieFoxSettingsDialog.BASE_SERVERS.map { it.key }
 
     private suspend fun runServerKey(
         srvKey: String,
@@ -3237,78 +3236,108 @@ class MovieFoxProvider : MainAPI() {
         val baseProbe = normalizeUrl(cs3Srv.probeUrl, mainUrl)
         if (baseProbe.isBlank()) return
 
-        if (baseProbe.substringBefore("?").endsWith(".cs3", true)) {
-            val plugins = cs3PluginCache.getOrPut(baseProbe) {
-                try {
+        val cleanArchiveUrl = baseProbe.substringBefore("?")
+        if (cleanArchiveUrl.endsWith(".cs3", true) || cleanArchiveUrl.endsWith(".sky", true)) {
+            val lock = cs3DownloadLocks.getOrPut(cleanArchiveUrl) { Mutex() }
+            val plugins = lock.withPermitCompat {
+                cs3PluginCache[cleanArchiveUrl]?.let { return@withPermitCompat it }
+                val loadedList = try {
                     val dir = File(ctx.codeCacheDir, "mf_cs3_plugins").apply { mkdirs() }
-                    val hash = MessageDigest.getInstance("MD5").digest(baseProbe.toByteArray()).joinToString("") { "%02x".format(it) }
-                    val file = File(dir, "$hash.cs3")
+                    val hash = MessageDigest.getInstance("MD5").digest(cleanArchiveUrl.toByteArray()).joinToString("") { "%02x".format(it) }
+                    val ext = if (cleanArchiveUrl.endsWith(".sky", true)) "sky" else "cs3"
+                    val file = File(dir, "$hash.$ext")
                     if (!file.exists() || file.length() == 0L) {
-                        val res = app.get(baseProbe, headers = mapOf("User-Agent" to USER_AGENT), timeout = lc.timeoutSec)
+                        val res = app.get(
+                            cleanArchiveUrl,
+                            headers = mapOf("User-Agent" to USER_AGENT, "Accept" to "application/octet-stream, */*"),
+                            timeout = 12L
+                        )
                         if (res.code in 200..299) {
                             val bytes = res.body.bytes()
-                            if (bytes.isNotEmpty()) file.writeBytes(bytes)
+                            if (bytes.isNotEmpty()) {
+                                file.writeBytes(bytes)
+                                runCatching { file.setReadOnly() }
+                            }
                         } else {
-                            logError("CS3Plugin", baseProbe, null, "HTTP ${res.code}")
+                            logError("CS3Plugin", cleanArchiveUrl, null, "HTTP ${res.code}")
                             runCatching { res.okhttpResponse.close() }
                         }
                     }
-                    if (!file.exists() || file.length() == 0L) return@getOrPut emptyList()
-                    val clsNames = mutableListOf<String>()
-                    ZipFile(file).use { zf ->
-                        val en = zf.entries()
-                        while (en.hasMoreElements()) {
-                            val entry = en.nextElement()
-                            if (!entry.isDirectory && entry.name.endsWith(".dex", true)) {
-                                val dexStr = String(zf.getInputStream(entry).readBytes(), Charsets.ISO_8859_1)
-                                Regex("""L([a-zA-Z0-9_/]+/[A-Z][a-zA-Z0-9_]+(?:Provider|Plugin|Source));""").findAll(dexStr).forEach {
-                                    clsNames.add(it.groupValues[1].replace('/', '.'))
+                    if (!file.exists() || file.length() == 0L) {
+                        emptyList()
+                    } else {
+                        runCatching { file.setReadOnly() }
+                        val clsNames = mutableListOf<String>()
+                        runCatching {
+                            ZipFile(file).use { zf ->
+                                val en = zf.entries()
+                                while (en.hasMoreElements()) {
+                                    val entry = en.nextElement()
+                                    if (!entry.isDirectory && entry.name.endsWith(".dex", true)) {
+                                        val dexStr = String(zf.getInputStream(entry).readBytes(), Charsets.ISO_8859_1)
+                                        Regex("""L([a-zA-Z0-9_/]+/[A-Z][a-zA-Z0-9_]+(?:Provider|Plugin|Source));""").findAll(dexStr).forEach {
+                                            clsNames.add(it.groupValues[1].replace('/', '.'))
+                                        }
+                                    }
                                 }
                             }
                         }
-                    }
-                    val optDir = File(dir, "opt_$hash").apply { mkdirs() }
-                    val loader = DexClassLoader(file.absolutePath, optDir.absolutePath, null, MovieFoxProvider::class.java.classLoader)
-                    clsNames.distinct().mapNotNull { name ->
-                        runCatching {
-                            val clz = loader.loadClass(name)
-                            if (!Modifier.isAbstract(clz.modifiers) && MainAPI::class.java.isAssignableFrom(clz)) {
-                                clz.getDeclaredConstructor().newInstance() as MainAPI
-                            } else null
-                        }.getOrNull()
+                        if (clsNames.isEmpty()) {
+                            emptyList()
+                        } else {
+                            val optDir = File(dir, "opt_$hash").apply { mkdirs() }
+                            val loader = DexClassLoader(file.absolutePath, optDir.absolutePath, null, MovieFoxProvider::class.java.classLoader)
+                            clsNames.distinct().mapNotNull { name ->
+                                runCatching {
+                                    val clz = loader.loadClass(name)
+                                    if (!Modifier.isAbstract(clz.modifiers) && MainAPI::class.java.isAssignableFrom(clz)) {
+                                        clz.getDeclaredConstructor().newInstance() as MainAPI
+                                    } else null
+                                }.getOrNull()
+                            }
+                        }
                     }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    logError("CS3Plugin", baseProbe, e, "DexClassLoader load failed")
+                    logError("CS3Plugin", cleanArchiveUrl, e, "DexClassLoader load failed")
                     emptyList()
                 }
+                if (loadedList.isNotEmpty()) {
+                    cs3PluginCache[cleanArchiveUrl] = loadedList
+                }
+                loadedList
             }
 
+            if (plugins.isEmpty()) return
+
+            val targetPlugin = plugins.firstOrNull { p ->
+                p.name.equals(cs3Srv.name, ignoreCase = true) ||
+                    p.javaClass.simpleName.contains(cs3Srv.name.replace(" ", ""), ignoreCase = true)
+            } ?: plugins.first()
+
             withContext(Dispatchers.IO) {
-                for (plugin in plugins) {
-                    if (lc.searchQueryTitle.isBlank()) continue
-                    try {
-                        val hits = runCatching { plugin.search(lc.searchQueryTitle) }.getOrNull().orEmpty()
-                        val hit = hits.firstOrNull { titleMatchesCandidate(it.name, lc.pageTitle) } ?: hits.firstOrNull() ?: continue
-                        val loadRes = runCatching { plugin.load(hit.url) }.getOrNull() ?: continue
-                        val targetData = if (loadRes is TvSeriesLoadResponse) {
-                            val sN = lc.season.toIntOrNull() ?: 1
-                            val eN = lc.episode.toIntOrNull() ?: 1
-                            loadRes.episodes.firstOrNull { it.season == sN && it.episode == eN }?.data ?: loadRes.episodes.firstOrNull()?.data
-                        } else (loadRes as? MovieLoadResponse)?.dataUrl ?: hit.url
-                        if (targetData != null) {
-                            plugin.loadLinks(targetData, isCasting, emitSub) { ex ->
-                                if (!isJunkCandidateUrl(ex.url) && lc.seenUrls.add(ex.url) && isQualityAllowed(lc, ex.quality, ex.name)) {
-                                    emitLink(ex, isStreamOrHlsLink(ex.url, ex.type))
-                                }
+                if (lc.searchQueryTitle.isBlank()) return@withContext
+                try {
+                    val hits = runCatching { targetPlugin.search(lc.searchQueryTitle) }.getOrNull().orEmpty()
+                    val hit = hits.firstOrNull { titleMatchesCandidate(it.name, lc.pageTitle) } ?: hits.firstOrNull() ?: return@withContext
+                    val loadRes = runCatching { targetPlugin.load(hit.url) }.getOrNull() ?: return@withContext
+                    val targetData = if (loadRes is TvSeriesLoadResponse) {
+                        val sN = lc.season.toIntOrNull() ?: 1
+                        val eN = lc.episode.toIntOrNull() ?: 1
+                        loadRes.episodes.firstOrNull { it.season == sN && it.episode == eN }?.data ?: loadRes.episodes.firstOrNull()?.data
+                    } else (loadRes as? MovieLoadResponse)?.dataUrl ?: hit.url
+                    if (targetData != null) {
+                        targetPlugin.loadLinks(targetData, isCasting, emitSub) { ex ->
+                            if (!isJunkCandidateUrl(ex.url) && lc.seenUrls.add(ex.url) && isQualityAllowed(lc, ex.quality, ex.name)) {
+                                emitLink(ex, isStreamOrHlsLink(ex.url, ex.type))
                             }
                         }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        logError("CS3•${plugin.name}", plugin.mainUrl, e, "Plugin execution failed")
                     }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logError("CS3•${targetPlugin.name}", targetPlugin.mainUrl, e, "Plugin execution failed")
                 }
             }
             return
@@ -3322,6 +3351,15 @@ class MovieFoxProvider : MainAPI() {
             parseAndEmitApiJson("CS3 • ${cs3Srv.name}", body, lc, lc.baseHeaders, emitSub, emitLink)
         } else {
             resolveCandidatesInParallel("CS3 • ${cs3Srv.name}", extractCandidateMediaAndEmbedUrls(body, queryUrl), queryUrl, "", lc, emitSub, emitLink)
+        }
+    }
+
+    private suspend inline fun <T> Mutex.withPermitCompat(action: () -> T): T {
+        lock()
+        return try {
+            action()
+        } finally {
+            unlock()
         }
     }
 }
