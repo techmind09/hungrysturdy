@@ -1,21 +1,29 @@
-
 package com.hungrysturdy
 
 import android.content.Context
 import android.net.Uri
+import android.util.Base64
 import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
+import org.jsoup.Jsoup
 import java.net.URLEncoder
+import java.security.SecureRandom
+import javax.crypto.Cipher
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 object MovieFoxCineStream {
 
@@ -26,6 +34,13 @@ object MovieFoxCineStream {
     const val IMAGE_PROXY = "https://wsrv.nl/?url="
     const val TORRENTIO_URL = "https://torrentio.strem.fun/limit=4"
     const val TORRENTSDB_URL = "https://torrentsdb.com/eyJsaW1pdCI6IjMiLCJkZWJyaWRvcHRpb25zIjpbIm5vZG93bmxvYWRsaW5rcyJdfQ=="
+    const val VIDEASY_API = "https://api.speedracelight.com"
+    const val HEXA_API = "https://theemoviedb.hexa.su"
+    const val VIDZEE_API = "https://player.vidzee.wtf"
+    const val VIDROCK_API = "https://vidrock.ru"
+    const val KISSKH_API = "https://kisskh.nl"
+    const val ANIMESALT_API = "https://animesalt.ac"
+    const val MULTI_DECRYPT_API = "https://enc-dec.app/api"
 
     private const val CS_SCHEME = "cstream://"
 
@@ -118,6 +133,51 @@ object MovieFoxCineStream {
         }
     }
 
+    private fun qualityOf(str: String?): Int {
+        if (str.isNullOrBlank()) return Qualities.Unknown.value
+        Regex("""(\d{3,4})[pP]""").find(str)?.groupValues?.getOrNull(1)?.toIntOrNull()?.let { return it }
+        val low = str.lowercase()
+        return when {
+            low.contains("8k") -> 4320
+            low.contains("4k") || low.contains("uhd") -> 2160
+            low.contains("2k") -> 1440
+            else -> Qualities.Unknown.value
+        }
+    }
+
+    private fun decryptVidrockPayload(payload: String): String? = runCatching {
+        val keyHex = "7f3e9c2a8b5d1f4e6a9c3b7d2e5f8a1c4b6d9e2f5a8c1b4d7e9f2a5c8b1d4e7f"
+        val keyBytes = keyHex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+        var b64 = payload.replace("-", "+").replace("_", "/")
+        while (b64.length % 4 != 0) b64 += "="
+        val data = Base64.decode(b64, Base64.DEFAULT)
+        val nonce = data.copyOfRange(0, 12)
+        val ct = data.copyOfRange(12, data.size)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), GCMParameterSpec(128, nonce))
+        String(cipher.doFinal(ct), Charsets.UTF_8)
+    }.getOrNull()
+
+    private suspend fun <A, B> Iterable<A>.csSafeMap(concurrency: Int = 6, block: suspend (A) -> B?): List<B> =
+        supervisorScope {
+            val sem = Semaphore(concurrency)
+            map { item ->
+                async(Dispatchers.IO) {
+                    sem.withPermit {
+                        try {
+                            block(item)
+                        } catch (e: CancellationException) {
+                            if (!isActive) throw e
+                            null
+                        } catch (e: Exception) {
+                            Log.d("MovieFoxCineStream", "csSafeMap error: ${e.message}")
+                            null
+                        }
+                    }
+                }
+            }.awaitAll().filterNotNull()
+        }
+
     suspend fun getHomeCategories(
         provider: MovieFoxProvider,
         ctx: Context,
@@ -147,7 +207,7 @@ object MovieFoxCineStream {
                     withTimeoutOrNull(timeoutSec * 1000L) {
                         try {
                             val url = cat.templateUrl.replace("###", skip.toString())
-                            val text = app.get(url, headers = headers, timeout = timeoutSec).text
+                            val text = MovieFoxInAppCfBypass.get(url, headers, timeoutSec = timeoutSec)
                             val root = JSONObject(text)
                             val metas: JSONArray = root.optJSONArray("metas") ?: return@withTimeoutOrNull null
                             val items = ArrayList<SearchResponse>(metas.length())
@@ -209,7 +269,7 @@ object MovieFoxCineStream {
             endpoints.map { (url, isAnime) ->
                 async(Dispatchers.IO) {
                     runCatching {
-                        val text = app.get(url, headers = headers, timeout = 8L).text
+                        val text = MovieFoxInAppCfBypass.get(url, headers, timeoutSec = 8L)
                         val metas = JSONObject(text).optJSONArray("metas") ?: return@runCatching emptyList<SearchResponse>()
                         (0 until metas.length()).mapNotNull { idx ->
                             val m = metas.optJSONObject(idx) ?: return@mapNotNull null
@@ -251,9 +311,7 @@ object MovieFoxCineStream {
         val encodedId = if (isKitsu) pass.id.replace(":", "%3A") else Uri.encode(pass.id)
 
         val headers = mapOf("User-Agent" to MovieFoxSettingsDialog.CF_BYPASS_UA, "Accept" to "application/json")
-        val metaText = runCatching {
-            app.get("$metaBase/meta/$cleanMetaType/$encodedId.json", headers = headers, timeout = timeoutSec).text
-        }.getOrNull().orEmpty()
+        val metaText = MovieFoxInAppCfBypass.get("$metaBase/meta/$cleanMetaType/$encodedId.json", headers, timeoutSec = timeoutSec)
         val meta = runCatching { JSONObject(metaText).optJSONObject("meta") }.getOrNull()
 
         var resolvedImdb = meta?.optString("imdb_id")?.trim().orEmpty().ifBlank {
@@ -263,7 +321,7 @@ object MovieFoxCineStream {
 
         if (isKitsu && !kitsuId.isNullOrBlank()) {
             runCatching {
-                val extText = app.get("$HAGLUND_URL/ids?source=kitsu&id=$kitsuId", headers = headers, timeout = 6L).text
+                val extText = MovieFoxInAppCfBypass.get("$HAGLUND_URL/ids?source=kitsu&id=$kitsuId", headers, timeoutSec = 6L)
                 val extObj = JSONObject(extText)
                 val extImdb = extObj.optString("imdb").trim()
                 val extTmdb = extObj.optInt("themoviedb", 0).takeIf { it > 0 }
@@ -375,6 +433,95 @@ object MovieFoxCineStream {
         }
     }
 
+    private suspend fun fetchExtraCineStreamServers(
+        title: String,
+        tmdbInt: Int?,
+        imdbId: String,
+        isTv: Boolean,
+        season: Int,
+        episode: Int,
+        timeoutSec: Long,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit,
+        onEmitted: () -> Unit
+    ) {
+        val headers = mapOf(
+            "User-Agent" to MovieFoxSettingsDialog.CF_BYPASS_UA,
+            "Accept" to "*/*",
+            "Origin" to "https://player.videasy.to",
+            "Referer" to "https://player.videasy.to/"
+        )
+
+        if (tmdbInt != null && title.isNotBlank()) {
+            val seedText = MovieFoxInAppCfBypass.get("$VIDEASY_API/seed?mediaId=$tmdbInt", headers, timeoutSec = 6L)
+            val seed = runCatching { JSONObject(seedText).optString("seed") }.getOrDefault("")
+            if (seed.isNotBlank()) {
+                val encTitle = URLEncoder.encode(URLEncoder.encode(title, "UTF-8").replace("+", "%20"), "UTF-8").replace("+", "%20")
+                listOf("myflixerzupcloud", "downloader2", "m4uhd", "hdmovie", "cdn", "superflix").csSafeMap(5) { srv ->
+                    val u = if (!isTv) {
+                        "$VIDEASY_API/$srv/sources-with-title?title=$encTitle&mediaType=movie&tmdbId=$tmdbInt&imdbId=$imdbId&enc=2&seed=$seed"
+                    } else {
+                        "$VIDEASY_API/$srv/sources-with-title?title=$encTitle&mediaType=tv&tmdbId=$tmdbInt&episodeId=$episode&seasonId=$season&imdbId=$imdbId&enc=2&seed=$seed"
+                    }
+                    val encData = MovieFoxInAppCfBypass.get(u, headers, timeoutSec = minOf(timeoutSec, 8L))
+                    if (encData.isBlank()) return@csSafeMap null
+                    val decRaw = MovieFoxInAppCfBypass.post(
+                        "$MULTI_DECRYPT_API/dec-videasy",
+                        json = mapOf("text" to encData, "id" to tmdbInt, "seed" to seed),
+                        timeoutSec = minOf(timeoutSec, 8L)
+                    )
+                    val resObj = runCatching { JSONObject(decRaw).optJSONObject("result") }.getOrNull() ?: return@csSafeMap null
+                    val arr = resObj.optJSONArray("sources") ?: JSONArray()
+                    for (i in 0 until arr.length()) {
+                        val o = arr.optJSONObject(i) ?: continue
+                        val q = o.optString("quality", "HD")
+                        val sUrl = o.optString("url").trim()
+                        if (!sUrl.startsWith("http") || mfIsBrokenContainerUrl(sUrl)) continue
+                        val t = if (sUrl.contains(".m3u8")) ExtractorLinkType.M3U8 else if (sUrl.contains(".mp4") || sUrl.contains(".mkv")) ExtractorLinkType.VIDEO else INFER_TYPE
+                        callback(
+                            newExtractorLink("CineStream • Videasy[${srv.replaceFirstChar { it.uppercase() }}]", "CineStream • Videasy[${srv.replaceFirstChar { it.uppercase() }}] $q", sUrl, t) {
+                                this.quality = qualityOf(q)
+                                this.headers = headers
+                            }
+                        )
+                        onEmitted()
+                    }
+                    resObj.optJSONArray("subtitles")?.let { subs ->
+                        for (k in 0 until subs.length()) {
+                            val sub = subs.optJSONObject(k) ?: continue
+                            val subUrl = sub.optString("url").trim()
+                            if (subUrl.startsWith("http")) subtitleCallback(newSubtitleFile(sub.optString("language", "English"), subUrl))
+                        }
+                    }
+                    Unit
+                }
+            }
+        }
+
+        if (tmdbInt != null) {
+            runCatching {
+                val vrType = if (isTv) "tv" else "movie"
+                val vrQuery = if (isTv) "${tmdbInt}_${season}_${episode}" else "$tmdbInt"
+                val vrHeaders = mapOf("Origin" to VIDROCK_API, "Referer" to "$VIDROCK_API/")
+                val vrRaw = MovieFoxInAppCfBypass.get("$VIDROCK_API/api/$vrType/$vrQuery/", vrHeaders, timeoutSec = minOf(timeoutSec, 8L))
+                val vrObj = runCatching { JSONObject(vrRaw) }.getOrNull()
+                vrObj?.keys()?.forEach { srv ->
+                    val encStr = vrObj.optJSONObject(srv)?.optString("url").orEmpty()
+                    if (encStr.isBlank() || encStr == "error" || encStr == "null") return@forEach
+                    val dec = decryptVidrockPayload(encStr) ?: return@forEach
+                    if (dec.startsWith("http") && !mfIsBrokenContainerUrl(dec)) {
+                        callback(
+                            newExtractorLink("CineStream • Vidrock[$srv]", "CineStream • Vidrock[$srv]", dec, if (dec.contains("m3u8")) ExtractorLinkType.M3U8 else INFER_TYPE) {
+                                this.headers = vrHeaders
+                            }
+                        )
+                        onEmitted()
+                    }
+                }
+            }
+        }
+    }
+
     suspend fun loadStreams(
         provider: MovieFoxProvider,
         title: String,
@@ -420,28 +567,21 @@ object MovieFoxCineStream {
         var emitted = false
         val lock = Any()
 
-        val runnerPayload = CsAllLoadLinksData(
-            title = title.ifBlank { null },
-            imdbId = imdbId.takeIf { it.startsWith("tt") },
-            tmdbId = tmdbId?.toIntOrNull(),
-            season = if (isTv) season else null,
-            episode = if (isTv) episode else null,
-            isAnime = title.contains("anime", true),
-            isAsian = title.contains("drama", true) || title.contains("k-drama", true)
-        )
-
         supervisorScope {
-            val runnerJob = async(Dispatchers.IO) {
+            val extraJob = async(Dispatchers.IO) {
                 withTimeoutOrNull(timeoutSec * 1000L) {
-                    val wrappedCb: (ExtractorLink) -> Unit = { ex ->
-                        synchronized(lock) { emitted = true }
-                        callback(ex)
-                    }
-                    if (runnerPayload.isAnime) {
-                        MovieFoxCineStreamExtractors.runAnimeSources(runnerPayload, subtitleCallback, wrappedCb)
-                    } else {
-                        MovieFoxCineStreamExtractors.runStandardSources(runnerPayload, subtitleCallback, wrappedCb)
-                    }
+                    fetchExtraCineStreamServers(
+                        title = title,
+                        tmdbInt = tmdbId?.toIntOrNull(),
+                        imdbId = imdbId,
+                        isTv = isTv,
+                        season = season,
+                        episode = episode,
+                        timeoutSec = timeoutSec,
+                        subtitleCallback = subtitleCallback,
+                        callback = callback,
+                        onEmitted = { synchronized(lock) { emitted = true } }
+                    )
                 }
             }
 
@@ -453,7 +593,7 @@ object MovieFoxCineStream {
                                 val sid = if (isTv) "$rawId:$season:$episode" else rawId
                                 val url = "$base/stream/$stremioType/${Uri.encode(sid, ":")}.json"
                                 val text = try {
-                                    app.get(url, headers = headers, timeout = timeoutSec).text
+                                    MovieFoxInAppCfBypass.get(url, headers, timeoutSec = timeoutSec)
                                 } catch (_: Exception) {
                                     ""
                                 }
@@ -516,8 +656,9 @@ object MovieFoxCineStream {
                     }
                 }
             }
-            (listOf(runnerJob) + addonJobs).awaitAll()
+            (listOf(extraJob) + addonJobs).awaitAll()
         }
         return emitted
     }
 }
+
