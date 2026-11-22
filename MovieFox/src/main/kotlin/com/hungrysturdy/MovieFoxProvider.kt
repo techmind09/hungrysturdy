@@ -8,6 +8,8 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.nicehttp.NiceResponse
+import com.megix.AllLoadLinksData
+import com.megix.CineStreamExtractors
 import com.megix.CineStreamProvider
 import dalvik.system.DexClassLoader
 import kotlinx.coroutines.Deferred
@@ -489,7 +491,6 @@ class MovieFoxProvider : MainAPI() {
         return defaultName
     }
 
-    // Connects CineStreamProvider categories into MovieFox Home Page
     private suspend fun fetchCineStreamHomeLists(
         ctx: Context,
         page: Int,
@@ -567,6 +568,71 @@ class MovieFoxProvider : MainAPI() {
                     }.orEmpty()
                 }
             }.awaitAll().flatten()
+        }
+    }
+
+    private suspend fun fetchCineStreamSources(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink, Boolean) -> Unit
+    ) {
+        if (lc.searchQueryTitle.isBlank() && lc.imdbId.isBlank() && lc.candidateIds.isEmpty()) return
+        try {
+            val sNum = if (lc.isTv) lc.season.toIntOrNull()?.coerceAtLeast(1) else null
+            val eNum = if (lc.isTv) lc.episode.toIntOrNull()?.coerceAtLeast(1) else null
+            val tmdbInt = lc.candidateIds.firstNotNullOfOrNull { it.toIntOrNull() }
+            val isAnimeItem = lc.watchUrl.contains("/anime/", true) ||
+                lc.pageTitle.contains("anime", true) ||
+                lc.pageTitle.contains("kitsu", true)
+
+            val payload = AllLoadLinksData(
+                title = lc.searchQueryTitle.ifBlank { lc.pageTitle },
+                imdbId = lc.imdbId.takeIf { it.isNotBlank() },
+                tmdbId = tmdbInt,
+                anilistId = null,
+                malId = null,
+                kitsuId = null,
+                year = null,
+                airedYear = null,
+                season = sNum,
+                episode = eNum,
+                isAnime = isAnimeItem,
+                isBollywood = false,
+                isAsian = lc.watchUrl.contains("/dramas/", true) || lc.watchUrl.contains("/channel/", true),
+                isCartoon = false,
+                originalTitle = lc.pageTitle.takeIf { it.isNotBlank() },
+                imdbTitle = lc.pageTitle.takeIf { it.isNotBlank() },
+                imdbSeason = sNum,
+                imdbEpisode = eNum,
+                imdbYear = null
+            )
+
+            val wrappedLinkCb: (ExtractorLink) -> Unit = { ex ->
+                if (!isYouTubeOrBlockedStream(ex.url, ex.name) && lc.seenUrls.add(ex.url)) {
+                    val isStream = isStreamOrHlsLink(ex.url, ex.type)
+                    val labeled = buildSourceLabel("CineStream", ex.name.ifBlank { ex.source }, "")
+                    val outLink = ExtractorLink(
+                        source = "CineStream",
+                        name = if (lc.streamOnly && isStream) "⚡ $labeled" else labeled,
+                        url = ex.url,
+                        referer = ex.referer.ifBlank { lc.watchUrl },
+                        quality = if (ex.quality > 0) ex.quality else getQuality(ex.name),
+                        headers = ex.headers,
+                        extractorData = ex.extractorData,
+                        type = ex.type
+                    )
+                    emitLink(outLink, isStream)
+                }
+            }
+
+            if (isAnimeItem) {
+                CineStreamExtractors.invokeAllAnimeSources(payload, emitSub, wrappedLinkCb)
+            } else {
+                CineStreamExtractors.invokeAllSources(payload, emitSub, wrappedLinkCb)
+            }
+            MovieFoxSettingsDialog.reportServerStatus("cinestream", "LIVE", true, 200, 0L, cineStreamDelegate.mainUrl)
+        } catch (e: Exception) {
+            logError("cinestream", cineStreamDelegate.mainUrl, e, "CineStream sources/extractors failed")
         }
     }
 
@@ -731,7 +797,6 @@ class MovieFoxProvider : MainAPI() {
         val movieFoxEnabled = ctx?.let { MovieFoxSettingsDialog.isServerEnabled(it, "moviefox") } ?: true
         val timeoutSec = currentTimeoutSec()
 
-        // When MovieFox is turned OFF, show CineStream categories (plus enabled Stremio/Collection rows) on Home Page
         if (!movieFoxEnabled) {
             if (ctx == null) {
                 return newHomePageResponse(emptyList(), hasNext = false)
@@ -1654,6 +1719,7 @@ class MovieFoxProvider : MainAPI() {
         val keyLow = srvKey.lowercase()
         when (keyLow) {
             "moviefox" -> fetchMovieFoxApi("purstream", lc, emitSub, emitLink)
+            "cinestream" -> fetchCineStreamSources(lc, emitSub, emitLink)
             "purstream", "castle", "watchout" -> fetchMovieFoxApi(keyLow, lc, emitSub, emitLink)
             "cinetv_api" -> fetchCineTvApi(lc, emitSub, emitLink)
             "cinetv_hls" -> fetchCineTvHls(lc, emitSub, emitLink)
