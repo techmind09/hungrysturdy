@@ -82,7 +82,7 @@ object MovieFoxCineStream {
         CineStreamCatalog("cs_crime_series", "Top Crime Series", "$CATALOG_BASE_URL/top/catalog/series/top/skip=###&genre=Crime.json")
     )
 
-    fun isCineStreamData(data: String): Boolean = data.startsWith(CS_SCHEME)
+    fun isCineStreamData(data: String): Boolean = data.contains(CS_SCHEME, ignoreCase = true)
 
     fun encodePassData(
         id: String,
@@ -104,8 +104,10 @@ object MovieFoxCineStream {
     }
 
     fun decodePassData(raw: String): CineStreamPassData? {
-        if (!raw.startsWith(CS_SCHEME)) return null
-        val decoded = runCatching { Uri.decode(raw.removePrefix(CS_SCHEME)) }.getOrNull().orEmpty()
+        val idx = raw.indexOf(CS_SCHEME, ignoreCase = true)
+        if (idx < 0) return null
+        val schemePart = raw.substring(idx + CS_SCHEME.length)
+        val decoded = runCatching { Uri.decode(schemePart) }.getOrNull().orEmpty()
         val obj = runCatching { JSONObject(decoded) }.getOrNull() ?: return null
         val id = obj.optString("id").trim()
         if (id.isBlank()) return null
@@ -693,3 +695,4 @@ object MovieFoxCineStream {
         return emitted
     }
 }
+
