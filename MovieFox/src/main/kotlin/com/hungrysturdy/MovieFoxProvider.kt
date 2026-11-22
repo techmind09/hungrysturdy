@@ -299,11 +299,23 @@ class MovieFoxProvider : MainAPI() {
         val isMovieFoxSite = url.contains("moviefox.pro", true)
         val noisySources = setOf(
             "cinetv_hls", "movy", "rogmovies", "topmovies",
-            "bollyhq", "myfilms", "filmyking", "prmovies", "play4u"
+            "bollyhq", "myfilms", "filmyking", "prmovies", "play4u",
+            "bollyflix", "hdhub4u"
         )
         val isNoisyOrFastFail = isMovieFoxSite || sourceTag.lowercase() in noisySources
-        val effectiveTimeout = if (isNoisyOrFastFail) minOf(timeoutSec, 4L) else timeoutSec
-        val effectiveRetries = if (isNoisyOrFastFail) 1 else retries.coerceAtLeast(1)
+        val effectiveTimeout = when {
+            isMovieFoxSite -> minOf(timeoutSec, 4L)
+            sourceTag.lowercase() == "tmdb" -> minOf(timeoutSec, 6L)
+            isNoisyOrFastFail -> minOf(timeoutSec, 4L)
+            else -> timeoutSec
+        }
+        val effectiveRetries = when {
+            isMovieFoxSite -> 1
+            sourceTag.lowercase() == "tmdb" -> maxOf(retries, 2)
+            sourceTag.lowercase() in setOf("bollyflix", "hdhub4u") -> 2
+            isNoisyOrFastFail -> 1
+            else -> retries.coerceAtLeast(1)
+        }
 
         repeat(effectiveRetries) { attempt ->
             val start = System.currentTimeMillis()
@@ -320,7 +332,9 @@ class MovieFoxProvider : MainAPI() {
                     return null
                 }
                 val reason = if (code == 401) "TOKEN EXPIRED (401)" else "HTTP $code"
-                logError(sourceTag, url, null, "$reason attempt=${attempt + 1}")
+                if (!isNoisyOrFastFail) {
+                    logError(sourceTag, url, null, "$reason attempt=${attempt + 1}")
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -328,7 +342,7 @@ class MovieFoxProvider : MainAPI() {
                     logError(sourceTag, url, e, "attempt=${attempt + 1}")
                 }
             }
-            if (attempt < effectiveRetries - 1) delay(250L)
+            if (attempt < effectiveRetries - 1) delay(350L)
         }
         return null
     }
@@ -1552,7 +1566,7 @@ class MovieFoxProvider : MainAPI() {
             }
 
             val orderedKeys = (appCtx?.let { MovieFoxSettingsDialog.getOrderedEnabledKeys(it) }
-                ?: MovieFoxSettingsDialog.BASE_SERVERS.map { it.key }).distinct()
+                ?: MovieFoxDialogHelperFallbackKeys).distinct()
 
             val prioritizedKeys = orderedKeys.filter { it.lowercase() in fastWaveKeys } +
                 orderedKeys.filterNot { it.lowercase() in fastWaveKeys }
@@ -1587,6 +1601,9 @@ class MovieFoxProvider : MainAPI() {
             false
         }
     }
+
+    private val MovieFoxDialogHelperFallbackKeys: List<String>
+        get() = MovieFoxSettingsDialog.BASE_SERVERS.map { it.key }
 
     private suspend fun runServerKey(
         srvKey: String,
@@ -3308,3 +3325,4 @@ class MovieFoxProvider : MainAPI() {
         }
     }
 }
+
