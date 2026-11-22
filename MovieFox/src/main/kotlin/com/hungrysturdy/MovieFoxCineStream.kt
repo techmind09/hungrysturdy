@@ -6,7 +6,6 @@ import android.util.Base64
 import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
-import com.lagradost.cloudstream3.utils.M3u8Helper.Companion.generateM3u8
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -18,9 +17,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
-import org.jsoup.Jsoup
 import java.net.URLEncoder
-import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -452,6 +449,27 @@ object MovieFoxCineStream {
             "Referer" to "https://player.videasy.to/"
         )
 
+        val wyzieKey = MovieFoxCineStreamSettingsBridge.getWyzieSubsKey()
+        if (!wyzieKey.isNullOrBlank() && imdbId.startsWith("tt")) {
+            runCatching {
+                val wUrl = if (isTv) {
+                    "https://sub.wyzie.io/search?id=$imdbId&season=$season&episode=$episode&source=all&key=$wyzieKey"
+                } else {
+                    "https://sub.wyzie.io/search?id=$imdbId&source=all&key=$wyzieKey"
+                }
+                val wRaw = MovieFoxInAppCfBypass.get(wUrl, timeoutSec = minOf(timeoutSec, 8L))
+                val wArr = runCatching { JSONArray(wRaw) }.getOrNull()
+                if (wArr != null) {
+                    for (i in 0 until wArr.length()) {
+                        val sObj = wArr.optJSONObject(i) ?: continue
+                        val sUrl = sObj.optString("url").trim()
+                        val lang = sObj.optString("display").ifBlank { sObj.optString("language") }.ifBlank { "English" }
+                        if (sUrl.startsWith("http")) subtitleCallback(newSubtitleFile(lang, sUrl))
+                    }
+                }
+            }
+        }
+
         if (tmdbInt != null && title.isNotBlank()) {
             val seedText = MovieFoxInAppCfBypass.get("$VIDEASY_API/seed?mediaId=$tmdbInt", headers, timeoutSec = 6L)
             val seed = runCatching { JSONObject(seedText).optString("seed") }.getOrDefault("")
@@ -535,7 +553,7 @@ object MovieFoxCineStream {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val ctx = CloudStreamApp.context
-        if (ctx != null && !MovieFoxSettingsDialog.isServerEnabled(ctx, "cinestream")) return false
+        if (ctx != null && !MovieFoxCineStreamSettingsBridge.isProviderEnabled(ctx, "cinestream")) return false
 
         val headers = mapOf(
             "User-Agent" to MovieFoxSettingsDialog.CF_BYPASS_UA,
@@ -552,6 +570,13 @@ object MovieFoxCineStream {
             TORRENTIO_URL,
             CINEMETA_URL
         )
+        val bridgeAddons = MovieFoxCineStreamSettingsBridge.getStremioAddons()
+            .filter { MovieFoxCineStreamSettingsBridge.isProviderEnabled(ctx, MovieFoxCineStreamSettingsBridge.stremioAddonKey(it.name)) }
+            .mapNotNull { addon ->
+                val clean = addon.url.substringBefore("?")
+                if (clean.endsWith("/manifest.json", true)) clean.dropLast("/manifest.json".length)
+                else clean.trimEnd('/').takeIf { it.startsWith("http") }
+            }
         val customManifestBases = ctx?.let { c ->
             MovieFoxSettingsDialog.getNuvioManifests(c)
                 .filter { it.enabled }
@@ -562,8 +587,8 @@ object MovieFoxCineStream {
                 }
         }.orEmpty()
 
-        val addonBases = (customManifestBases + defaultAddons).distinct()
-        val gate = Semaphore(6)
+        val addonBases = (bridgeAddons + customManifestBases + defaultAddons).distinct()
+        val gate = Semaphore(MovieFoxCineStreamSettingsBridge.getConcurrency(ctx).coerceIn(2, 12))
         var emitted = false
         val lock = Any()
 
@@ -661,4 +686,3 @@ object MovieFoxCineStream {
         return emitted
     }
 }
-
