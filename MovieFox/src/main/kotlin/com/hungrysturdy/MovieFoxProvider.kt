@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.*
 import com.lagradost.nicehttp.NiceResponse
+import com.megix.CineStreamProvider
 import dalvik.system.DexClassLoader
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -59,6 +60,8 @@ class MovieFoxProvider : MainAPI() {
     private val firebaseDomainsUrl = "https://cloudstreampluginhelper-default-rtdb.firebaseio.com/.json"
     private val phisherDomainsUrl = "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json"
     private val kaperwanUrlsJson = "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json"
+
+    private val cineStreamDelegate by lazy { CineStreamProvider() }
 
     private val cineTvUrls = listOf("https://cinetv.app/en", "https://cinetv.app")
     private val cineTvBaseUrl = "https://cinetv.app"
@@ -157,7 +160,7 @@ class MovieFoxProvider : MainAPI() {
     private val multimoviesDomains = listOf("https://m1.multimovies.courses", "https://multimovies.garden")
 
     private val fastWaveKeys = setOf(
-        "moviefox", "purstream", "castle", "watchout", "cinetv_api", "cinetv_hls",
+        "moviefox", "cinestream", "purstream", "castle", "watchout", "cinetv_api", "cinetv_hls",
         "play4u", "sflix", "moviebox", "movy", "nuvio", "hicine", "hindidrama",
         "animeworldindia", "sportslive"
     )
@@ -486,6 +489,87 @@ class MovieFoxProvider : MainAPI() {
         return defaultName
     }
 
+    // Connects CineStreamProvider categories into MovieFox Home Page
+    private suspend fun fetchCineStreamHomeLists(
+        ctx: Context,
+        page: Int,
+        requestName: String? = null,
+        requestData: String? = null
+    ): List<HomePageList> {
+        if (!MovieFoxSettingsDialog.isServerEnabled(ctx, "cinestream")) return emptyList()
+
+        val targetCatalogs = if (!requestName.isNullOrBlank() && !requestData.isNullOrBlank() &&
+            (requestData.contains("cinemeta-catalogs.strem.io", true) || requestData.contains("anime-kitsu.strem.fun", true))
+        ) {
+            listOf(MainPageRequest(requestName, requestData, page))
+        } else {
+            val activeEntries = cineStreamDelegate.mainPage
+            val picked = when {
+                page == 1 -> activeEntries.take(6)
+                page == 2 -> activeEntries.drop(6).take(6)
+                else -> activeEntries.drop((page - 1) * 6).take(6)
+            }
+            picked.map { MainPageRequest(it.name, it.data, page) }
+        }
+
+        if (targetCatalogs.isEmpty()) return emptyList()
+
+        return supervisorScope {
+            targetCatalogs.map { req ->
+                async(Dispatchers.IO) {
+                    withTimeoutOrNull(10_000L) {
+                        try {
+                            val resp = cineStreamDelegate.getMainPage(page, req)
+                            val lists = resp?.popularMovies?.list.orEmpty()
+                            if (lists.isNotEmpty()) {
+                                lists.map { hp ->
+                                    val mappedItems = hp.list.mapNotNull { item ->
+                                        val cleanTitle = item.name.trim()
+                                        if (cleanTitle.isBlank()) return@mapNotNull null
+                                        val isTv = item.type == TvType.TvSeries || item.type == TvType.Anime || item.type == TvType.AsianDrama
+                                        val passJson = runCatching { JSONObject(item.url) }.getOrNull()
+                                        val rawId = passJson?.optString("id").orEmpty()
+                                        val tmdbMatch = Regex("(?:tmdb:|movie-|series-|tv-)(\\d+)").find(rawId)?.groupValues?.get(1)
+                                        val imdbMatch = Regex("(tt\\d{6,10})").find(rawId)?.groupValues?.get(1)
+                                        val detailUrl = if (tmdbMatch != null) {
+                                            if (isTv) "$mainUrl/tv/series-$tmdbMatch" else "$mainUrl/movie/movie-$tmdbMatch"
+                                        } else {
+                                            item.url
+                                        }
+                                        val encodedData = encodeLoadData(
+                                            url = detailUrl,
+                                            title = cleanTitle,
+                                            tmdbId = tmdbMatch,
+                                            imdbId = imdbMatch,
+                                            isTv = isTv
+                                        )
+                                        if (isTv) {
+                                            newTvSeriesSearchResponse(cleanTitle, encodedData, item.type ?: TvType.TvSeries) {
+                                                this.posterUrl = item.posterUrl
+                                                this.score = item.score
+                                            }
+                                        } else {
+                                            newMovieSearchResponse(cleanTitle, encodedData, item.type ?: TvType.Movie) {
+                                                this.posterUrl = item.posterUrl
+                                                this.score = item.score
+                                            }
+                                        }
+                                    }
+                                    HomePageList("🎬 CineStream • ${hp.name}", mappedItems)
+                                }.filter { it.list.isNotEmpty() }
+                            } else {
+                                emptyList()
+                            }
+                        } catch (e: Exception) {
+                            logError("cinestream", req.data, e, "CineStream category fetch failed")
+                            emptyList()
+                        }
+                    }.orEmpty()
+                }
+            }.awaitAll().flatten()
+        }
+    }
+
     private suspend fun fetchTmdbFallbackHomeItems(requestUrl: String, page: Int): List<SearchResponse> {
         val isTv = requestUrl.contains("/tv", true) || requestUrl.contains("/anime", true) || requestUrl.contains("/dramas", true)
         val endpoint = when {
@@ -647,14 +731,18 @@ class MovieFoxProvider : MainAPI() {
         val movieFoxEnabled = ctx?.let { MovieFoxSettingsDialog.isServerEnabled(it, "moviefox") } ?: true
         val timeoutSec = currentTimeoutSec()
 
+        // When MovieFox is turned OFF, show CineStream categories (plus enabled Stremio/Collection rows) on Home Page
         if (!movieFoxEnabled) {
-            if (ctx == null || page > 1 || !request.data.contains("/trending", true)) {
+            if (ctx == null) {
                 return newHomePageResponse(emptyList(), hasNext = false)
             }
             val combined = mutableListOf<HomePageList>()
-            combined.addAll(fetchStremioHomeLists(ctx, timeoutSec))
-            combined.addAll(fetchImportedCollectionHomeLists(ctx, timeoutSec))
-            return newHomePageResponse(combined, hasNext = false)
+            combined.addAll(fetchCineStreamHomeLists(ctx, page, request.name, request.data))
+            if (page <= 1 && request.data.contains("/trending", true)) {
+                combined.addAll(fetchStremioHomeLists(ctx, timeoutSec))
+                combined.addAll(fetchImportedCollectionHomeLists(ctx, timeoutSec))
+            }
+            return newHomePageResponse(combined, hasNext = combined.isNotEmpty())
         }
 
         val categoryLabel = resolveCategoryLabel(request.name, request.data)
