@@ -1,3 +1,4 @@
+
 package com.hungrysturdy
 
 import android.util.Base64
@@ -32,12 +33,42 @@ private fun mfBaseUrl(url: String): String = runCatching {
     "${uri.scheme}://${uri.host}"
 }.getOrDefault(url)
 
+private suspend fun mfCfGetText(
+    url: String,
+    headers: Map<String, String> = emptyMap(),
+    referer: String? = null,
+    timeoutSec: Long = 18L,
+    allowRedirects: Boolean = true
+): String = MovieFoxInAppCfBypass.get(
+    url = url,
+    headers = headers,
+    referer = referer,
+    timeoutSec = timeoutSec,
+    allowRedirects = allowRedirects
+)
+
+private suspend fun mfCfPostText(
+    url: String,
+    headers: Map<String, String> = emptyMap(),
+    data: Map<String, String> = emptyMap(),
+    json: Any? = null,
+    referer: String? = null,
+    timeoutSec: Long = 20L
+): String = MovieFoxInAppCfBypass.post(
+    url = url,
+    headers = headers,
+    data = data,
+    json = json,
+    referer = referer,
+    timeoutSec = timeoutSec
+)
+
 private suspend fun mfLatestBaseUrl(baseUrl: String, source: String): String {
     mfDynamicUrlCache[source]?.let { return it }
     return runCatching {
         val fbRaw = runCatching {
-            app.get("https://cloudstreampluginhelper-default-rtdb.firebaseio.com/.json", timeout = 5L).text
-        }.getOrNull().orEmpty()
+            mfCfGetText("https://cloudstreampluginhelper-default-rtdb.firebaseio.com/.json", timeoutSec = 5L)
+        }.getOrDefault("")
         val fbObj = runCatching { JSONObject(fbRaw) }.getOrNull()
         val fromFb = listOf(source, "justplay_$source", "${source}_url", "${source}_domain")
             .firstNotNullOfOrNull { k -> fbObj?.optString(k)?.trim()?.trimEnd('/')?.takeIf { it.startsWith("http") } }
@@ -46,21 +77,21 @@ private suspend fun mfLatestBaseUrl(baseUrl: String, source: String): String {
             return fromFb
         }
 
-        val raw = app.get(
+        val raw = mfCfGetText(
             "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json",
-            timeout = 8L
-        ).text
+            timeoutSec = 8L
+        )
         val resolved = JSONObject(raw).optString(source).trim()
         if (resolved.startsWith("http")) {
             mfDynamicUrlCache[source] = resolved.trimEnd('/')
             resolved.trimEnd('/')
         } else {
             val phRaw = runCatching {
-                app.get("https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json", timeout = 8L).text
-            }.getOrNull().orEmpty()
+                mfCfGetText("https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json", timeoutSec = 8L)
+            }.getOrDefault("")
             val phResolved = runCatching {
                 JSONObject(phRaw).optString(if (source.equals("hdhub4u", true)) "HDHUB4u" else source).trim().trimEnd('/')
-            }.getOrNull().orEmpty()
+            }.getOrDefault("")
             if (phResolved.startsWith("http")) {
                 mfDynamicUrlCache[source] = phResolved
                 phResolved
@@ -122,6 +153,29 @@ private suspend fun <A, B> Iterable<A>.mfSafeAmap(
     }.awaitAll().filterNotNull()
 }
 
+// Connected CineStream ExtractorApi wrappers inside Extractor.kt
+class ConnectedCsVideostr : CsVideostr()
+class ConnectedCsStreameeeeee : CsStreameeeeee()
+class ConnectedCsGofile : CsGofile()
+class ConnectedCsWootly : CsWootly()
+class ConnectedCsVibePlayer : CsVibePlayer()
+class ConnectedCsVivibebe : CsVivibebe()
+class ConnectedCsBibiemb : CsBibiemb()
+class ConnectedCsPlaymogo : CsPlaymogo()
+class ConnectedCsOtakuvid : CsOtakuvid()
+class ConnectedCsOtakuhg : CsOtakuhg()
+class ConnectedCsMinochinos : CsMinochinos()
+class ConnectedCsHdStream4u : CsHdStream4u()
+class ConnectedCsHubstream : CsHubstream()
+class ConnectedCsIqsmartgames : CsIqsmartgames()
+class ConnectedCsMegaPlay : CsMegaPlay()
+class ConnectedCsVidwish : CsVidwish()
+class ConnectedCsVidtube : CsVidtube()
+class ConnectedCsAsianload : CsAsianload()
+class ConnectedCsEmbedload : CsEmbedload()
+class ConnectedCsFlixCloud : CsFlixCloud()
+class ConnectedCsPpzjYoutube : CsPpzjYoutube()
+
 internal object GokuHDSources {
 
     class Server(val name: String, val url: String, val headers: Map<String, String> = emptyMap())
@@ -166,16 +220,12 @@ internal object GokuHDSources {
 
     suspend fun fetchDrivePage(url: String): DrivePage? {
         pageCache[url]?.let { return it }
-        val html = runCatching {
-            app.get(
-                url,
-                headers = mapOf(
-                    "User-Agent" to USER_AGENT,
-                    "Referer" to "https://nexdrive.beer/"
-                ),
-                timeout = 18L
-            ).text
-        }.getOrNull().orEmpty()
+        val html = mfCfGetText(
+            url = url,
+            headers = mapOf("User-Agent" to USER_AGENT),
+            referer = "https://nexdrive.beer/",
+            timeoutSec = 18L
+        )
         if (html.isBlank() || Regex("""(?i)file (is )?deleted|not found""").containsMatchIn(html)) return null
         val page = parseDrivePage(html)
         pageCache[url] = page
@@ -258,9 +308,11 @@ internal object GokuHDSources {
                     if (id.isNotBlank()) listOf(Server("PixelDrain", "https://pixeldrain.dev/api/file/$id")) else emptyList()
                 }
                 h.contains("vcloud") || h.contains("mcloud.") || h.contains("hubcloud") -> {
-                    val resHtml = runCatching {
-                        app.get(href, headers = mapOf("User-Agent" to USER_AGENT, "Cookie" to "xla=s4t"), timeout = 18L).text
-                    }.getOrNull().orEmpty()
+                    val resHtml = mfCfGetText(
+                        url = href,
+                        headers = mapOf("User-Agent" to USER_AGENT, "Cookie" to "xla=s4t"),
+                        timeoutSec = 18L
+                    )
                     val doc = Jsoup.parse(resHtml)
                     val out = mutableListOf<Server>()
                     for (a in doc.select("a[href]")) {
@@ -297,10 +349,10 @@ internal object GokuHDSources {
                     val code = href.substringAfterLast("/").substringBefore("#").substringBefore("?")
                     if (code.isBlank()) return emptyList()
                     val token = runCatching {
-                        JSONObject(app.post("https://api.gofile.io/accounts", timeout = 12L).text).getJSONObject("data").getString("token")
+                        JSONObject(mfCfPostText("https://api.gofile.io/accounts", timeoutSec = 12L)).getJSONObject("data").getString("token")
                     }.getOrNull() ?: return emptyList()
                     val data = runCatching {
-                        JSONObject(app.get("https://api.gofile.io/contents/$code?wt=$token", headers = mapOf("Authorization" to "Bearer $token"), timeout = 15L).text)
+                        JSONObject(mfCfGetText("https://api.gofile.io/contents/$code?wt=$token", headers = mapOf("Authorization" to "Bearer $token"), timeoutSec = 15L))
                             .getJSONObject("data").optJSONObject("children")
                     }.getOrNull() ?: return emptyList()
                     val out = mutableListOf<Server>()
@@ -424,7 +476,7 @@ class FilePressExtractor : ExtractorApi() {
     ) {
         val id = fileIdRegex.find(url)?.groupValues?.get(1) ?: return
         try {
-            val infoText = app.get("$mainUrl/api/file/get/$id", headers = mapOf("User-Agent" to USER_AGENT, "Referer" to "$mainUrl/"), timeout = 15L).text
+            val infoText = mfCfGetText("$mainUrl/api/file/get/$id", headers = mapOf("User-Agent" to USER_AGENT), referer = "$mainUrl/", timeoutSec = 15L)
             val info = runCatching { JSONObject(infoText).optJSONObject("data") }.getOrNull() ?: return
             if (Regex("""(?i)\.(zip|rar|7z)\s*$""").containsMatchIn(info.optString("name"))) return
 
@@ -450,18 +502,18 @@ class FilePressExtractor : ExtractorApi() {
 
     private suspend fun downloadTask(id: String, method: String): String? = try {
         val body = JSONObject().put("captchaValue", "").put("id", id).put("method", method).toString()
-        val res = app.post(
-            "$mainUrl/api/file/downlaod/",
+        val res = mfCfPostText(
+            url = "$mainUrl/api/file/downlaod/",
             headers = mapOf(
                 "User-Agent" to USER_AGENT,
-                "Referer" to "$mainUrl/",
                 "Origin" to mainUrl,
                 "Content-Type" to "application/json",
                 "Accept" to "application/json"
             ),
             json = body,
-            timeout = 25L
-        ).text
+            referer = "$mainUrl/",
+            timeoutSec = 25L
+        )
         val parsed = JSONObject(res)
         if (!parsed.optBoolean("status")) null else (parsed.opt("data") as? String)?.takeIf { it.isNotBlank() }
     } catch (_: Exception) {
@@ -470,18 +522,18 @@ class FilePressExtractor : ExtractorApi() {
 
     private suspend fun finalTask(taskId: String, method: String): String? = try {
         val body = JSONObject().put("captchaValue", "").put("id", taskId).put("method", method).toString()
-        val res = app.post(
-            "$mainUrl/api/file/downlaod2/",
+        val res = mfCfPostText(
+            url = "$mainUrl/api/file/downlaod2/",
             headers = mapOf(
                 "User-Agent" to USER_AGENT,
-                "Referer" to "$mainUrl/",
                 "Origin" to mainUrl,
                 "Content-Type" to "application/json",
                 "Accept" to "application/json"
             ),
             json = body,
-            timeout = 30L
-        ).text
+            referer = "$mainUrl/",
+            timeoutSec = 30L
+        )
         val parsed = JSONObject(res)
         if (!parsed.optBoolean("status")) null else when (val d = parsed.opt("data")) {
             is String -> d.takeIf { it.startsWith("http") }
@@ -495,17 +547,16 @@ class FilePressExtractor : ExtractorApi() {
     private suspend fun resolveDotFlix(shareUrl: String): String? = try {
         val ref = if (shareUrl.contains("dotflix.fit", true)) "https://new3.dotflix.shop/" else "https://new2.dotflix.shop/"
         val apiEndpoint = if (shareUrl.contains("dotflix.fit", true)) "https://dotflix.fit/api/extract-download" else "https://dotflix.store/api/extract-download"
-        val text = app.get(shareUrl, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to ref), timeout = 20L).text
+        val text = mfCfGetText(shareUrl, headers = mapOf("User-Agent" to USER_AGENT), referer = ref, timeoutSec = 20L)
         val code = Regex("""btoa\('([^']+)'\)""").find(text)?.groupValues?.get(1) ?: return null
         val obfuscated = Base64.encodeToString(code.toByteArray(), Base64.NO_WRAP).reversed()
         val requestId = List(13) { "abcdefghijklmnopqrstuvwxyz0123456789".random() }.joinToString("")
         val timestamp = System.currentTimeMillis().toString()
         val body = JSONObject().put("requestId", requestId).put("timestamp", timestamp).put("data", obfuscated).toString()
-        val res = app.post(
-            apiEndpoint,
+        val res = mfCfPostText(
+            url = apiEndpoint,
             headers = mapOf(
                 "User-Agent" to USER_AGENT,
-                "Referer" to ref,
                 "Origin" to ref.trimEnd('/'),
                 "Content-Type" to "application/json",
                 "Accept" to "application/json",
@@ -513,8 +564,9 @@ class FilePressExtractor : ExtractorApi() {
                 "X-Timestamp" to timestamp
             ),
             json = body,
-            timeout = 25L
-        ).text
+            referer = ref,
+            timeoutSec = 25L
+        )
         val parsed = JSONObject(res)
         if (!parsed.optBoolean("success")) null else parsed.optString("downloadUrl").takeIf { it.startsWith("http") }
     } catch (_: Exception) {
@@ -534,13 +586,13 @@ class InstantCloudExtractor : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val headers = mapOf("User-Agent" to USER_AGENT, "Accept" to "application/json", "Referer" to url)
+            val headers = mapOf("User-Agent" to USER_AGENT, "Accept" to "application/json")
             var link = fetchDownloadLink(url, headers)
             if (link == null) {
                 var ready = false
                 repeat(3) {
                     if (ready) return@repeat
-                    val meta = app.get("$url?ajax=1&refresh=1", headers = headers, timeout = 15L).text
+                    val meta = mfCfGetText("$url?ajax=1&refresh=1", headers, referer = url, timeoutSec = 15L)
                     val obj = runCatching { JSONObject(meta) }.getOrNull() ?: return
                     ready = obj.optBoolean("downloadable") || obj.optString("gp_status").equals("VALID", true)
                     if (!ready && obj.optBoolean("needs_poll")) delay(1500L)
@@ -556,7 +608,7 @@ class InstantCloudExtractor : ExtractorApi() {
     }
 
     private suspend fun fetchDownloadLink(url: String, headers: Map<String, String>): String? = try {
-        val body = app.get("$url/download?json=1", headers = headers, timeout = 20L).text
+        val body = mfCfGetText("$url/download?json=1", headers, referer = url, timeoutSec = 20L)
         JSONObject(body).optString("download_url").trim().takeIf { it.startsWith("http") }
     } catch (_: Exception) {
         null
@@ -578,18 +630,18 @@ class ZephyrixExtractor : ExtractorApi() {
             val videoId = Regex("/video/([a-f0-9]+)", RegexOption.IGNORE_CASE).find(url)?.groupValues?.get(1) ?: return
             val playerBase = Regex("(https?://[^/]+)").find(url)?.groupValues?.get(1) ?: return
             val origin = referer?.takeIf { it.startsWith("http") }?.let { mfBaseUrl(it) } ?: mainUrl
-            val res = app.post(
-                "$playerBase/player/index.php?data=$videoId&do=getVideo",
+            val res = mfCfPostText(
+                url = "$playerBase/player/index.php?data=$videoId&do=getVideo",
                 data = mapOf("hash" to videoId, "r" to "$origin/"),
                 headers = mapOf(
                     "X-Requested-With" to "XMLHttpRequest",
                     "Origin" to playerBase,
-                    "Referer" to "$playerBase/video/$videoId",
                     "Accept" to "application/json, text/javascript, */*; q=0.01",
                     "User-Agent" to USER_AGENT
                 ),
-                timeout = 30_000L
-            ).text
+                referer = "$playerBase/video/$videoId",
+                timeoutSec = 30L
+            )
             val obj = JSONObject(res)
             val rawSrc = obj.optString("videoSource").trim().ifBlank { obj.optString("securedLink").trim() }
             if (rawSrc.isBlank()) return
@@ -636,9 +688,9 @@ open class Videostr : ExtractorApi() {
             "User-Agent" to USER_AGENT
         )
 
-        val response = app.get(url, headers = headers)
-        val htmlResponse = response.text
-        val videoTag = response.document.selectFirst("[id$=\"-player\"]") ?: return
+        val htmlResponse = mfCfGetText(url, headers)
+        if (htmlResponse.isBlank()) return
+        val videoTag = Jsoup.parse(htmlResponse).selectFirst("[id$=\"-player\"]") ?: return
         val fileId = videoTag.attr("data-id")
         if (fileId.isEmpty()) return
 
@@ -653,8 +705,8 @@ open class Videostr : ExtractorApi() {
         }
 
         val apiUrl = "$resolvedBase/embed-1/v3/e-1/getSources?id=$fileId&_k=$nonce"
-        val jsonResponse = app.get(apiUrl, headers = headers).text
-        val sourcesArray = JSONObject(jsonResponse).optJSONArray("sources") ?: return
+        val jsonResponse = mfCfGetText(apiUrl, headers)
+        val sourcesArray = runCatching { JSONObject(jsonResponse).optJSONArray("sources") }.getOrNull() ?: return
         if (sourcesArray.length() == 0) return
 
         val m3u8 = sourcesArray.optJSONObject(0)?.optString("file")?.trim().orEmpty()
@@ -681,8 +733,9 @@ class Gofile : ExtractorApi() {
     ) {
         val id = Regex("/(?:\\?c=|d/)([\\da-zA-Z-]+)").find(url)?.groupValues?.get(1) ?: return
         val defaultHeaders = mapOf("User-Agent" to userAgent, "Referer" to "$mainUrl/", "Origin" to mainUrl)
-        val token = app.post("$mainApi/accounts", headers = defaultHeaders)
-            .parsedSafe<AccountResponse>()?.data?.token ?: return
+        val accRaw = mfCfPostText("$mainApi/accounts", headers = defaultHeaders)
+        val token = runCatching { JSONObject(accRaw).getJSONObject("data").getString("token") }.getOrDefault("")
+        if (token.isBlank()) return
         val hashedToken = generateWebsiteToken(userAgent, token)
         val headers = mapOf(
             "Referer" to "$mainUrl/",
@@ -692,17 +745,18 @@ class Gofile : ExtractorApi() {
             "X-Website-Token" to hashedToken
         )
 
-        val parsedResponse = app.get(
+        val contRaw = mfCfGetText(
             "$mainApi/contents/$id?page=1&pageSize=100&sortField=name&sortDirection=1",
             headers = headers
-        ).parsedSafe<GofileResponse>()
-
-        val childrenMap = parsedResponse?.data?.children ?: return
-        for ((_, file) in childrenMap) {
-            val fileLink = file.link?.trim().orEmpty()
-            if (!fileLink.startsWith("http") || file.type != "file" || mfIsBrokenContainerUrl(fileLink)) continue
-            val fileName = file.name ?: ""
-            val size = file.size ?: 0L
+        )
+        val children = runCatching { JSONObject(contRaw).getJSONObject("data").optJSONObject("children") }.getOrNull() ?: return
+        val names = children.names() ?: return
+        for (i in 0 until names.length()) {
+            val file = children.optJSONObject(names.optString(i)) ?: continue
+            val fileLink = file.optString("link").trim()
+            if (!fileLink.startsWith("http") || file.optString("type") != "file" || mfIsBrokenContainerUrl(fileLink)) continue
+            val fileName = file.optString("name")
+            val size = file.optLong("size", 0L)
             callback.invoke(
                 newExtractorLink("Gofile", "[Gofile] $fileName [${mfFormatBytes(size)}]", fileLink, ExtractorLinkType.VIDEO) {
                     this.quality = mfIndexQuality(fileName)
@@ -719,12 +773,6 @@ class Gofile : ExtractorApi() {
 
     private fun sha256(input: String): String =
         MessageDigest.getInstance("SHA-256").digest(input.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
-
-    data class AccountResponse(val data: AccountData? = null)
-    data class AccountData(val token: String? = null)
-    data class GofileResponse(val data: GofileData? = null)
-    data class GofileData(val children: Map<String, GofileFile>? = null)
-    data class GofileFile(val type: String? = null, val name: String? = null, val link: String? = null, val size: Long? = 0L)
 }
 
 class Wootly : ExtractorApi() {
@@ -738,13 +786,14 @@ class Wootly : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val iframe = app.get(url).document.selectFirst("iframe")?.attr("src") ?: return
-        val iframeHtml = app.post(iframe, headers = mapOf("Referer" to url), data = mapOf("qdfx" to "1")).text
+        val pageHtml = mfCfGetText(url, referer = referer)
+        val iframe = Jsoup.parse(pageHtml).selectFirst("iframe")?.attr("src") ?: return
+        val iframeHtml = mfCfPostText(iframe, headers = mapOf("Referer" to url), data = mapOf("qdfx" to "1"))
         val vd = Regex("""var\s+vd\s*=\s*["']([^"']+)["']""").find(iframeHtml)?.groupValues?.get(1)
         val tk = Regex("""tk\s*=\s*["']([^"']+)["']""").find(iframeHtml)?.groupValues?.get(1)
         if (vd.isNullOrBlank() || tk.isNullOrBlank()) return
 
-        val streamUrl = app.get("https://web.wootly.ch/grabm?t=$tk&id=$vd", headers = mapOf("Referer" to iframe)).text.trim()
+        val streamUrl = mfCfGetText("https://web.wootly.ch/grabm?t=$tk&id=$vd", headers = mapOf("Referer" to iframe)).trim()
         if (streamUrl.isBlank() || !streamUrl.startsWith("http") || mfIsBrokenContainerUrl(streamUrl)) return
 
         callback.invoke(newExtractorLink(this.name, this.name, streamUrl, ExtractorLinkType.VIDEO) { this.referer = referer ?: "" })
@@ -777,7 +826,7 @@ open class GDFlix : ExtractorApi() {
             baseUrl = latestBaseUrl
         }
 
-        val document = app.get(newUrl).document
+        val document = Jsoup.parse(mfCfGetText(newUrl))
         val fileName = document.select("ul > li.list-group-item:contains(Name)").text().substringAfter("Name : ").orEmpty()
         val fileSize = document.select("ul > li.list-group-item:contains(Size)").text().substringAfter("Size : ").orEmpty()
         val quality = mfIndexQuality(fileName)
@@ -799,13 +848,13 @@ open class GDFlix : ExtractorApi() {
                 text.contains("CLOUD DOWNLOAD [R2]") -> myCallback(link, "[Cloud]")
                 text.contains("GD Index") -> {
                     listOf(1, 2).mfSafeAmap { cfType ->
-                        app.get("$baseUrl$link?type=$cfType").document.select("a.btn-success").mfSafeAmap { cfBtn ->
+                        Jsoup.parse(mfCfGetText("$baseUrl$link?type=$cfType")).select("a.btn-success").mfSafeAmap { cfBtn ->
                             myCallback(cfBtn.attr("href"), "[CF]")
                         }
                     }
                 }
                 text.contains("FAST CLOUD") -> {
-                    val dlink = app.get(baseUrl + link).document.select("div.card-body a").attr("href")
+                    val dlink = Jsoup.parse(mfCfGetText(baseUrl + link)).select("div.card-body a").attr("href")
                     if (dlink.isNotBlank()) myCallback(dlink, "[FAST CLOUD]")
                 }
                 link.contains("pixeldra") -> {
@@ -815,7 +864,7 @@ open class GDFlix : ExtractorApi() {
                 }
                 text.contains("GoFile") -> {
                     runCatching {
-                        app.get(link).document.select(".row .row a").mfSafeAmap { gofileAnchor ->
+                        Jsoup.parse(mfCfGetText(link)).select(".row .row a").mfSafeAmap { gofileAnchor ->
                             val gLink = gofileAnchor.attr("href")
                             if (gLink.contains("gofile")) loadExtractor(gLink, "", subtitleCallback, callback)
                         }
@@ -828,8 +877,7 @@ open class GDFlix : ExtractorApi() {
 
 internal object PlayDirectStub {
     suspend fun resolve(url: String, referer: String?): String? = try {
-        val res = app.get(url, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to (referer ?: "https://nexdrive.fit/")), timeout = 20L)
-        val text = res.text
+        val text = mfCfGetText(url, headers = mapOf("User-Agent" to USER_AGENT), referer = referer ?: "https://nexdrive.fit/", timeoutSec = 20L)
         val embedded = Regex("""var\s+reurl\s*=\s*"([^"]+)"""").find(text)?.groupValues?.get(1)
             ?: Regex("""'(https://fastdl[^']*dl\.php\?link=[^']+)'""").find(text)?.groupValues?.get(1)
             ?: Regex("""'(https://hubcdn[^']*dl\.php\?link=[^']+)'""").find(text)?.groupValues?.get(1)
@@ -906,7 +954,8 @@ class Linksmod : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        app.get(url).document.select("div .view-well > a").mfSafeAmap { item ->
+        val document = Jsoup.parse(mfCfGetText(url))
+        document.select("div .view-well > a").mfSafeAmap { item ->
             loadExtractor(item.attr("href"), "", subtitleCallback, callback)
         }
     }
@@ -926,7 +975,7 @@ open class Hblinks : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        app.get(url).document.select("div#primary p > a").mfSafeAmap { item ->
+        Jsoup.parse(mfCfGetText(url)).select("div#primary p > a").mfSafeAmap { item ->
             loadExtractor(item.attr("href"), "", subtitleCallback, callback)
         }
     }
@@ -943,7 +992,7 @@ open class Hubdrive : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val href = app.get(url).document.select(".btn.btn-primary.btn-user.btn-success1.m-1").attr("href")
+        val href = Jsoup.parse(mfCfGetText(url)).select(".btn.btn-primary.btn-user.btn-success1.m-1").attr("href")
         if (href.isNotBlank()) loadExtractor(href, "", subtitleCallback, callback)
     }
 }
@@ -961,13 +1010,13 @@ open class Driveleech : ExtractorApi() {
     private suspend fun CFType(url: String): List<String> {
         val downloadLinks = mutableListOf<String>()
         listOf("1", "2").forEach { t ->
-            downloadLinks.addAll(app.get("$url?type=$t").document.select("a.btn-success").mapNotNull { it.attr("href") })
+            downloadLinks.addAll(Jsoup.parse(mfCfGetText("$url?type=$t")).select("a.btn-success").mapNotNull { it.attr("href") })
         }
         return downloadLinks
     }
 
     private suspend fun resumeCloudLink(baseUrl: String, url: String): String? =
-        app.get(baseUrl + url).document.selectFirst("a.btn-success")?.attr("href")
+        Jsoup.parse(mfCfGetText(baseUrl + url)).selectFirst("a.btn-success")?.attr("href")
 
     private suspend fun resumeBot(url: String): String {
         val resumeBotResponse = app.get(url)
@@ -976,13 +1025,12 @@ open class Driveleech : ExtractorApi() {
         val resumeBotToken = Regex("formData\\.append\\('token', '([a-f0-9]+)'\\)").find(resumeBotDoc)?.groups?.get(1)?.value
         val resumeBotPath = Regex("fetch\\('/download\\?id=([a-zA-Z0-9/+]+)'").find(resumeBotDoc)?.groups?.get(1)?.value
         val resumeBotBaseUrl = url.split("/download")[0]
-        val jsonResponse = app.post(
-            "$resumeBotBaseUrl/download?id=$resumeBotPath",
+        val jsonResponse = mfCfPostText(
+            url = "$resumeBotBaseUrl/download?id=$resumeBotPath",
             data = mapOf("token" to "$resumeBotToken"),
-            headers = mapOf("Accept" to "*/*", "Origin" to resumeBotBaseUrl, "Sec-Fetch-Site" to "same-origin"),
-            cookies = mapOf("PHPSESSID" to "$ssid"),
+            headers = mapOf("Accept" to "*/*", "Origin" to resumeBotBaseUrl, "Sec-Fetch-Site" to "same-origin", "Cookie" to "PHPSESSID=$ssid"),
             referer = url
-        ).text
+        )
         return JSONObject(jsonResponse).getString("url")
     }
 
@@ -994,11 +1042,12 @@ open class Driveleech : ExtractorApi() {
     ) {
         val baseUrl = mfBaseUrl(url)
         val document = if (url.contains("r?key=")) {
-            val temp = app.get(url).document.selectFirst("script")?.data()
+            val rawFirst = mfCfGetText(url)
+            val temp = Jsoup.parse(rawFirst).selectFirst("script")?.data()
                 ?.substringAfter("replace(\"")?.substringBefore("\")").orEmpty()
-            app.get(baseUrl + temp).document
+            Jsoup.parse(mfCfGetText(baseUrl + temp))
         } else {
-            app.get(url).document
+            Jsoup.parse(mfCfGetText(url))
         }
 
         val fileName = document.select("ul > li.list-group-item:contains(Name)").text().substringAfter("Name : ")
@@ -1037,7 +1086,7 @@ class Howblogs : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        app.get(url).document.select("div.center_it a").mfSafeAmap { item ->
+        Jsoup.parse(mfCfGetText(url, referer = referer)).select("div.center_it a").mfSafeAmap { item ->
             loadExtractor(item.attr("href"), referer, subtitleCallback, callback)
         }
     }
@@ -1074,7 +1123,8 @@ open class HubCloud : ExtractorApi() {
             baseUrl = latestBaseUrl
         }
 
-        val doc = app.get(newUrl).document
+        val rawFirst = mfCfGetText(newUrl)
+        val doc = Jsoup.parse(rawFirst)
         var link = if (newUrl.contains("/video/")) {
             doc.selectFirst("div.vd > center > a")?.attr("href").orEmpty()
         } else {
@@ -1085,7 +1135,8 @@ open class HubCloud : ExtractorApi() {
         if (link.isBlank()) return
         if (!link.startsWith("https://")) link = baseUrl + link
 
-        val document = app.get(link).document
+        val rawSecond = mfCfGetText(link)
+        val document = Jsoup.parse(rawSecond)
         val header = document.select("div.card-header").text()
         val size = document.select("i#size").text()
         val quality = mfIndexQuality(header)
@@ -1106,13 +1157,13 @@ open class HubCloud : ExtractorApi() {
                 text.contains("Mega Server") -> myCallback(btnLink, "[Mega Server]")
                 text.contains("Download File") -> myCallback(btnLink)
                 btnLink.contains("pixeldra") -> {
-                    val pixelLink = extractPxlUrl(document.toString()) ?: return@mfSafeAmap
+                    val pixelLink = extractPxlUrl(rawSecond) ?: return@mfSafeAmap
                     val finalURL = if (pixelLink.contains("download", true)) pixelLink
                     else "https://pixeldrain.dev/api/file/${pixelLink.substringAfterLast("/")}?download"
                     myCallback(finalURL, "[Pixeldrain]")
                 }
                 text.contains("Buzz Server") -> {
-                    val redirectUrl = app.get(btnLink).document.selectFirst(".download-btn")?.attr("href") ?: return@mfSafeAmap
+                    val redirectUrl = Jsoup.parse(mfCfGetText(btnLink)).selectFirst(".download-btn")?.attr("href") ?: return@mfSafeAmap
                     myCallback(mfBaseUrl(btnLink) + redirectUrl, "[Buzz Server]")
                 }
                 text.contains("Gofile") -> loadExtractor(btnLink, "", subtitleCallback, callback)
@@ -1156,7 +1207,7 @@ open class VoeExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val html = app.get(url, referer = referer ?: "$mainUrl/").text
+        val html = mfCfGetText(url, referer = referer ?: "$mainUrl/")
         val hlsB64 = Regex("""['"]hls['"]\s*:\s*['"]([A-Za-z0-9+/=]+)['"]""").find(html)?.groupValues?.get(1)
         if (!hlsB64.isNullOrBlank()) {
             val decoded = runCatching { base64Decode(hlsB64).trim() }.getOrNull().orEmpty()
@@ -1186,7 +1237,7 @@ open class StreamTapeExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val html = app.get(url.replace("/v/", "/e/"), referer = referer ?: "$mainUrl/").text
+        val html = mfCfGetText(url.replace("/v/", "/e/"), referer = referer ?: "$mainUrl/")
         val m = Regex("""document\.getElementById\(['"](?:no)?robotlink['"]\)\.innerHTML\s*=\s*["']([^"']+)["']\s*\+\s*\(?["']([^"']+)["']\)?\.substring\((\d+)\)""")
             .find(html) ?: return
         val sub = m.groupValues[3].toIntOrNull() ?: 0
@@ -1213,7 +1264,7 @@ open class NxStreamHubExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val html = app.get(url, referer = referer ?: "$mainUrl/").text
+        val html = mfCfGetText(url, referer = referer ?: "$mainUrl/")
         val hls = Regex("""https?://[^\s"'<>\\]+\.m3u8(?:\?[^\s"'<>\\]*)?""").find(html)?.value.orEmpty()
         if (hls.startsWith("http") && !mfIsBrokenContainerUrl(hls)) {
             generateM3u8(name, hls, url).forEach(callback)
@@ -1245,7 +1296,7 @@ open class VibePlayer : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val response = app.get(url, referer = referer).text
+        val response = mfCfGetText(url, referer = referer)
         val videoUrl = Regex("""const\s+src\s*=\s*["']([^"']+)["']""").find(response)?.groups?.get(1)?.value ?: return
         if (!mfIsBrokenContainerUrl(videoUrl)) generateM3u8(name, videoUrl, "$mainUrl/").forEach(callback)
     }
@@ -1270,10 +1321,11 @@ open class MegaPlay : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val doc = app.get(url, headers = mapOf("User-Agent" to USER_AGENT, "Referer" to (referer ?: "$mainUrl/"))).document
+        val html = mfCfGetText(url, headers = mapOf("User-Agent" to USER_AGENT), referer = referer ?: "$mainUrl/")
+        val doc = Jsoup.parse(html)
         val streamId = doc.selectFirst("#megaplay-player")?.attr("data-id") ?: return
         val type = if (url.contains("/dub", ignoreCase = true)) "dub" else "sub"
-        val jsonText = runCatching { app.get("$mainUrl/stream/getSources?id=$streamId&type=$type", referer = url).text }.getOrNull().orEmpty()
+        val jsonText = mfCfGetText("$mainUrl/stream/getSources?id=$streamId&type=$type", referer = url)
         val m3u8 = runCatching { JSONObject(jsonText).optJSONObject("sources")?.optString("file")?.trim().orEmpty() }.getOrDefault("")
         if (m3u8.startsWith("http") && !mfIsBrokenContainerUrl(m3u8)) {
             generateM3u8(name, m3u8, mainUrl).forEach(callback)
@@ -1292,8 +1344,8 @@ open class Modiplay : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val doc = app.get(url).document
-        val urls = Regex("""switchServer\(['"](https?:\/\/[^'"]+)""").findAll(doc.toString()).map { it.groupValues[1] }.toList()
+        val html = mfCfGetText(url)
+        val urls = Regex("""switchServer\(['"](https?:\/\/[^'"]+)""").findAll(html).map { it.groupValues[1] }.toList()
         urls.mfSafeAmap { embed -> loadExtractor(embed, "", subtitleCallback, callback) }
     }
 }
@@ -1303,4 +1355,3 @@ class Iqsmartgames : GDMirrorbot() {
     override var mainUrl = "https://streams.iqsmartgames.com"
     override var requiresReferer = true
 }
-
