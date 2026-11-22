@@ -297,13 +297,13 @@ class MovieFoxProvider : MainAPI() {
     ): String? {
         val headers = directHeaders(url, extraHeaders)
         val isMovieFoxSite = url.contains("moviefox.pro", true)
-        val isFastFailSource = sourceTag.lowercase() in setOf("cinetv_hls", "movy", "rogmovies", "topmovies")
-        val effectiveTimeout = when {
-            isMovieFoxSite -> minOf(timeoutSec, 4L)
-            isFastFailSource -> minOf(timeoutSec, 4L)
-            else -> timeoutSec
-        }
-        val effectiveRetries = if (isMovieFoxSite || isFastFailSource) 1 else retries.coerceAtLeast(1)
+        val noisySources = setOf(
+            "cinetv_hls", "movy", "rogmovies", "topmovies",
+            "bollyhq", "myfilms", "filmyking", "prmovies", "play4u"
+        )
+        val isNoisyOrFastFail = isMovieFoxSite || sourceTag.lowercase() in noisySources
+        val effectiveTimeout = if (isNoisyOrFastFail) minOf(timeoutSec, 4L) else timeoutSec
+        val effectiveRetries = if (isNoisyOrFastFail) 1 else retries.coerceAtLeast(1)
 
         repeat(effectiveRetries) { attempt ->
             val start = System.currentTimeMillis()
@@ -316,7 +316,7 @@ class MovieFoxProvider : MainAPI() {
                 }
                 val code = res.code
                 runCatching { res.okhttpResponse.close() }
-                if (isMovieFoxSite && code == 404) {
+                if (isNoisyOrFastFail && (code == 404 || code == 403 || code == 500)) {
                     return null
                 }
                 val reason = if (code == 401) "TOKEN EXPIRED (401)" else "HTTP $code"
@@ -324,7 +324,7 @@ class MovieFoxProvider : MainAPI() {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if (!isMovieFoxSite) {
+                if (!isNoisyOrFastFail) {
                     logError(sourceTag, url, e, "attempt=${attempt + 1}")
                 }
             }
@@ -1552,7 +1552,7 @@ class MovieFoxProvider : MainAPI() {
             }
 
             val orderedKeys = (appCtx?.let { MovieFoxSettingsDialog.getOrderedEnabledKeys(it) }
-                ?: MovieFoxDialogHelperFallbackKeys).distinct()
+                ?: MovieFoxSettingsDialog.BASE_SERVERS.map { it.key }).distinct()
 
             val prioritizedKeys = orderedKeys.filter { it.lowercase() in fastWaveKeys } +
                 orderedKeys.filterNot { it.lowercase() in fastWaveKeys }
@@ -1587,9 +1587,6 @@ class MovieFoxProvider : MainAPI() {
             false
         }
     }
-
-    private val MovieFoxDialogHelperFallbackKeys: List<String>
-        get() = MovieFoxSettingsDialog.BASE_SERVERS.map { it.key }
 
     private suspend fun runServerKey(
         srvKey: String,
@@ -2424,7 +2421,7 @@ class MovieFoxProvider : MainAPI() {
 
         for (dom in candidates) {
             try {
-                val searchHtml = safeGetText("$dom/?s=$q", mapOf("Referer" to "$dom/"), timeoutSec = 5L, retries = 1, sourceTag = "prmovies").orEmpty()
+                val searchHtml = safeGetText("$dom/?s=$q", mapOf("Referer" to "$dom/"), timeoutSec = 4L, retries = 1, sourceTag = "prmovies").orEmpty()
                 if (searchHtml.isBlank()) continue
                 activePrmoviesBase = dom
 
@@ -2438,7 +2435,7 @@ class MovieFoxProvider : MainAPI() {
                 for (card in matchedCards) {
                     val detailUrl = card.selectFirst("a.ml-mask")?.attr("href")?.let { normalizeUrl(it, dom) }.orEmpty()
                     if (detailUrl.isBlank()) continue
-                    val detailHtml = safeGetText(detailUrl, mapOf("Referer" to "$dom/"), timeoutSec = 5L, retries = 1, sourceTag = "prmovies").orEmpty()
+                    val detailHtml = safeGetText(detailUrl, mapOf("Referer" to "$dom/"), timeoutSec = 4L, retries = 1, sourceTag = "prmovies").orEmpty()
                     if (detailHtml.isBlank()) continue
                     val doc = Jsoup.parse(detailHtml, detailUrl)
 
@@ -2449,7 +2446,7 @@ class MovieFoxProvider : MainAPI() {
                             if (src.isBlank()) return@forEach
                             val cleanEmbed = normalizeUrl(src, dom)
                             if (cleanEmbed.contains("speedostream", true)) {
-                                val spHtml = safeGetText(cleanEmbed, mapOf("Referer" to detailUrl), timeoutSec = 5L, retries = 1, sourceTag = "prmovies").orEmpty()
+                                val spHtml = safeGetText(cleanEmbed, mapOf("Referer" to detailUrl), timeoutSec = 4L, retries = 1, sourceTag = "prmovies").orEmpty()
                                 val m3u8 = Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""").find(spHtml)?.groupValues?.get(1)
                                 if (!m3u8.isNullOrBlank()) {
                                     emitStream(lc, "Prmovies • Speedostream", m3u8, true, "1080p", mapOf("Referer" to cleanEmbed), emitLink)
@@ -3311,4 +3308,3 @@ class MovieFoxProvider : MainAPI() {
         }
     }
 }
-
