@@ -5,10 +5,6 @@ import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.plugins.Plugin
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
-import com.megix.AllLoadLinksData
-import com.megix.CineStreamExtractors
-import com.megix.ProviderRegistry
-import com.megix.init as initCineStreamApis
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -17,16 +13,25 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
 
+data class CineStreamBridgePayload(
+    val title: String = "",
+    val imdbId: String = "",
+    val tmdbId: String? = null,
+    val isTv: Boolean = false,
+    val season: Int = 1,
+    val episode: Int = 1
+)
+
 object MovieFoxCineStreamBridge {
 
     fun availableServerKeys(): List<String> =
-        ProviderRegistry.builtInProviders.map { it.key }
+        listOf("cinestream") + MovieFoxCineStream.CATALOGS.map { it.id }
 
     fun enabledServerKeys(ctx: Context): List<String> {
         val order = MovieFoxSettingsDialog.getServerOrder(ctx)
-        val builtIn = ProviderRegistry.builtInProviders.map { it.key }
-        val orderedBuiltIn = order.filter { it in builtIn } + (builtIn - order.toSet())
-        return orderedBuiltIn.filter { MovieFoxSettingsDialog.isServerEnabled(ctx, it) }
+        val keys = availableServerKeys()
+        val ordered = order.filter { it in keys } + (keys - order.toSet())
+        return ordered.filter { MovieFoxSettingsDialog.isServerEnabled(ctx, it) }
     }
 
     fun registerCineStreamExtractors(plugin: Plugin, extractors: List<ExtractorApi>) {
@@ -37,14 +42,12 @@ object MovieFoxCineStreamBridge {
 
     suspend fun fetchServers(
         ctx: Context?,
-        payload: AllLoadLinksData,
-        isAnime: Boolean,
+        provider: MovieFoxProvider,
+        payload: CineStreamBridgePayload,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit,
         perServerTimeoutMs: Long = 15_000L
     ): Boolean {
-        runCatching { initCineStreamApis() }
-
         val activeKeys = if (ctx != null) {
             enabledServerKeys(ctx)
         } else {
@@ -52,34 +55,45 @@ object MovieFoxCineStreamBridge {
         }
         if (activeKeys.isEmpty()) return false
 
+        val timeoutSec = (perServerTimeoutMs / 1000L).coerceAtLeast(5L)
         val concurrency = (ctx?.let { MovieFoxSettingsDialog.getConcurrency(it) } ?: 15).coerceIn(2, 50)
         val gate = Semaphore(concurrency)
         var emitted = false
         val lock = Any()
 
-        val providersToRun = ProviderRegistry.builtInProviders.filter { it.key in activeKeys }
-
-        supervisorScope {
-            providersToRun.map { def ->
+        return supervisorScope {
+            val jobs = activeKeys.map { _ ->
                 async(Dispatchers.IO) {
                     gate.withPermit {
                         withTimeoutOrNull(perServerTimeoutMs) {
                             try {
-                                val action = if (isAnime) def.executeAnime else def.executeStandard
-                                action?.invoke(CineStreamExtractors, payload, subtitleCallback) { link ->
-                                    synchronized(lock) {
-                                        emitted = true
+                                val ok = MovieFoxCineStream.loadStreams(
+                                    provider = provider,
+                                    title = payload.title,
+                                    imdbId = payload.imdbId,
+                                    tmdbId = payload.tmdbId,
+                                    isTv = payload.isTv,
+                                    season = payload.season,
+                                    episode = payload.episode,
+                                    timeoutSec = timeoutSec,
+                                    subtitleCallback = subtitleCallback,
+                                    callback = { link ->
+                                        synchronized(lock) { emitted = true }
+                                        callback(link)
                                     }
-                                    callback(link)
+                                )
+                                if (ok) {
+                                    synchronized(lock) { emitted = true }
                                 }
                             } catch (_: Exception) {
                             }
                         }
                     }
                 }
-            }.awaitAll()
+            }
+            jobs.awaitAll()
+            emitted
         }
-
-        return emitted
     }
 }
+
