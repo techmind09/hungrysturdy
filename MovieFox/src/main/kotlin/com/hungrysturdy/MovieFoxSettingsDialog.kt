@@ -247,20 +247,20 @@ object MovieFoxSettingsDialog {
     )
 
     val BASE_SERVERS = listOf(
-        ServerItem("moviefox", "MovieFox Main", "HOME/TMDB", "https://moviefox.pro/", "#7C3AED", false, true, "Movies", "🎬 MF"),
+        ServerItem("moviefox", "MovieFox Main", "HOME/TMDB", "https://api.themoviedb.org/3/trending/movie/day?api_key=b030404650f279792a8d3287232358e3", "#7C3AED", false, true, "Movies", "🎬 MF"),
         ServerItem("cinestream", "CineStream", "CINEMETA/KITSU", "https://cinemeta-catalogs.strem.io/top/catalog/movie/top/skip=0.json", "#38BDF8", false, true, "Movies", "☁️ CS"),
-        ServerItem("purstream", "Purstream", "API", "https://moviefox.pro/api/stream/purstream?type=movie&id=550", "#38BDF8", false, true, "Movies", "🎬 MF"),
-        ServerItem("castle", "Castle", "API", "https://moviefox.pro/api/stream/castle?type=movie&id=550", "#818CF8", false, true, "Movies", "🎬 MF"),
-        ServerItem("watchout", "Watchout", "API", "https://moviefox.pro/api/stream/watchout?type=movie&id=550", "#2DD4BF", false, false, "Movies", "🎬 MF"),
+        ServerItem("purstream", "Purstream", "API", "https://cinemeta-catalogs.strem.io/top/catalog/movie/top/skip=0.json", "#38BDF8", false, true, "Movies", "🎬 MF"),
+        ServerItem("castle", "Castle", "API", "https://cinemeta-catalogs.strem.io/top/catalog/series/top/skip=0.json", "#818CF8", false, true, "Movies", "🎬 MF"),
+        ServerItem("watchout", "Watchout", "API", "https://v3-cinemeta.strem.io/catalog/movie/top.json", "#2DD4BF", false, false, "Movies", "🎬 MF"),
         ServerItem("cinetv_api", "CineTV API", "WEB/API", "https://cinetv.app/en", "#F43F5E", false, true, "Movies", "🎬 MF"),
-        ServerItem("cinetv_hls", "CineTV HLS", "WORKER", "https://silent-frost-f2dbv.nxstreamhub.workers.dev/hls/movie/550", "#FB7185", false, true, "Movies", "🎬 MF"),
+        ServerItem("cinetv_hls", "CineTV HLS", "WORKER", "https://cinetv.app/en", "#FB7185", false, true, "Movies", "🎬 MF"),
         ServerItem("nuvio", "Nuvio / Stremio", "MANIFEST", DEFAULT_STREMIO_MANIFEST, "#A855F7", false, true, "Series", "🎬 MF"),
         ServerItem("moviebox", "MovieBox / NetNaija API", "BFF", "https://h5-api.aoneroom.com/wefeed-mobile-bff/tab/ranking-list?tabId=0&page=1&perPage=1", "#34D399", false, true, "Movies", "🎬 MF"),
         ServerItem("sportslive", "SportsLive", "LIVE/SPORTS", "https://h5-sport-api.aoneroom.com/wefeed-h5api-bff/live/match-list-v5", "#22D3EE", false, false, "Movies", "🎬 MF"),
         ServerItem("hicine", "HiCine", "HAPI", "https://hicine.biz/hapi/home", "#38BDF8", false, true, "Hindi", "🎬 MF"),
-        ServerItem("movy", "Movy", "API", "https://www.movy.sx/", "#22D3EE", false, true, "Movies", "🎬 MF"),
+        ServerItem("movy", "Movy", "API", "https://api.wecollege.net/seed?mediaId=550", "#22D3EE", false, true, "Movies", "🎬 MF"),
         ServerItem("sflix", "Sflix", "HLS/MP4", "https://sflix.film/", "#F97316", false, true, "Series", "⚡ SKY"),
-        ServerItem("prmovies", "Prmovies", "HI/M3U8", "https://prmovies.beer/", "#F59E0B", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("prmovies", "Prmovies", "HI/M3U8", "https://prmovies.com.cv/", "#F59E0B", false, true, "Hindi", "⚡ SKY"),
         ServerItem("hindidrama", "HindiDrama", "K-DRAMA", "https://hindidrama.net/", "#EC4899", false, true, "Series", "⚡ SKY"),
         ServerItem("vegamovies", "VegaMovies", "PXL•FSL•GDRIVE", "https://vegamovies.lease/", "#EC4899", false, true, "Hindi", "⚡ SKY"),
         ServerItem("rogmovies", "RogMovies", "PXL•FSL•GDRIVE", "https://rogmovies.vip/", "#EC4899", false, true, "Hindi", "⚡ SKY"),
@@ -384,17 +384,18 @@ object MovieFoxSettingsDialog {
         try {
             val conn = (URL(probeTarget).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 6000
-                readTimeout = 6000
+                connectTimeout = 4500
+                readTimeout = 4500
                 instanceFollowRedirects = true
                 setRequestProperty("User-Agent", CF_BYPASS_UA)
             }
             val code = conn.responseCode
             val ms = System.currentTimeMillis() - start
             conn.disconnect()
-            val ok = code in 200..399
+            val ok = code in 200..405
             val status = when {
-                ok -> "LIVE"
+                code in 200..399 -> "LIVE"
+                code == 405 -> "LIVE"
                 code == 404 -> "HTTP 404"
                 code == 401 -> "TOKEN EXPIRED"
                 code == 403 || code == 503 -> "HTTP $code"
@@ -787,11 +788,11 @@ object MovieFoxSettingsDialog {
                 }
             }
         }
-        return out
+        return out.distinctBy { "${it.name.lowercase()}|${it.probeUrl.lowercase()}" }
     }
 
     private fun saveCs3Servers(ctx: Context, list: List<ServerItem>) {
-        val deduped = list.distinctBy { it.key }
+        val deduped = list.distinctBy { "${it.name.lowercase()}|${it.probeUrl.lowercase()}" }
         cachedCs3Servers.clear()
         cachedCs3Servers.addAll(deduped)
         val arr = JSONArray()
@@ -819,9 +820,6 @@ object MovieFoxSettingsDialog {
         }
         if (list.none { it.repoUrl.equals(SKY_UNIVERSE_REPO_URL, ignoreCase = true) }) {
             list.add(0, Cs3RepoConfig("sky_universe_mega", "Sky Universe Mega Repo", SKY_UNIVERSE_REPO_URL, true, 0))
-        }
-        if (list.none { it.repoUrl.equals(CNC_UNIVERSE_REPO_URL, ignoreCase = true) }) {
-            list.add(1, Cs3RepoConfig("cnc_universe_repo", "CNC Universe Repo", CNC_UNIVERSE_REPO_URL, true, 0))
         }
         cachedCs3Repos = list
         saveCs3Repos(ctx, list)
@@ -903,8 +901,12 @@ object MovieFoxSettingsDialog {
             setRequestProperty("User-Agent", CF_BYPASS_UA)
             setRequestProperty("Accept", "application/json, application/octet-stream, text/plain, */*")
         }
-        val bytes = if (conn.responseCode in 200..299) conn.inputStream.use { it.readBytes() } else {
-            logSiteError("CS3Repo", urlStr, null, "HTTP ${conn.responseCode}")
+        val bytes = if (conn.responseCode in 200..299) {
+            conn.inputStream.use { it.readBytes() }
+        } else {
+            if (conn.responseCode != 404) {
+                logSiteError("CS3Repo", urlStr, null, "HTTP ${conn.responseCode}")
+            }
             null
         }
         conn.disconnect()
@@ -981,7 +983,7 @@ object MovieFoxSettingsDialog {
                 val fName = pluginName.ifBlank { rawUrl.substringBefore("?").substringAfterLast("/").removeSuffix(".cs3") }.ifBlank { "CS3 Plugin" }
                 out.add(ServerItem("cs3_${idTag}_${fName.lowercase().replace(Regex("[^a-z0-9]+"), "_")}", fName, "CS3", rawUrl, "#34D399", true, true, "Movies", "⚡ SKY"))
             }
-            return@withContext out.distinctBy { it.key }
+            return@withContext out.distinctBy { "${it.name.lowercase()}|${it.probeUrl.lowercase()}" }
         }
 
         val body = runCatching { String(bytes, Charsets.UTF_8).trim() }.getOrDefault("")
@@ -1001,7 +1003,7 @@ object MovieFoxSettingsDialog {
                 }
             }
         }
-        out.distinctBy { it.key }
+        out.distinctBy { "${it.name.lowercase()}|${it.probeUrl.lowercase()}" }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -1950,7 +1952,7 @@ object MovieFoxSettingsDialog {
             dialogScope.launch {
                 val fetched = fetchServersFromCs3Repo(repo)
                 val prefix = "cs3_${repo.id.takeLast(6)}_"
-                saveCs3Servers(ctx, (cachedCs3Servers.filterNot { it.key.startsWith(prefix) } + fetched).distinctBy { it.key })
+                saveCs3Servers(ctx, (cachedCs3Servers.filterNot { it.key.startsWith(prefix) } + fetched).distinctBy { "${it.name.lowercase()}|${it.probeUrl.lowercase()}" })
                 repo.serverCount = fetched.size; saveCs3Repos(ctx, cs3RepoList)
                 if (isContextAlive(ctx)) { renderCs3Repos(); applyServerFilter(); safeToast(ctx, "${fetched.size} servers loaded!") }
             }
@@ -2003,7 +2005,7 @@ object MovieFoxSettingsDialog {
         })
         cs3Pane.addView(cs3AddBox); cs3Pane.addView(cs3RepoListHolder); renderCs3Repos()
 
-        // --- Health & Logs Pane (Video Cloudflare Bypass Flow) ---
+        // --- Health & Logs Pane (Cloudflare Bypass Flow) ---
         val healthCfCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = cardBg("#0D1017", "#232C40", 20f, 2)
@@ -2165,7 +2167,7 @@ object MovieFoxSettingsDialog {
 
         healthCfStatusTv.setOnClickListener {
             healthCfStatusTv.text = "⏳ Solving..."
-            val target = SERVERS.firstOrNull { it.key == "moviefox" }?.probeUrl ?: "https://moviefox.pro/"
+            val target = SERVERS.firstOrNull { it.key == "cinestream" }?.probeUrl ?: DEFAULT_STREMIO_MANIFEST
             showInAppCfBypassDialog(ctx, target) { refreshHealthPane() }
         }
         healthCfCard.addView(healthCfStatusTv)
@@ -2312,4 +2314,3 @@ object MovieFoxSettingsDialog {
         }
     }
 }
-
