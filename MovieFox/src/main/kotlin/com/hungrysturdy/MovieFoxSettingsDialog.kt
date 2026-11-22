@@ -1021,70 +1021,36 @@ object MovieFoxSettingsDialog {
         }
 
         val topBar = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                 .apply { bottomMargin = dp(ctx, 8) }
         }
         topBar.addView(TextView(ctx).apply {
-            text = "🛡️ Cloudflare Bypass"
-            textSize = 15f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            text = "🛡️ Quick security check"
+            textSize = 14.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
-        val saveTopBtn = Button(ctx).apply {
-            text = "✓ Save"; textSize = 11f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE); background = pillBg("#2563EB", 14f)
-            setPadding(dp(ctx, 12), 0, dp(ctx, 12), 0)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 34))
-        }
-        topBar.addView(saveTopBtn)
+        topBar.addView(TextView(ctx).apply {
+            text = "✕"; textSize = 15f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#94A3B8"))
+            setPadding(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4))
+            setOnClickListener { runCatching { dialogRef?.dismiss() } }
+        })
         box.addView(topBar)
 
-        box.addView(TextView(ctx).apply {
-            text = "Solve the Cloudflare challenge once — cookies are reused afterwards."
-            textSize = 11f; setTextColor(safeColor("#94A3B8"))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                .apply { bottomMargin = dp(ctx, 8) }
-        })
-
-        val wvSwitchRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            background = cardBg("#121724", "#232D42", 16f)
-            setPadding(dp(ctx, 12), dp(ctx, 8), dp(ctx, 12), dp(ctx, 8))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                .apply { bottomMargin = dp(ctx, 8) }
-        }
-        wvSwitchRow.addView(TextView(ctx).apply {
-            text = "Use WebView for CF challenges"
-            textSize = 12.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        })
-        val wvSwitch = Switch(ctx).apply { isChecked = isWebViewCfEnabled(ctx) }
-        wvSwitchRow.addView(wvSwitch)
-        box.addView(wvSwitchRow)
-
         val statusBanner = TextView(ctx).apply {
-            text = if (hasSavedCfCookies(ctx)) "✓ CF Cookies Saved - Refresh" else "Quick security check — waiting for challenge"
+            text = "Performing security verification..."
             textSize = 11f; setTypeface(typeface, Typeface.BOLD)
-            setTextColor(safeColor("#34D399"))
-            background = cardBg("#0A241B", "#10B981", 14f)
-            setPadding(dp(ctx, 12), dp(ctx, 8), dp(ctx, 12), dp(ctx, 8))
+            setTextColor(safeColor("#4ADE80"))
+            background = cardBg("#0A2418", "#166534", 12f, 1)
+            setPadding(dp(ctx, 10), dp(ctx, 7), dp(ctx, 10), dp(ctx, 7))
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                 .apply { bottomMargin = dp(ctx, 8) }
         }
         box.addView(statusBanner)
 
-        val clearBtn = Button(ctx).apply {
-            text = "Clear CF cookies"; textSize = 11.5f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
-            setTextColor(safeColor("#F87171")); background = cardBg("#241116", "#7F1D1D", 14f)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 36))
-                .apply { bottomMargin = dp(ctx, 8) }
-        }
-        box.addView(clearBtn)
-
         val webView = WebView(ctx).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 220))
-            setBackgroundColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 250))
+            setBackgroundColor(Color.parseColor("#0B0E16"))
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
@@ -1103,11 +1069,27 @@ object MovieFoxSettingsDialog {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     val u = url ?: initialUrl
                     val ck = runCatching { CookieManager.getInstance().getCookie(u) }.getOrNull().orEmpty()
-                    if (ck.isNotBlank()) {
-                        saveCfCookie(ctx, u, ck)
-                        mainHandler.post {
-                            statusBanner.text = "✓ CF Cookies Saved - Refresh"
-                            statusBanner.setTextColor(safeColor("#34D399"))
+                    if (ck.isNotBlank()) saveCfCookie(ctx, u, ck)
+                    view?.evaluateJavascript(
+                        "(function(){ return document.body ? document.body.innerText : ''; })()"
+                    ) { rawText ->
+                        val bodyTxt = runCatching {
+                            if (rawText != null && rawText.startsWith("\"") && rawText.endsWith("\"")) {
+                                JSONObject("{\"t\":$rawText}").getString("t")
+                            } else rawText.orEmpty()
+                        }.getOrDefault("").lowercase()
+
+                        val isVerifying = bodyTxt.contains("verifying") || bodyTxt.contains("performing security verification")
+                        if (isVerifying) {
+                            mainHandler.post { statusBanner.text = "Verifying..." }
+                        } else if (bodyTxt.isNotBlank() && !bodyTxt.contains("just a moment")) {
+                            if (ck.isBlank()) saveCfCookie(ctx, u, "cf_verified=1")
+                            mainHandler.post {
+                                statusBanner.text = "✓ Verified! Loading..."
+                                safeToast(ctx, "✓ Verified! Loading...")
+                                onSaved()
+                                mainHandler.postDelayed({ runCatching { dialogRef?.dismiss() } }, 450L)
+                            }
                         }
                     }
                 }
@@ -1115,28 +1097,29 @@ object MovieFoxSettingsDialog {
         }
         box.addView(webView)
 
-        val saveAction: () -> Unit = {
-            setWebViewCfEnabled(ctx, wvSwitch.isChecked)
-            val curUrl = webView.url ?: initialUrl
-            val ck = runCatching { CookieManager.getInstance().getCookie(curUrl) }.getOrNull().orEmpty()
-            if (ck.isNotBlank()) saveCfCookie(ctx, curUrl, ck)
-            onSaved()
-            safeToast(ctx, "Cloudflare bypass settings saved")
-            runCatching { dialogRef?.dismiss() }
+        val bottomBtns = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { topMargin = dp(ctx, 8) }
         }
+        bottomBtns.addView(Button(ctx).apply {
+            text = "Reload"; textSize = 11f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(safeColor("#93C5FD")); background = cardBg("#111C33", "#1E3A8A", 12f, 1)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 34)).apply { marginEnd = dp(ctx, 8) }
+            setOnClickListener {
+                statusBanner.text = "Performing security verification..."
+                webView.reload()
+            }
+        })
+        bottomBtns.addView(Button(ctx).apply {
+            text = "Cancel"; textSize = 11f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE); background = pillBg("#2563EB", 12f)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 34))
+            setOnClickListener { runCatching { dialogRef?.dismiss() } }
+        })
+        box.addView(bottomBtns)
 
-        saveTopBtn.setOnClickListener { saveAction() }
-        clearBtn.setOnClickListener {
-            clearAllCfCookies(ctx)
-            statusBanner.text = "CF cookies cleared"
-            statusBanner.setTextColor(safeColor("#F87171"))
-            safeToast(ctx, "CF cookies cleared")
-        }
-
-        val builder = AlertDialog.Builder(ctx).setView(box)
-        builder.setPositiveButton("Save") { _, _ -> saveAction() }
-        builder.setNegativeButton("Close", null)
-        dialogRef = builder.create().apply {
+        dialogRef = AlertDialog.Builder(ctx).setView(box).create().apply {
             setOnDismissListener {
                 runCatching {
                     webView.stopLoading()
@@ -1147,9 +1130,10 @@ object MovieFoxSettingsDialog {
             show()
         }
 
-        if (wvSwitch.isChecked) {
+        if (isWebViewCfEnabled(ctx)) {
             webView.loadUrl(initialUrl)
         } else {
+            statusBanner.text = "WebView CF toggle is OFF"
             webView.visibility = View.GONE
         }
     }
@@ -1630,58 +1614,7 @@ object MovieFoxSettingsDialog {
             extractorPane.addView(card)
         }
 
-        // --- Streaming Pane (with In-App Cloudflare Bypass) ---
-        val cfCard = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#22C55E", 20f)
-            setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
-        }
-        val cfHeaderRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-        }
-        cfHeaderRow.addView(TextView(ctx).apply {
-            text = "🛡️ Cloudflare Bypass (WebView)"
-            textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        })
-        val cfSwitch = Switch(ctx).apply {
-            isChecked = isWebViewCfEnabled(ctx)
-            setOnCheckedChangeListener { _, checked -> setWebViewCfEnabled(ctx, checked) }
-        }
-        cfHeaderRow.addView(cfSwitch)
-        cfCard.addView(cfHeaderRow)
-
-        val cfStatusTv = TextView(ctx).apply {
-            text = if (hasSavedCfCookies(ctx)) "✓ CF Cookies Saved - Refresh" else "Solve challenge once in-app — cookies reused automatically"
-            textSize = 10.5f; setTextColor(safeColor("#34D399"))
-            setPadding(0, dp(ctx, 4), 0, dp(ctx, 8))
-        }
-        cfCard.addView(cfStatusTv)
-
-        val cfBtnRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
-        cfBtnRow.addView(Button(ctx).apply {
-            text = "OPEN CF WEBVIEW"; textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE); background = pillBg("#2563EB", 14f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 34), 1f).apply { marginEnd = dp(ctx, 6) }
-            setOnClickListener {
-                showInAppCfBypassDialog(ctx, "https://cinemeta-catalogs.strem.io/") {
-                    cfStatusTv.text = if (hasSavedCfCookies(ctx)) "✓ CF Cookies Saved - Refresh" else "CF Bypass updated"
-                }
-            }
-        })
-        cfBtnRow.addView(Button(ctx).apply {
-            text = "CLEAR COOKIES"; textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE); background = pillBg("#7F1D1D", 14f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 34), 1f)
-            setOnClickListener {
-                clearAllCfCookies(ctx)
-                cfStatusTv.text = "CF cookies cleared"
-                safeToast(ctx, "CF cookies cleared")
-            }
-        })
-        cfCard.addView(cfBtnRow)
-        streamPane.addView(cfCard)
-
+        // --- Streaming Pane ---
         val themeCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#253046", 20f)
             setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
@@ -2070,7 +2003,24 @@ object MovieFoxSettingsDialog {
         })
         cs3Pane.addView(cs3AddBox); cs3Pane.addView(cs3RepoListHolder); renderCs3Repos()
 
-        // --- Health & Logs Pane ---
+        // --- Health & Logs Pane (Video Cloudflare Bypass Flow) ---
+        val healthCfCard = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardBg("#0D1017", "#232C40", 20f, 2)
+            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { bottomMargin = dp(ctx, 8) }
+        }
+        val healthCfHeader = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { bottomMargin = dp(ctx, 4) }
+        }
+        healthCfHeader.addView(TextView(ctx).apply {
+            text = "🛡️ Cloudflare Bypass"
+            textSize = 14f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
         val healthCardsHolder = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         val logTv = TextView(ctx).apply {
             textSize = 10f; setTextColor(safeColor("#E2E8F0"))
@@ -2087,7 +2037,20 @@ object MovieFoxSettingsDialog {
             return "=== MOVIEFOX SERVER HEALTH ===\n$hLines\n\n=== ERROR LOGCAT ===\n$lLines"
         }
 
+        val healthCfSwitch = Switch(ctx).apply { isChecked = isWebViewCfEnabled(ctx) }
+        val healthCfStatusTv = TextView(ctx).apply {
+            text = if (hasSavedCfCookies(ctx)) "✓ CF Cookies Saved - Refresh" else "⏳ Solve Challenge (Tap to Verify)"
+            textSize = 11f; gravity = Gravity.CENTER; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(safeColor("#4ADE80"))
+            background = cardBg("#0A2418", "#166534", 14f, 1)
+            setPadding(dp(ctx, 10), dp(ctx, 8), dp(ctx, 10), dp(ctx, 8))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { bottomMargin = dp(ctx, 7) }
+        }
+
         fun refreshHealthPane() {
+            healthCfSwitch.isChecked = isWebViewCfEnabled(ctx)
+            healthCfStatusTv.text = if (hasSavedCfCookies(ctx)) "✓ CF Cookies Saved - Refresh" else "⏳ Solve Challenge (Tap to Verify)"
             healthCardsHolder.removeAllViews()
             SERVERS.forEach { srv ->
                 val h = getServerHealth(srv.key)
@@ -2142,6 +2105,16 @@ object MovieFoxSettingsDialog {
                 card.addView(col)
 
                 card.addView(TextView(ctx).apply {
+                    text = "CF"; textSize = 8.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#34D399"))
+                    background = pillBg("#0D2B22", 10f); setPadding(dp(ctx, 7), dp(ctx, 5), dp(ctx, 7), dp(ctx, 5))
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                        .apply { marginEnd = dp(ctx, 5) }
+                    setOnClickListener {
+                        showInAppCfBypassDialog(ctx, srv.probeUrl) { refreshHealthPane() }
+                    }
+                })
+
+                card.addView(TextView(ctx).apply {
                     text = "COPY"; textSize = 8.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#38BDF8"))
                     background = pillBg("#0D2338", 10f); setPadding(dp(ctx, 7), dp(ctx, 5), dp(ctx, 7), dp(ctx, 5))
                     setOnClickListener {
@@ -2153,6 +2126,61 @@ object MovieFoxSettingsDialog {
             val logs = getDiagnosticLogs()
             logTv.text = if (logs.isEmpty()) "No error logs yet (ADB tag: $LOG_TAG)" else logs.asReversed().joinToString("\n\n")
         }
+
+        healthCfHeader.addView(Button(ctx).apply {
+            text = "✓ Save"; textSize = 10.5f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE); background = pillBg("#2563EB", 12f)
+            setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 30))
+            setOnClickListener {
+                setWebViewCfEnabled(ctx, healthCfSwitch.isChecked)
+                safeToast(ctx, "CF Bypass settings saved")
+                refreshHealthPane()
+            }
+        })
+        healthCfCard.addView(healthCfHeader)
+
+        healthCfCard.addView(TextView(ctx).apply {
+            text = "Solve the Cloudflare challenge once — cookies are reused afterwards."
+            textSize = 10f; setTextColor(safeColor("#94A3B8"))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { bottomMargin = dp(ctx, 8) }
+        })
+
+        val healthCfSwitchRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            background = cardBg("#141926", "#253046", 14f, 1)
+            setPadding(dp(ctx, 10), dp(ctx, 7), dp(ctx, 10), dp(ctx, 7))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { bottomMargin = dp(ctx, 7) }
+        }
+        healthCfSwitchRow.addView(TextView(ctx).apply {
+            text = "Use WebView for CF challenges"
+            textSize = 12f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        healthCfSwitch.setOnCheckedChangeListener { _, checked -> setWebViewCfEnabled(ctx, checked) }
+        healthCfSwitchRow.addView(healthCfSwitch)
+        healthCfCard.addView(healthCfSwitchRow)
+
+        healthCfStatusTv.setOnClickListener {
+            healthCfStatusTv.text = "⏳ Solving..."
+            val target = SERVERS.firstOrNull { it.key == "moviefox" }?.probeUrl ?: "https://moviefox.pro/"
+            showInAppCfBypassDialog(ctx, target) { refreshHealthPane() }
+        }
+        healthCfCard.addView(healthCfStatusTv)
+
+        healthCfCard.addView(Button(ctx).apply {
+            text = "Clear CF cookies"; textSize = 11f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(safeColor("#FCA5A5")); background = cardBg("#2B1115", "#7F1D1D", 14f, 1)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 34))
+            setOnClickListener {
+                clearAllCfCookies(ctx)
+                healthCfStatusTv.text = "⏳ Solve Challenge (Tap to Verify)"
+                safeToast(ctx, "CF cookies cleared")
+            }
+        })
+        healthPane.addView(healthCfCard)
 
         healthPane.addView(LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -2269,7 +2297,7 @@ object MovieFoxSettingsDialog {
                 setHindiOnly(ctx, hindiOnly)
                 setDownloadOnly(ctx, downloadOnly)
                 setShuffleHomeCategories(ctx, shuffleHome)
-                setWebViewCfEnabled(ctx, cfSwitch.isChecked)
+                setWebViewCfEnabled(ctx, healthCfSwitch.isChecked)
                 safeToast(ctx, "Settings saved & applied")
                 runCatching { dialog.dismiss() }
             }
