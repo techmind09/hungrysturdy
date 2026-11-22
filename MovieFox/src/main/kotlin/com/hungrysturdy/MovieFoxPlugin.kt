@@ -64,9 +64,10 @@ class MovieFoxPlugin : Plugin() {
 
         openSettings = { ctx ->
             try {
-                val targetCtx = when {
+                val activeAct = CommonActivity.activity
+                val targetCtx: Context = when {
                     ctx is Activity && !ctx.isFinishing && !ctx.isDestroyed -> ctx
-                    CommonActivity.activity != null -> CommonActivity.activity
+                    activeAct != null && !activeAct.isFinishing && !activeAct.isDestroyed -> activeAct
                     else -> context
                 }
                 MovieFoxSettingsDialog.show(targetCtx)
@@ -75,4 +76,3 @@ class MovieFoxPlugin : Plugin() {
         }
     }
 }
-
