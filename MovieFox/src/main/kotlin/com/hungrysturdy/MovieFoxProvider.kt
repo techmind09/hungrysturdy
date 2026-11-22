@@ -805,6 +805,14 @@ class MovieFoxProvider : MainAPI() {
         if (responseText.isBlank()) {
             val id = extractSeriesId(url).orEmpty()
             val isTv = type != TvType.Movie
+            if (id.isBlank()) {
+                val fallbackTitle = url.substringAfterLast("/").substringBefore("?").ifBlank { "Title" }
+                return if (!isTv) {
+                    newMovieLoadResponse(fallbackTitle, url, TvType.Movie, encodeLoadData(url, fallbackTitle, null, null, false))
+                } else {
+                    newTvSeriesLoadResponse(fallbackTitle, url, type, emptyList())
+                }
+            }
             val tmdbPath = if (isTv) "tv/$id" else "movie/$id"
             val tmdbJsonStr = safeGetText("$tmdbBaseUrl/$tmdbPath?api_key=$tmdbApiKey&append_to_response=external_ids", timeoutSec = 7L, sourceTag = "TMDB").orEmpty()
             val obj = runCatching { JSONObject(tmdbJsonStr) }.getOrNull() ?: JSONObject()
@@ -1382,11 +1390,12 @@ class MovieFoxProvider : MainAPI() {
             }
         }
 
-        val cleanPageUrl = rawPageUrl.substringBefore("?")
-        val urlId = extractSeriesId(cleanPageUrl)
+        val isCs = MovieFoxCineStream.isCineStreamData(rawPageUrl) || MovieFoxCineStream.isCineStreamData(data)
+        val cleanPageUrl = if (isCs) rawPageUrl else rawPageUrl.substringBefore("?")
+        val urlId = if (isCs) null else extractSeriesId(cleanPageUrl)
         var jsonId: String? = null
 
-        if (pageTitle.isBlank() || (tmdbId.isNullOrBlank() && urlId.isNullOrBlank() && imdbId.isBlank())) {
+        if (!isCs && (pageTitle.isBlank() || (tmdbId.isNullOrBlank() && urlId.isNullOrBlank() && imdbId.isBlank()))) {
             val rawHtml = withTimeoutOrNull(4500L) {
                 safeGetText(cleanPageUrl, timeoutSec = 4L, retries = 1, sourceTag = "moviefox")
             }.orEmpty()
@@ -1407,7 +1416,7 @@ class MovieFoxProvider : MainAPI() {
             }
         }
 
-        if (!data.trimStart().startsWith("{")) {
+        if (!data.trimStart().startsWith("{") && !isCs) {
             isTv = cleanPageUrl.contains("/tv/") || cleanPageUrl.contains("/dramas/") ||
                 cleanPageUrl.contains("/anime/") || cleanPageUrl.contains("/series/") || rawPageUrl.contains("season=", true)
             season = Regex("[?&]s(?:eason)?=(\\d+)", RegexOption.IGNORE_CASE).find(rawPageUrl)?.groupValues?.get(1) ?: "1"
