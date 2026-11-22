@@ -5,6 +5,13 @@ import android.content.Context
 import com.lagradost.cloudstream3.CommonActivity
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 import com.lagradost.cloudstream3.plugins.Plugin
+import com.megix.Asianload
+import com.megix.Embedload
+import com.megix.FlixCloud
+import com.megix.PpzjYoutube
+import com.megix.init as initCineStreamApis
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 @CloudstreamPlugin
 class MovieFoxPlugin : Plugin() {
@@ -46,6 +53,10 @@ class MovieFoxPlugin : Plugin() {
         registerExtractorAPI(VibuxerExtractor())
         registerExtractorAPI(Videostr())
         registerExtractorAPI(Streameeeeee())
+        registerExtractorAPI(PpzjYoutube())
+        registerExtractorAPI(Asianload())
+        registerExtractorAPI(Embedload())
+        registerExtractorAPI(FlixCloud())
         registerExtractorAPI(Wootly())
         registerExtractorAPI(VibePlayer())
         registerExtractorAPI(Vivibebe())
@@ -61,6 +72,10 @@ class MovieFoxPlugin : Plugin() {
         registerExtractorAPI(Otakuvid())
         registerExtractorAPI(Otakuhg())
         registerExtractorAPI(Minochinos())
+
+        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
+            runCatching { initCineStreamApis() }
+        }
 
         openSettings = { ctx ->
             try {
