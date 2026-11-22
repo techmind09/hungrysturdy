@@ -1,5 +1,6 @@
 package com.hungrysturdy
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ClipData
@@ -11,6 +12,9 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.text.Editable
 import android.text.TextUtils
 import android.text.TextWatcher
@@ -19,6 +23,14 @@ import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.Window
+import android.view.WindowInsets
+import android.view.WindowManager
+import android.webkit.CookieManager
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -54,7 +66,6 @@ object MovieFoxSettingsDialog {
     private const val KEY_CS3_SERVERS = "mf_cs3_servers_json"
     private const val KEY_COLLECTION_JSON = "mf_personal_collection_json"
     private const val KEY_NUVIO_COLL_RAW = "mf_nuvio_collection_raw_json"
-    private const val KEY_SHORTCODE_TYPE = "mf_cs_shortcode_type"
     private const val KEY_THEME = "mf_ui_theme"
     private const val KEY_API_HOST = "mf_netnaija_api_host"
     private const val KEY_PLAYER = "mf_preferred_player"
@@ -72,6 +83,8 @@ object MovieFoxSettingsDialog {
     private const val KEY_METADATA_SOURCE = "mf_metadata_source"
     private const val KEY_SHUFFLE_HOME = "mf_shuffle_home_categories"
     private const val KEY_HOME_CATEGORIES = "mf_home_categories_json"
+    private const val KEY_WEBVIEW_CF_ENABLED = "mf_webview_cf_enabled"
+    private const val KEY_CF_COOKIE_PREFIX = "mf_cf_cookie_"
 
     const val DEFAULT_STREMIO_MANIFEST =
         "https://apps.soluserv.es/stremio_catalog_plus/c.8e2ce47b1df7502fd7c8f45140d5eb89691d641a/manifest.json"
@@ -84,14 +97,6 @@ object MovieFoxSettingsDialog {
 
     const val CF_BYPASS_UA =
         "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36"
-
-    val SHORTCODE_PRESETS = listOf(
-        "ALL" to "All Shortcodes",
-        "UNIVERSE" to "Universe",
-        "CNC" to "CNC",
-        "PHISHER" to "Phisher",
-        "SKY" to "SkyStream"
-    )
 
     val NETNAIJA_API_HOSTS = listOf(
         "h5-api.aoneroom.com",
@@ -134,7 +139,8 @@ object MovieFoxSettingsDialog {
         val accentHex: String,
         val isCustom: Boolean = false,
         val isHindi: Boolean = true,
-        val category: String = "Movies"
+        val category: String = "Movies",
+        val runtimeBadge: String = "☁️ CS"
     )
 
     data class ExtractorItem(
@@ -245,45 +251,45 @@ object MovieFoxSettingsDialog {
     )
 
     val BASE_SERVERS = listOf(
-        ServerItem("moviefox", "MovieFox Main", "HOME/TMDB", "https://moviefox.pro/", "#7C3AED", false, true, "Movies"),
-        ServerItem("cinestream", "CineStream", "CINEMETA/KITSU", "https://cinemeta-catalogs.strem.io/top/catalog/movie/top/skip=0.json", "#38BDF8", false, true, "Movies"),
-        ServerItem("sflix", "Sflix", "HLS/MP4", "https://sflix.film/", "#F97316", false, true, "Series"),
-        ServerItem("prmovies", "Prmovies", "HI/M3U8", "https://prmovies.beer/", "#F59E0B", false, true, "Hindi"),
-        ServerItem("hindidrama", "HindiDrama", "K-DRAMA", "https://hindidrama.net/", "#EC4899", false, true, "Series"),
-        ServerItem("vegamovies", "VegaMovies", "PXL•FSL•GDRIVE", "https://vegamovies.lease/", "#EC4899", false, true, "Hindi"),
-        ServerItem("purstream", "Purstream", "API", "https://moviefox.pro/api/stream/purstream?type=movie&id=550", "#38BDF8", false, true, "Movies"),
-        ServerItem("castle", "Castle", "API", "https://moviefox.pro/api/stream/castle?type=movie&id=550", "#818CF8", false, true, "Movies"),
-        ServerItem("watchout", "Watchout", "API", "https://moviefox.pro/api/stream/watchout?type=movie&id=550", "#2DD4BF", false, false, "Movies"),
-        ServerItem("cinetv_api", "CineTV API", "WEB/API", "https://cinetv.app/en", "#F43F5E", false, true, "Movies"),
-        ServerItem("cinetv_hls", "CineTV HLS", "WORKER", "https://silent-frost-f2dbv.nxstreamhub.workers.dev/hls/movie/550", "#FB7185", false, true, "Movies"),
-        ServerItem("rogmovies", "RogMovies", "PXL•FSL•GDRIVE", "https://rogmovies.vip/", "#EC4899", false, true, "Hindi"),
-        ServerItem("bollyflix", "Bollyflix", "HI/4K", "https://new1.bollyflix.tours/", "#38BDF8", false, true, "Hindi"),
-        ServerItem("play4u", "Play4u", "HLS/API", "https://play4u.org/api/search.php?q=&page=1&per_page=24", "#FB7185", false, true, "Movies"),
-        ServerItem("hdhub4u", "HDHub4u", "SITE", "https://new15.hdhub4u.cl/?utm=mn1", "#34D399", false, true, "Hindi"),
-        ServerItem("dramaverse", "DramaVerse", "XCLOUD", "https://mydverse.com/", "#A855F7", false, true, "Series"),
-        ServerItem("gokuhd", "GokuHD", "ANIME", "https://gokuhd.nl/", "#38BDF8", false, true, "Anime"),
-        ServerItem("animeworldindia", "Anime World India", "ZEPHYR/M3U8", "https://watchanimeworld.top/", "#F43F5E", false, true, "Anime"),
-        ServerItem("nuvio", "Nuvio / Stremio", "MANIFEST", DEFAULT_STREMIO_MANIFEST, "#A855F7", false, true, "Series"),
-        ServerItem("moviebox", "MovieBox / NetNaija API", "BFF", "https://h5-api.aoneroom.com/wefeed-mobile-bff/tab/ranking-list?tabId=0&page=1&perPage=1", "#34D399", false, true, "Movies"),
-        ServerItem("netnaija", "NetNaija", "SITE", "https://netnaija.film/", "#FACC15", false, false, "Series"),
-        ServerItem("sportslive", "SportsLive", "LIVE/SPORTS", "https://h5-sport-api.aoneroom.com/wefeed-h5api-bff/live/match-list-v5", "#22D3EE", false, false, "Movies"),
-        ServerItem("hicine", "HiCine", "HAPI", "https://hicine.biz/hapi/home", "#38BDF8", false, true, "Hindi"),
-        ServerItem("hindmoviez", "HindMoviez", "SITE", "https://v3.hindmovie.im/", "#FACC15", false, true, "Hindi"),
-        ServerItem("movielinkbd", "MovieLinkBD", "SITE", "https://drjuea.movielinkbd.at/", "#818CF8", false, false, "Movies"),
-        ServerItem("netmirror", "NetMirror", "OTT", "https://netmirror.gold/", "#F43F5E", false, true, "Series"),
-        ServerItem("movy", "Movy", "API", "https://www.movy.sx/", "#22D3EE", false, true, "Movies"),
-        ServerItem("4khdhub", "4KHDHub", "4K", "https://4khdhub.one/", "#C084FC", false, true, "Hindi"),
-        ServerItem("movies4u", "Movies4u", "SITE", "https://new8.movies4u.garden/", "#FB923C", false, true, "Hindi"),
-        ServerItem("moviesmod", "Moviesmod", "SITE/4K", "https://moviesleech.rest/", "#38BDF8", false, true, "Hindi"),
-        ServerItem("topmovies", "TopMovies", "HI/MOVIES", "https://topmovies.pet/", "#34D399", false, true, "Hindi"),
-        ServerItem("multimovies", "Multimovies", "ANIME/HI", "https://m1.multimovies.courses/", "#22D3EE", false, true, "Anime"),
-        ServerItem("bollyhq", "BollyHQ", "MIRROR", "https://bolly-hq.info/", "#38BDF8", false, true, "Hindi"),
-        ServerItem("moviesdrive", "MoviesDrive", "MIRROR", "https://new4.moviesdrive.cyou/", "#F43F5E", false, true, "Hindi"),
-        ServerItem("filmyfly", "FilmyFly", "MIRROR", "https://filmyfly.kred/", "#F59E0B", false, true, "Hindi"),
-        ServerItem("filmyking", "FilmyKing", "MIRROR", "https://filmyking.co/", "#34D399", false, true, "Hindi"),
-        ServerItem("myfilms", "MyFilms", "MIRROR", "https://myfilms.pro/", "#A855F7", false, true, "Hindi"),
-        ServerItem("vipfilm", "VipFilm", "MIRROR", "https://vipfilm.pro/", "#EC4899", false, true, "Hindi"),
-        ServerItem("kmmovies", "KMmovies", "MIRROR", "https://kmmovies.quest/", "#22D3EE", false, true, "Hindi")
+        ServerItem("moviefox", "MovieFox Main", "HOME/TMDB", "https://moviefox.pro/", "#7C3AED", false, true, "Movies", "☁️ CS"),
+        ServerItem("cinestream", "CineStream", "CINEMETA/KITSU", "https://cinemeta-catalogs.strem.io/top/catalog/movie/top/skip=0.json", "#38BDF8", false, true, "Movies", "☁️ CS"),
+        ServerItem("sflix", "Sflix", "HLS/MP4", "https://sflix.film/", "#F97316", false, true, "Series", "⚡ SKY"),
+        ServerItem("prmovies", "Prmovies", "HI/M3U8", "https://prmovies.beer/", "#F59E0B", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("hindidrama", "HindiDrama", "K-DRAMA", "https://hindidrama.net/", "#EC4899", false, true, "Series", "⚡ SKY"),
+        ServerItem("vegamovies", "VegaMovies", "PXL•FSL•GDRIVE", "https://vegamovies.lease/", "#EC4899", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("purstream", "Purstream", "API", "https://moviefox.pro/api/stream/purstream?type=movie&id=550", "#38BDF8", false, true, "Movies", "☁️ CS"),
+        ServerItem("castle", "Castle", "API", "https://moviefox.pro/api/stream/castle?type=movie&id=550", "#818CF8", false, true, "Movies", "☁️ CS"),
+        ServerItem("watchout", "Watchout", "API", "https://moviefox.pro/api/stream/watchout?type=movie&id=550", "#2DD4BF", false, false, "Movies", "☁️ CS"),
+        ServerItem("cinetv_api", "CineTV API", "WEB/API", "https://cinetv.app/en", "#F43F5E", false, true, "Movies", "☁️ CS"),
+        ServerItem("cinetv_hls", "CineTV HLS", "WORKER", "https://silent-frost-f2dbv.nxstreamhub.workers.dev/hls/movie/550", "#FB7185", false, true, "Movies", "⚡ SKY"),
+        ServerItem("rogmovies", "RogMovies", "PXL•FSL•GDRIVE", "https://rogmovies.vip/", "#EC4899", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("bollyflix", "Bollyflix", "HI/4K", "https://new1.bollyflix.tours/", "#38BDF8", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("play4u", "Play4u", "HLS/API", "https://play4u.org/api/search.php?q=&page=1&per_page=24", "#FB7185", false, true, "Movies", "☁️ CS"),
+        ServerItem("hdhub4u", "HDHub4u", "SITE", "https://new15.hdhub4u.cl/?utm=mn1", "#34D399", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("dramaverse", "DramaVerse", "XCLOUD", "https://mydverse.com/", "#A855F7", false, true, "Series", "⚡ SKY"),
+        ServerItem("gokuhd", "GokuHD", "ANIME", "https://gokuhd.nl/", "#38BDF8", false, true, "Anime", "⚡ SKY"),
+        ServerItem("animeworldindia", "Anime World India", "ZEPHYR/M3U8", "https://watchanimeworld.top/", "#F43F5E", false, true, "Anime", "☁️ CS"),
+        ServerItem("nuvio", "Nuvio / Stremio", "MANIFEST", DEFAULT_STREMIO_MANIFEST, "#A855F7", false, true, "Series", "☁️ CS"),
+        ServerItem("moviebox", "MovieBox / NetNaija API", "BFF", "https://h5-api.aoneroom.com/wefeed-mobile-bff/tab/ranking-list?tabId=0&page=1&perPage=1", "#34D399", false, true, "Movies", "☁️ CS"),
+        ServerItem("netnaija", "NetNaija", "SITE", "https://netnaija.film/", "#FACC15", false, false, "Series", "⚡ SKY"),
+        ServerItem("sportslive", "SportsLive", "LIVE/SPORTS", "https://h5-sport-api.aoneroom.com/wefeed-h5api-bff/live/match-list-v5", "#22D3EE", false, false, "Movies", "☁️ CS"),
+        ServerItem("hicine", "HiCine", "HAPI", "https://hicine.biz/hapi/home", "#38BDF8", false, true, "Hindi", "☁️ CS"),
+        ServerItem("hindmoviez", "HindMoviez", "SITE", "https://v3.hindmovie.im/", "#FACC15", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("movielinkbd", "MovieLinkBD", "SITE", "https://drjuea.movielinkbd.at/", "#818CF8", false, false, "Movies", "⚡ SKY"),
+        ServerItem("netmirror", "NetMirror", "OTT", "https://netmirror.gold/", "#F43F5E", false, true, "Series", "☁️ CS"),
+        ServerItem("movy", "Movy", "API", "https://www.movy.sx/", "#22D3EE", false, true, "Movies", "☁️ CS"),
+        ServerItem("4khdhub", "4KHDHub", "4K", "https://4khdhub.one/", "#C084FC", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("movies4u", "Movies4u", "SITE", "https://new8.movies4u.garden/", "#FB923C", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("moviesmod", "Moviesmod", "SITE/4K", "https://moviesleech.rest/", "#38BDF8", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("topmovies", "TopMovies", "HI/MOVIES", "https://topmovies.pet/", "#34D399", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("multimovies", "Multimovies", "ANIME/HI", "https://m1.multimovies.courses/", "#22D3EE", false, true, "Anime", "⚡ SKY"),
+        ServerItem("bollyhq", "BollyHQ", "MIRROR", "https://bolly-hq.info/", "#38BDF8", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("moviesdrive", "MoviesDrive", "MIRROR", "https://new4.moviesdrive.cyou/", "#F43F5E", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("filmyfly", "FilmyFly", "MIRROR", "https://filmyfly.kred/", "#F59E0B", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("filmyking", "FilmyKing", "MIRROR", "https://filmyking.co/", "#34D399", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("myfilms", "MyFilms", "MIRROR", "https://myfilms.pro/", "#A855F7", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("vipfilm", "VipFilm", "MIRROR", "https://vipfilm.pro/", "#EC4899", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("kmmovies", "KMmovies", "MIRROR", "https://kmmovies.quest/", "#22D3EE", false, true, "Hindi", "⚡ SKY")
     )
 
     private val DEFAULT_HOME_CATEGORIES = listOf(
@@ -298,8 +304,6 @@ object MovieFoxSettingsDialog {
         HomeCategoryItem("tamil_telugu", "South Indian (Tamil/Telugu)", true, "Movies"),
         HomeCategoryItem("cdrama", "Chinese & Turkish Dramas", true, "Series")
     )
-
-    private val METADATA_SOURCES = listOf("TMDB", "Cinemeta", "Stremio")
 
     private val PRESET_CATALOGS = listOf(
         "Soluserv Catalog Plus" to DEFAULT_STREMIO_MANIFEST,
@@ -471,10 +475,6 @@ object MovieFoxSettingsDialog {
     }
     fun setSelectedTheme(ctx: Context, id: String) = prefs(ctx).edit().putString(KEY_THEME, id).apply()
 
-    fun getSelectedShortcodeType(ctx: Context): String =
-        prefs(ctx).getString(KEY_SHORTCODE_TYPE, "ALL") ?: "ALL"
-    fun setSelectedShortcodeType(ctx: Context, type: String) = prefs(ctx).edit().putString(KEY_SHORTCODE_TYPE, type).apply()
-
     fun getSelectedApiHost(ctx: Context): String =
         prefs(ctx).getString(KEY_API_HOST, "h5-api.aoneroom.com") ?: "h5-api.aoneroom.com"
     fun setSelectedApiHost(ctx: Context, host: String) = prefs(ctx).edit().putString(KEY_API_HOST, host).apply()
@@ -487,6 +487,43 @@ object MovieFoxSettingsDialog {
         prefs(ctx).getBoolean("$KEY_EXT_PREFIX${key.lowercase()}", true)
     fun setExtractorEnabled(ctx: Context, key: String, enabled: Boolean) =
         prefs(ctx).edit().putBoolean("$KEY_EXT_PREFIX${key.lowercase()}", enabled).apply()
+
+    fun isWebViewCfEnabled(ctx: Context): Boolean =
+        prefs(ctx).getBoolean(KEY_WEBVIEW_CF_ENABLED, true)
+    fun setWebViewCfEnabled(ctx: Context, enabled: Boolean) =
+        prefs(ctx).edit().putBoolean(KEY_WEBVIEW_CF_ENABLED, enabled).apply()
+
+    private fun cfCookiePrefKey(urlOrDomain: String): String {
+        val norm = urlOrDomain.trim()
+            .removePrefix("https://")
+            .removePrefix("http://")
+            .removePrefix("www.")
+            .substringBefore('/')
+            .lowercase()
+        return "$KEY_CF_COOKIE_PREFIX$norm"
+    }
+
+    fun saveCfCookie(ctx: Context, urlOrDomain: String, cookies: String) {
+        prefs(ctx).edit().putString(cfCookiePrefKey(urlOrDomain), cookies.trim()).apply()
+    }
+
+    fun getCookieForDomain(ctx: Context?, urlOrDomain: String): String? {
+        val c = ctx ?: return null
+        return prefs(c).getString(cfCookiePrefKey(urlOrDomain), null)?.takeIf { it.isNotBlank() }
+    }
+
+    fun hasSavedCfCookies(ctx: Context): Boolean =
+        prefs(ctx).all.entries.any { (k, v) -> k.startsWith(KEY_CF_COOKIE_PREFIX) && (v as? String)?.isNotBlank() == true }
+
+    fun clearAllCfCookies(ctx: Context) {
+        val ed = prefs(ctx).edit()
+        prefs(ctx).all.keys.filter { it.startsWith(KEY_CF_COOKIE_PREFIX) }.forEach { ed.remove(it) }
+        ed.apply()
+        runCatching {
+            CookieManager.getInstance().removeAllCookies(null)
+            CookieManager.getInstance().flush()
+        }
+    }
 
     fun getPersonalCollection(ctx: Context): MutableList<PersonalCollectionItem> {
         val raw = prefs(ctx).getString(KEY_COLLECTION_JSON, "[]") ?: "[]"
@@ -593,9 +630,6 @@ object MovieFoxSettingsDialog {
         val lower = linkNameOrUrl.lowercase()
         return VEGA_ALLOWED_HOSTS.any { lower.contains(it) }
     }
-
-    fun getCookieForDomain(ctx: Context?, urlOrDomain: String): String? = null
-    fun hasSavedCookieForDomain(ctx: Context, urlOrDomain: String): Boolean = true
 
     fun isHindiOnly(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_HINDI_ONLY, false)
     fun setHindiOnly(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_HINDI_ONLY, enabled).apply()
@@ -739,7 +773,19 @@ object MovieFoxSettingsDialog {
                 val name = obj.optString("name").trim()
                 val probeUrl = obj.optString("probeUrl").trim()
                 if (key.isNotBlank() && name.isNotBlank() && probeUrl.isNotBlank()) {
-                    out.add(ServerItem(key, name, obj.optString("tag", "CS3").ifBlank { "CS3" }, probeUrl, obj.optString("accentHex", "#38BDF8"), true, true, "Movies"))
+                    out.add(
+                        ServerItem(
+                            key = key,
+                            name = name,
+                            tag = obj.optString("tag", "CS3").ifBlank { "CS3" },
+                            probeUrl = probeUrl,
+                            accentHex = obj.optString("accentHex", "#38BDF8"),
+                            isCustom = true,
+                            isHindi = true,
+                            category = "Movies",
+                            runtimeBadge = if (probeUrl.endsWith(".cs3", true)) "⚡ SKY" else "☁️ CS"
+                        )
+                    )
                 }
             }
         }
@@ -889,7 +935,7 @@ object MovieFoxSettingsDialog {
                 if (finalName.isBlank()) return@forEachIndexed
                 val url = pObj.optString("url").ifBlank { pObj.optString("mainUrl") }.ifBlank { pObj.optString("pluginUrl") }.ifBlank { defaultUrl }.trim()
                 val slug = finalName.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
-                out.add(ServerItem("cs3_${idTag}_${slug.ifBlank { "srv$idx" }}", finalName, "CS3", toRawGithubUrl(url), AVATAR_PALETTE[idx % AVATAR_PALETTE.size], true, true, "Movies"))
+                out.add(ServerItem("cs3_${idTag}_${slug.ifBlank { "srv$idx" }}", finalName, "CS3", toRawGithubUrl(url), AVATAR_PALETTE[idx % AVATAR_PALETTE.size], true, true, "Movies", "⚡ SKY"))
             }
         }
     }
@@ -922,7 +968,7 @@ object MovieFoxSettingsDialog {
                                     Regex("""L[a-zA-Z0-9_/]+/([A-Z][a-zA-Z0-9]{2,28})(?:Provider|Plugin|Source);""").findAll(rawDex).forEach { m ->
                                         val sName = m.groupValues[1]
                                         if (sName !in setOf("Main", "Base", "Abstract", "Custom", "Cloudstream", "Stream") && seen.add(sName.lowercase())) {
-                                            out.add(ServerItem("cs3_${idTag}_${sName.lowercase()}", sName, "CS3", rawUrl, AVATAR_PALETTE[idx % AVATAR_PALETTE.size], true, true, "Movies"))
+                                            out.add(ServerItem("cs3_${idTag}_${sName.lowercase()}", sName, "CS3", rawUrl, AVATAR_PALETTE[idx % AVATAR_PALETTE.size], true, true, "Movies", "⚡ SKY"))
                                             idx++
                                         }
                                     }
@@ -935,7 +981,7 @@ object MovieFoxSettingsDialog {
             }
             if (out.isEmpty()) {
                 val fName = pluginName.ifBlank { rawUrl.substringBefore("?").substringAfterLast("/").removeSuffix(".cs3") }.ifBlank { "CS3 Plugin" }
-                out.add(ServerItem("cs3_${idTag}_${fName.lowercase().replace(Regex("[^a-z0-9]+"), "_")}", fName, "CS3", rawUrl, "#34D399", true, true, "Movies"))
+                out.add(ServerItem("cs3_${idTag}_${fName.lowercase().replace(Regex("[^a-z0-9]+"), "_")}", fName, "CS3", rawUrl, "#34D399", true, true, "Movies", "⚡ SKY"))
             }
             return@withContext out.distinctBy { it.key }
         }
@@ -960,6 +1006,156 @@ object MovieFoxSettingsDialog {
         out.distinctBy { it.key }
     }
 
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun showInAppCfBypassDialog(
+        ctx: Context,
+        initialUrl: String,
+        onSaved: () -> Unit
+    ) {
+        if (!isContextAlive(ctx)) return
+        val mainHandler = Handler(Looper.getMainLooper())
+        var dialogRef: AlertDialog? = null
+
+        val box = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardBg("#0B0E16", "#273147", 24f, 2)
+            setPadding(dp(ctx, 14), dp(ctx, 14), dp(ctx, 14), dp(ctx, 14))
+        }
+
+        val topBar = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { bottomMargin = dp(ctx, 8) }
+        }
+        topBar.addView(TextView(ctx).apply {
+            text = "🛡️ Cloudflare Bypass"
+            textSize = 15f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        val saveTopBtn = Button(ctx).apply {
+            text = "✓ Save"; textSize = 11f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE); background = pillBg("#2563EB", 14f)
+            setPadding(dp(ctx, 12), 0, dp(ctx, 12), 0)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 34))
+        }
+        topBar.addView(saveTopBtn)
+        box.addView(topBar)
+
+        box.addView(TextView(ctx).apply {
+            text = "Solve the Cloudflare challenge once — cookies are reused afterwards."
+            textSize = 11f; setTextColor(safeColor("#94A3B8"))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { bottomMargin = dp(ctx, 8) }
+        })
+
+        val wvSwitchRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            background = cardBg("#121724", "#232D42", 16f)
+            setPadding(dp(ctx, 12), dp(ctx, 8), dp(ctx, 12), dp(ctx, 8))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { bottomMargin = dp(ctx, 8) }
+        }
+        wvSwitchRow.addView(TextView(ctx).apply {
+            text = "Use WebView for CF challenges"
+            textSize = 12.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        val wvSwitch = Switch(ctx).apply { isChecked = isWebViewCfEnabled(ctx) }
+        wvSwitchRow.addView(wvSwitch)
+        box.addView(wvSwitchRow)
+
+        val statusBanner = TextView(ctx).apply {
+            text = if (hasSavedCfCookies(ctx)) "✓ CF Cookies Saved - Refresh" else "Quick security check — waiting for challenge"
+            textSize = 11f; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(safeColor("#34D399"))
+            background = cardBg("#0A241B", "#10B981", 14f)
+            setPadding(dp(ctx, 12), dp(ctx, 8), dp(ctx, 12), dp(ctx, 8))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { bottomMargin = dp(ctx, 8) }
+        }
+        box.addView(statusBanner)
+
+        val clearBtn = Button(ctx).apply {
+            text = "Clear CF cookies"; textSize = 11.5f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(safeColor("#F87171")); background = cardBg("#241116", "#7F1D1D", 14f)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 36))
+                .apply { bottomMargin = dp(ctx, 8) }
+        }
+        box.addView(clearBtn)
+
+        val webView = WebView(ctx).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 220))
+            setBackgroundColor(Color.WHITE)
+            settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                userAgentString = CF_BYPASS_UA
+            }
+            CookieManager.getInstance().setAcceptCookie(true)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+            webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                    val u = request?.url?.toString().orEmpty()
+                    if (u.startsWith("http")) view?.loadUrl(u)
+                    return true
+                }
+
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    val u = url ?: initialUrl
+                    val ck = runCatching { CookieManager.getInstance().getCookie(u) }.getOrNull().orEmpty()
+                    if (ck.isNotBlank()) {
+                        saveCfCookie(ctx, u, ck)
+                        mainHandler.post {
+                            statusBanner.text = "✓ CF Cookies Saved - Refresh"
+                            statusBanner.setTextColor(safeColor("#34D399"))
+                        }
+                    }
+                }
+            }
+        }
+        box.addView(webView)
+
+        val saveAction: () -> Unit = {
+            setWebViewCfEnabled(ctx, wvSwitch.isChecked)
+            val curUrl = webView.url ?: initialUrl
+            val ck = runCatching { CookieManager.getInstance().getCookie(curUrl) }.getOrNull().orEmpty()
+            if (ck.isNotBlank()) saveCfCookie(ctx, curUrl, ck)
+            onSaved()
+            safeToast(ctx, "Cloudflare bypass settings saved")
+            runCatching { dialogRef?.dismiss() }
+        }
+
+        saveTopBtn.setOnClickListener { saveAction() }
+        clearBtn.setOnClickListener {
+            clearAllCfCookies(ctx)
+            statusBanner.text = "CF cookies cleared"
+            statusBanner.setTextColor(safeColor("#F87171"))
+            safeToast(ctx, "CF cookies cleared")
+        }
+
+        val builder = AlertDialog.Builder(ctx).setView(box)
+        builder.setPositiveButton("Save") { _, _ -> saveAction() }
+        builder.setNegativeButton("Close", null)
+        dialogRef = builder.create().apply {
+            setOnDismissListener {
+                runCatching {
+                    webView.stopLoading()
+                    webView.destroy()
+                }
+            }
+            window?.setBackgroundDrawableResource(android.R.color.transparent)
+            show()
+        }
+
+        if (wvSwitch.isChecked) {
+            webView.loadUrl(initialUrl)
+        } else {
+            webView.visibility = View.GONE
+        }
+    }
+
     private class ServerListAdapter(
         private val ctx: Context,
         private val onToggleChanged: () -> Unit,
@@ -978,6 +1174,7 @@ object MovieFoxSettingsDialog {
             val root: LinearLayout,
             val avatarTv: TextView,
             val nameTv: TextView,
+            val platformTv: TextView,
             val tagTv: TextView,
             val statusTv: TextView,
             val urlTv: TextView,
@@ -1016,6 +1213,12 @@ object MovieFoxSettingsDialog {
                     textSize = 13.5f; isSingleLine = true; ellipsize = TextUtils.TruncateAt.END
                     setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
                 }
+                val platformTv = TextView(ctx).apply {
+                    textSize = 8.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
+                    setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2))
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                        .apply { marginStart = dp(ctx, 5) }
+                }
                 val tagTv = TextView(ctx).apply {
                     textSize = 8.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
                     setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2))
@@ -1028,7 +1231,7 @@ object MovieFoxSettingsDialog {
                     layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                         .apply { marginStart = dp(ctx, 5) }
                 }
-                topLine.addView(nameTv); topLine.addView(tagTv); topLine.addView(statusTv)
+                topLine.addView(nameTv); topLine.addView(platformTv); topLine.addView(tagTv); topLine.addView(statusTv)
 
                 val urlTv = TextView(ctx).apply {
                     textSize = 10f; isSingleLine = true; ellipsize = TextUtils.TruncateAt.END
@@ -1048,7 +1251,7 @@ object MovieFoxSettingsDialog {
 
                 card.addView(avatarTv); card.addView(col); card.addView(upBtn); card.addView(downBtn); card.addView(sw)
 
-                holder = VH(card, avatarTv, nameTv, tagTv, statusTv, urlTv, upBtn, downBtn, sw)
+                holder = VH(card, avatarTv, nameTv, platformTv, tagTv, statusTv, urlTv, upBtn, downBtn, sw)
                 card.tag = holder
                 rowView = card
             } else {
@@ -1062,6 +1265,12 @@ object MovieFoxSettingsDialog {
             holder.avatarTv.background = pillBg("#192236", 12f)
 
             holder.nameTv.text = srv.name
+
+            val isSky = srv.runtimeBadge.contains("SKY", true)
+            holder.platformTv.text = srv.runtimeBadge
+            holder.platformTv.setTextColor(safeColor(if (isSky) "#34D399" else "#C084FC"))
+            holder.platformTv.background = pillBg(if (isSky) "#0B2920" else "#201336", 8f)
+
             holder.tagTv.text = srv.tag
             holder.tagTv.setTextColor(safeColor(srv.accentHex, "#38BDF8"))
             holder.tagTv.background = pillBg("#192236", 8f)
@@ -1106,7 +1315,6 @@ object MovieFoxSettingsDialog {
         val clipboard = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
 
         var activeTheme = getSelectedTheme(ctx)
-        var selectedShortcodeType = getSelectedShortcodeType(ctx)
         var selectedApiHost = getSelectedApiHost(ctx)
         var selectedPlayer = getPreferredPlayer(ctx)
         var currentQuery = ""
@@ -1169,7 +1377,7 @@ object MovieFoxSettingsDialog {
                 val foldersCount = getImportedCollectionFolders(ctx).size
                 AlertDialog.Builder(ctx)
                     .setTitle("MovieFox Ultra Max")
-                    .setMessage("• Shortcode Mode: $selectedShortcodeType\n• API Host: $selectedApiHost\n• Player: $selectedPlayer\n• Collection Rows: $foldersCount")
+                    .setMessage("• CineStream & SkyStream Active\n• API Host: $selectedApiHost\n• Player: $selectedPlayer\n• Collection Rows: $foldersCount")
                     .setPositiveButton("OK", null)
                     .show()
             }
@@ -1227,7 +1435,7 @@ object MovieFoxSettingsDialog {
             background = cardBg("#0F131C", "#212A3D", 18f)
             setPadding(dp(ctx, 4), dp(ctx, 4), dp(ctx, 4), dp(ctx, 4))
         }
-        val tabTitles = listOf("Providers", "Extractors", "Streaming", "Collection", "Catalogs", "Home Page", "CS3 Repos", "Health & Logs")
+        val tabTitles = listOf("Providers", "Extractors", "Streaming", "Collection", "Home Page", "CS3 Repos", "Health & Logs")
         val tabButtons = tabTitles.map { title ->
             Button(ctx).apply {
                 text = title; textSize = 11.5f; isAllCaps = false; isSingleLine = true
@@ -1381,7 +1589,6 @@ object MovieFoxSettingsDialog {
         val extractorPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val streamPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val collectionPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
-        val catalogPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val homePane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val cs3Pane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val healthPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
@@ -1414,35 +1621,57 @@ object MovieFoxSettingsDialog {
             extractorPane.addView(card)
         }
 
-        // --- Streaming Pane ---
-        val scCard = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#253046", 20f)
+        // --- Streaming Pane (with In-App Cloudflare Bypass) ---
+        val cfCard = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#22C55E", 20f)
             setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
         }
-        scCard.addView(TextView(ctx).apply { text = "🔗 CloudStream / SkyStream Shortcode Type"; textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
-        val scRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(ctx, 8), 0, 0) }
-        val scBtns = mutableMapOf<String, TextView>()
-        SHORTCODE_PRESETS.forEach { (codeKey, codeLabel) ->
-            val tv = TextView(ctx).apply {
-                text = codeLabel; textSize = 10.5f; setTypeface(typeface, Typeface.BOLD)
-                setPadding(dp(ctx, 11), dp(ctx, 6), dp(ctx, 11), dp(ctx, 6))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 6) }
-                setOnClickListener {
-                    selectedShortcodeType = codeKey; setSelectedShortcodeType(ctx, codeKey)
-                    scBtns.forEach { (k, v) ->
-                        v.background = if (k == selectedShortcodeType) pillBg(activeTheme.primaryHex, 14f) else cardBg("#0B0E16", "#232C40", 14f)
-                        v.setTextColor(if (k == selectedShortcodeType) Color.WHITE else safeColor("#94A3B8"))
-                    }
-                    safeToast(ctx, "Shortcode Mode: $codeLabel")
+        val cfHeaderRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        }
+        cfHeaderRow.addView(TextView(ctx).apply {
+            text = "🛡️ Cloudflare Bypass (WebView)"
+            textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        val cfSwitch = Switch(ctx).apply {
+            isChecked = isWebViewCfEnabled(ctx)
+            setOnCheckedChangeListener { _, checked -> setWebViewCfEnabled(ctx, checked) }
+        }
+        cfHeaderRow.addView(cfSwitch)
+        cfCard.addView(cfHeaderRow)
+
+        val cfStatusTv = TextView(ctx).apply {
+            text = if (hasSavedCfCookies(ctx)) "✓ CF Cookies Saved - Refresh" else "Solve challenge once in-app — cookies reused automatically"
+            textSize = 10.5f; setTextColor(safeColor("#34D399"))
+            setPadding(0, dp(ctx, 4), 0, dp(ctx, 8))
+        }
+        cfCard.addView(cfStatusTv)
+
+        val cfBtnRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+        cfBtnRow.addView(Button(ctx).apply {
+            text = "OPEN CF WEBVIEW"; textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE); background = pillBg("#2563EB", 14f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 34), 1f).apply { marginEnd = dp(ctx, 6) }
+            setOnClickListener {
+                showInAppCfBypassDialog(ctx, "https://cinemeta-catalogs.strem.io/") {
+                    cfStatusTv.text = if (hasSavedCfCookies(ctx)) "✓ CF Cookies Saved - Refresh" else "CF Bypass updated"
                 }
             }
-            tv.background = if (codeKey == selectedShortcodeType) pillBg(activeTheme.primaryHex, 14f) else cardBg("#0B0E16", "#232C40", 14f)
-            tv.setTextColor(if (codeKey == selectedShortcodeType) Color.WHITE else safeColor("#94A3B8"))
-            scBtns[codeKey] = tv; scRow.addView(tv)
-        }
-        scCard.addView(HorizontalScrollView(ctx).apply { isHorizontalScrollBarEnabled = false; addView(scRow) })
-        streamPane.addView(scCard)
+        })
+        cfBtnRow.addView(Button(ctx).apply {
+            text = "CLEAR COOKIES"; textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE); background = pillBg("#7F1D1D", 14f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 34), 1f)
+            setOnClickListener {
+                clearAllCfCookies(ctx)
+                cfStatusTv.text = "CF cookies cleared"
+                safeToast(ctx, "CF cookies cleared")
+            }
+        })
+        cfCard.addView(cfBtnRow)
+        streamPane.addView(cfCard)
 
         val themeCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#253046", 20f)
@@ -1596,7 +1825,7 @@ object MovieFoxSettingsDialog {
             currentTimeout = it; setTimeoutSeconds(ctx, it)
         }
 
-        // --- Personal Collection + Internal File Picker Pane ---
+        // --- Personal Collection Pane ---
         val colAddBox = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL; background = cardBg("#131826", "#314161", 22f)
             setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
@@ -1721,112 +1950,6 @@ object MovieFoxSettingsDialog {
         collectionPane.addView(colAddBox); collectionPane.addView(colHolder)
         renderCollection()
 
-        // --- Catalogs Pane ---
-        val metaCard = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#253046", 20f)
-            setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
-        }
-        metaCard.addView(TextView(ctx).apply { text = "Active Metadata Source"; textSize = 13.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
-        val metaRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(ctx, 8), 0, 0) }
-        val metaChips = mutableMapOf<String, TextView>()
-        fun refreshMetaChips() {
-            metaChips.forEach { (m, tv) ->
-                tv.background = if (m == selectedMeta) pillBg(activeTheme.primaryHex, 14f) else cardBg("#0B0E16", "#232C40", 14f)
-                tv.setTextColor(if (m == selectedMeta) Color.WHITE else safeColor("#94A3B8"))
-            }
-        }
-        METADATA_SOURCES.forEach { m ->
-            val tv = TextView(ctx).apply {
-                text = m; textSize = 11.5f; setTypeface(typeface, Typeface.BOLD)
-                setPadding(dp(ctx, 14), dp(ctx, 6), dp(ctx, 14), dp(ctx, 6))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 6) }
-                setOnClickListener { selectedMeta = m; setMetadataSource(ctx, m); refreshMetaChips(); refreshStats() }
-            }
-            metaChips[m] = tv; metaRow.addView(tv)
-        }
-        refreshMetaChips(); metaCard.addView(metaRow); catalogPane.addView(metaCard)
-
-        val nuvioAddBox = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL; background = cardBg("#131826", "#314161", 22f)
-            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
-        }
-        nuvioAddBox.addView(TextView(ctx).apply { text = "+ Add Stremio / Nuvio manifest.json"; textSize = 13.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#C084FC")) })
-        val labelInput = EditText(ctx).apply {
-            hint = "Catalog Name (optional)"; setHintTextColor(safeColor("#64748B")); setTextColor(Color.WHITE); textSize = 12f; isSingleLine = true
-            background = cardBg("#080B12", "#2B354B", 14f); setPadding(dp(ctx, 11), dp(ctx, 8), dp(ctx, 11), dp(ctx, 8))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(ctx, 8); bottomMargin = dp(ctx, 8) }
-        }
-        val manifestUrlInput = EditText(ctx).apply {
-            hint = "https://.../manifest.json"; setHintTextColor(safeColor("#64748B")); setTextColor(Color.WHITE); textSize = 12f; isSingleLine = true
-            background = cardBg("#080B12", "#323E57", 14f); setPadding(dp(ctx, 11), dp(ctx, 8), dp(ctx, 11), dp(ctx, 8))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(ctx, 6) }
-        }
-        val manifestRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
-            addView(manifestUrlInput)
-            addView(Button(ctx).apply {
-                text = "PASTE"; textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
-                setTextColor(safeColor("#E9D5FF")); background = cardBg("#241738", "#9333EA", 14f)
-                layoutParams = LinearLayout.LayoutParams(dp(ctx, 62), dp(ctx, 38))
-                setOnClickListener {
-                    val clip = clipboard?.primaryClip?.getItemAt(0)?.text?.toString().orEmpty().trim()
-                    if (clip.isNotBlank()) { manifestUrlInput.setText(clip); manifestUrlInput.setSelection(clip.length) }
-                }
-            })
-        }
-        val nuvioListHolder = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-        lateinit var renderNuvioList: () -> Unit
-        renderNuvioList = {
-            nuvioListHolder.removeAllViews()
-            nuvioList.forEachIndexed { idx, item ->
-                val card = LinearLayout(ctx).apply {
-                    orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#232C40", 20f)
-                    setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
-                }
-                val row = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-                row.addView(TextView(ctx).apply {
-                    text = item.label; textSize = 13f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                })
-                row.addView(TextView(ctx).apply {
-                    text = "DELETE"; textSize = 9.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#F87171"))
-                    background = pillBg("#2A1519", 12f); setPadding(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4))
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 8) }
-                    setOnClickListener { nuvioList.removeAt(idx); saveNuvioManifests(ctx, nuvioList); renderNuvioList(); refreshStats() }
-                })
-                row.addView(Switch(ctx).apply {
-                    isChecked = item.enabled
-                    setOnCheckedChangeListener { _, c -> item.enabled = c; saveNuvioManifests(ctx, nuvioList); refreshStats() }
-                })
-                card.addView(row)
-                card.addView(TextView(ctx).apply {
-                    text = item.manifestUrl; textSize = 10f; isSingleLine = true; ellipsize = TextUtils.TruncateAt.END
-                    setTextColor(safeColor("#94A3B8")); setPadding(0, dp(ctx, 4), 0, 0)
-                })
-                nuvioListHolder.addView(card)
-            }
-        }
-        nuvioAddBox.addView(labelInput); nuvioAddBox.addView(manifestRow)
-        nuvioAddBox.addView(Button(ctx).apply {
-            text = "+ ADD MANIFEST.JSON URL"; textSize = 11f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            background = pillBg(activeTheme.primaryHex, 15f)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 38))
-            setOnClickListener {
-                val raw = manifestUrlInput.text.toString().trim()
-                if (raw.isBlank()) { safeToast(ctx, "Manifest URL dalein"); return@setOnClickListener }
-                val norm = normalizeNuvioManifestUrl(raw)
-                val lbl = labelInput.text.toString().trim().ifEmpty { deriveManifestLabel(norm) }
-                nuvioList.add(NuvioManifestConfig(System.currentTimeMillis().toString(), lbl, norm, true))
-                saveNuvioManifests(ctx, nuvioList); labelInput.setText(""); manifestUrlInput.setText("")
-                renderNuvioList(); refreshStats(); safeToast(ctx, "$lbl added!")
-            }
-        })
-        catalogPane.addView(nuvioAddBox); catalogPane.addView(nuvioListHolder); renderNuvioList()
-
         // --- Home Page Pane ---
         makeToggleCard(homePane, "Shuffle Categories", "Randomize home screen categories", shuffleHome) {
             shuffleHome = it; setShuffleHomeCategories(ctx, it)
@@ -1948,8 +2071,8 @@ object MovieFoxSettingsDialog {
         fun buildFullHealthReport(): String {
             val hLines = SERVERS.map { srv ->
                 val h = getServerHealth(srv.key)
-                if (h != null) "${if (h.isHealthy) "[GREEN/LIVE]" else "[RED/${h.status}]"} ${srv.name} (${h.latencyMs}ms) -> ${h.detail}"
-                else "[UNCHECKED] ${srv.name} -> ${srv.probeUrl}"
+                if (h != null) "${if (h.isHealthy) "[GREEN/LIVE]" else "[RED/${h.status}]"} ${srv.name} [${srv.runtimeBadge}] (${h.latencyMs}ms) -> ${h.detail}"
+                else "[UNCHECKED] ${srv.name} [${srv.runtimeBadge}] -> ${srv.probeUrl}"
             }.joinToString("\n")
             val lLines = getDiagnosticLogs().joinToString("\n")
             return "=== MOVIEFOX SERVER HEALTH ===\n$hLines\n\n=== ERROR LOGCAT ===\n$lLines"
@@ -1993,7 +2116,7 @@ object MovieFoxSettingsDialog {
                 }
                 val titleRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
                 titleRow.addView(TextView(ctx).apply {
-                    text = srv.name; textSize = 12f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+                    text = "${srv.name} ${srv.runtimeBadge}"; textSize = 12f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
                 })
                 titleRow.addView(TextView(ctx).apply {
                     text = if (h != null && h.latencyMs > 0) "$statusLabel • ${h.latencyMs}ms" else statusLabel
@@ -2013,7 +2136,7 @@ object MovieFoxSettingsDialog {
                     text = "COPY"; textSize = 8.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#38BDF8"))
                     background = pillBg("#0D2338", 10f); setPadding(dp(ctx, 7), dp(ctx, 5), dp(ctx, 7), dp(ctx, 5))
                     setOnClickListener {
-                        copyToClipboard(ctx, srv.name, "${srv.name}: $statusLabel -> ${h?.detail ?: srv.probeUrl}")
+                        copyToClipboard(ctx, srv.name, "${srv.name} [${srv.runtimeBadge}]: $statusLabel -> ${h?.detail ?: srv.probeUrl}")
                     }
                 })
                 healthCardsHolder.addView(card)
@@ -2060,7 +2183,7 @@ object MovieFoxSettingsDialog {
         healthPane.addView(logTv)
         refreshHealthPane()
 
-        val scrollPanes = listOf(extractorPane, streamPane, collectionPane, catalogPane, homePane, cs3Pane, healthPane)
+        val scrollPanes = listOf(extractorPane, streamPane, collectionPane, homePane, cs3Pane, healthPane)
         scrollPanes.forEach { wrapper.addView(it) }
         scrollView.addView(wrapper)
 
@@ -2076,7 +2199,7 @@ object MovieFoxSettingsDialog {
                 catFilterScroll.visibility = View.GONE
                 scrollView.visibility = View.VISIBLE
                 scrollPanes.forEachIndexed { i, p -> p.visibility = if (i == idx - 1) View.VISIBLE else View.GONE }
-                if (idx == 7) refreshHealthPane()
+                if (idx == 6) refreshHealthPane()
             }
             tabButtons.forEachIndexed { i, btn ->
                 if (i == idx) {
@@ -2124,7 +2247,6 @@ object MovieFoxSettingsDialog {
                 saveHomeCategories(ctx, homeCats)
                 savePersonalCollection(ctx, collectionList)
                 setSelectedTheme(ctx, activeTheme.id)
-                setSelectedShortcodeType(ctx, selectedShortcodeType)
                 setSelectedApiHost(ctx, selectedApiHost)
                 setPreferredPlayer(ctx, selectedPlayer)
                 setQuality4kEnabled(ctx, q4k)
@@ -2138,6 +2260,7 @@ object MovieFoxSettingsDialog {
                 setHindiOnly(ctx, hindiOnly)
                 setDownloadOnly(ctx, downloadOnly)
                 setShuffleHomeCategories(ctx, shuffleHome)
+                setWebViewCfEnabled(ctx, cfSwitch.isChecked)
                 safeToast(ctx, "Settings saved & applied")
                 runCatching { dialog.dismiss() }
             }
