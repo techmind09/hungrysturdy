@@ -355,7 +355,7 @@ object MovieFoxSettingsDialog {
         val status = when {
             extra.contains("404") -> "HTTP 404"
             extra.contains("401") || extra.contains("token", true) || extra.contains("expired", true) -> "TOKEN EXPIRED"
-            extra.contains("403") || extra.contains("503") || extra.contains("CF", true) -> "CF BLOCKED"
+            extra.contains("403") || extra.contains("503") -> "BLOCKED"
             error?.message?.contains("timeout", true) == true -> "TIMEOUT"
             else -> "ERROR"
         }
@@ -395,12 +395,11 @@ object MovieFoxSettingsDialog {
                 ok -> "LIVE"
                 code == 404 -> "HTTP 404"
                 code == 401 -> "TOKEN EXPIRED"
-                code == 403 || code == 503 -> "CF BLOCKED"
+                code == 403 || code == 503 -> "HTTP $code"
                 else -> "HTTP $code"
             }
             val reason = when (code) {
                 404 -> "Route/Endpoint Not Found (404) • $probeTarget"
-                403, 503 -> "Cloudflare Challenge • $probeTarget"
                 407 -> "Proxy Auth Required (407) • $probeTarget"
                 else -> probeTarget
             }
@@ -1415,7 +1414,7 @@ object MovieFoxSettingsDialog {
             extractorPane.addView(card)
         }
 
-        // --- Streaming Pane (Shortcodes Universe/CNC/Phisher + Theme + API Host + Player) ---
+        // --- Streaming Pane ---
         val scCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#253046", 20f)
             setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
@@ -1593,7 +1592,7 @@ object MovieFoxSettingsDialog {
         makeStepper("Concurrent Threads", "Parallel source requests", currentConcurrency, 2, 50, 1, "x") {
             currentConcurrency = it; setConcurrency(ctx, it); refreshStats()
         }
-        makeStepper("Server Timeout", "Higher timeout shows all slow/CF servers", currentTimeout, 4, 30, 1, "s") {
+        makeStepper("Server Timeout", "Higher timeout shows all slow servers", currentTimeout, 4, 30, 1, "s") {
             currentTimeout = it; setTimeoutSeconds(ctx, it)
         }
 
@@ -1939,7 +1938,7 @@ object MovieFoxSettingsDialog {
         })
         cs3Pane.addView(cs3AddBox); cs3Pane.addView(cs3RepoListHolder); renderCs3Repos()
 
-        // --- Health & Logs Pane (Shows ALL servers + CF Bypass button + Copy button + 404 details) ---
+        // --- Health & Logs Pane ---
         val healthCardsHolder = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         val logTv = TextView(ctx).apply {
             textSize = 10f; setTextColor(safeColor("#E2E8F0"))
@@ -2010,18 +2009,6 @@ object MovieFoxSettingsDialog {
                 })
                 card.addView(col)
 
-                // CF Bypass / Open URL button right beside Health & Copy
-                card.addView(TextView(ctx).apply {
-                    text = "CF BYPASS"; textSize = 8.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#FBBF24"))
-                    background = pillBg("#2B1F0B", 10f); setPadding(dp(ctx, 7), dp(ctx, 5), dp(ctx, 7), dp(ctx, 5))
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 4) }
-                    setOnClickListener {
-                        runCatching {
-                            val openIntent = Intent(Intent.ACTION_VIEW, Uri.parse(srv.probeUrl))
-                            ctx.startActivity(openIntent)
-                        }.onFailure { safeToast(ctx, "Cannot open URL") }
-                    }
-                })
                 card.addView(TextView(ctx).apply {
                     text = "COPY"; textSize = 8.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#38BDF8"))
                     background = pillBg("#0D2338", 10f); setPadding(dp(ctx, 7), dp(ctx, 5), dp(ctx, 7), dp(ctx, 5))
