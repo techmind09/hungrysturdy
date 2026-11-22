@@ -302,7 +302,7 @@ class MovieFoxProvider : MainAPI() {
         val noisySources = setOf(
             "cinetv_hls", "movy", "rogmovies", "topmovies",
             "bollyhq", "myfilms", "filmyking", "prmovies", "play4u",
-            "bollyflix", "hdhub4u"
+            "bollyflix", "hdhub4u", "hicine", "multimovies"
         )
         val isNoisyOrFastFail = isMovieFoxSite || sourceTag.lowercase() in noisySources
         val effectiveTimeout = when {
@@ -330,7 +330,7 @@ class MovieFoxProvider : MainAPI() {
                 }
                 val code = res.code
                 runCatching { res.okhttpResponse.close() }
-                if (isNoisyOrFastFail && (code == 404 || code == 403 || code == 500)) {
+                if (isNoisyOrFastFail && (code == 404 || code == 403 || code == 429 || code == 500)) {
                     return null
                 }
                 val reason = if (code == 401) "TOKEN EXPIRED (401)" else "HTTP $code"
@@ -1170,19 +1170,20 @@ class MovieFoxProvider : MainAPI() {
     private fun titleMatchesCandidate(candidateTitle: String?, targetTitle: String): Boolean {
         val cNorm = normalizeTitleKey(candidateTitle)
         val tNorm = normalizeTitleKey(targetTitle)
-        if (cNorm.isBlank() || tNorm.isBlank()) return false
+        if (cNorm.isBlank() || tNorm.isBlank()) return true
         if (cNorm == tNorm || cNorm.contains(tNorm) || tNorm.contains(cNorm)) return true
 
         val tBase = normalizeTitleKey(targetTitle.substringBefore(":").substringBefore(" - "))
         val cBase = normalizeTitleKey(candidateTitle?.substringBefore(":")?.substringBefore(" - "))
-        if (tBase.length >= 3 && cBase.isNotBlank() && (cBase == tBase || cBase.contains(tBase) || tBase.contains(cBase))) {
+        if (tBase.length >= 2 && cBase.isNotBlank() && (cBase == tBase || cBase.contains(tBase) || tBase.contains(cBase))) {
             return true
         }
 
         val tWords = tNorm.split(" ").filter { it.length > 1 }.toSet()
         val cWords = cNorm.split(" ").filter { it.length > 1 }.toSet()
-        if (tWords.isEmpty() || cWords.isEmpty()) return false
-        return (tWords.intersect(cWords).size.toDouble() / tWords.size.toDouble()) >= 0.55
+        if (tWords.isEmpty() || cWords.isEmpty()) return true
+        val common = tWords.intersect(cWords).size
+        return common >= 1 && (common.toDouble() / tWords.size.toDouble()) >= 0.34
     }
 
     private fun buildSourceLabel(siteTag: String, server: String, info: String): String {
@@ -1558,7 +1559,7 @@ class MovieFoxProvider : MainAPI() {
                 if (!isJunkCandidateUrl(link.url)) {
                     val allowedByMode = !(lc.downloadOnly && isStream)
                     val allowedByQuality = isQualityAllowed(lc, link.quality, link.name)
-                    if (allowedByMode && allowedByQuality && link.url.startsWith("http")) {
+                    if (allowedByMode && (allowedByQuality || isStream) && link.url.startsWith("http")) {
                         synchronized(emitLock) {
                             found = true
                             callback(link)
@@ -1568,7 +1569,7 @@ class MovieFoxProvider : MainAPI() {
             }
 
             val orderedKeys = (appCtx?.let { MovieFoxSettingsDialog.getOrderedEnabledKeys(it) }
-                ?: MovieFoxSettingsDialog.BASE_SERVERS.map { it.key }).distinct()
+                ?: MovieFoxDialogHelperFallbackKeys).distinct()
 
             val prioritizedKeys = orderedKeys.filter { it.lowercase() in fastWaveKeys } +
                 orderedKeys.filterNot { it.lowercase() in fastWaveKeys }
@@ -1603,6 +1604,9 @@ class MovieFoxProvider : MainAPI() {
             false
         }
     }
+
+    private val MovieFoxDialogHelperFallbackKeys: List<String>
+        get() = MovieFoxSettingsDialog.BASE_SERVERS.map { it.key }
 
     private suspend fun runServerKey(
         srvKey: String,
@@ -2983,6 +2987,7 @@ class MovieFoxProvider : MainAPI() {
                 for (hIdx in 0 until minOf(hosts.length(), 1)) {
                     val hKey = hosts.optJSONObject(hIdx)?.safeStr("k").orEmpty()
                     if (hKey.isBlank()) continue
+                    kotlinx.coroutines.delay(350L)
                     val dlRaw = safeGetText("$base/hapi/dl?k=${safeEncode(hKey)}", headers, timeoutSec = 4L, retries = 1, sourceTag = "hicine").orEmpty()
                     val opts = runCatching { JSONObject(dlRaw).optJSONArray("options") }.getOrNull() ?: continue
                     for (oIdx in 0 until minOf(opts.length(), 1)) {
@@ -3247,20 +3252,28 @@ class MovieFoxProvider : MainAPI() {
                     val ext = if (cleanArchiveUrl.endsWith(".sky", true)) "sky" else "cs3"
                     val file = File(dir, "$hash.$ext")
                     if (!file.exists() || file.length() == 0L) {
-                        val res = app.get(
-                            cleanArchiveUrl,
-                            headers = mapOf("User-Agent" to USER_AGENT, "Accept" to "application/octet-stream, */*"),
-                            timeout = 12L
-                        )
-                        if (res.code in 200..299) {
-                            val bytes = res.body.bytes()
-                            if (bytes.isNotEmpty()) {
-                                file.writeBytes(bytes)
-                                runCatching { file.setReadOnly() }
+                        repeat(2) { dlAttempt ->
+                            if (file.exists() && file.length() > 0L) return@repeat
+                            val res = runCatching {
+                                app.get(
+                                    cleanArchiveUrl,
+                                    headers = mapOf("User-Agent" to USER_AGENT, "Accept" to "application/octet-stream, */*"),
+                                    timeout = 10L
+                                )
+                            }.getOrNull()
+                            if (res != null) {
+                                if (res.code in 200..299) {
+                                    val bytes = res.body.bytes()
+                                    if (bytes.isNotEmpty()) {
+                                        file.writeBytes(bytes)
+                                        runCatching { file.setReadOnly() }
+                                    }
+                                } else {
+                                    if (dlAttempt == 1) logError("CS3Plugin", cleanArchiveUrl, null, "HTTP ${res.code}")
+                                    runCatching { res.okhttpResponse.close() }
+                                }
                             }
-                        } else {
-                            logError("CS3Plugin", cleanArchiveUrl, null, "HTTP ${res.code}")
-                            runCatching { res.okhttpResponse.close() }
+                            if (!file.exists() || file.length() == 0L) kotlinx.coroutines.delay(350L)
                         }
                     }
                     if (!file.exists() || file.length() == 0L) {
