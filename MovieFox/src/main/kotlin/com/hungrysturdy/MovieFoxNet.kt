@@ -6,6 +6,7 @@ import com.lagradost.cloudstream3.base64Decode
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.nicehttp.NiceResponse
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -36,13 +37,15 @@ object MovieFoxNet {
     private val imageSegmentRegex = Regex("""(?i)\.(png|jpe?g|gif|webp|bmp|ico|svg)(?:[?#].*)?$""")
 
     fun hostOf(url: String): String = try {
-        URI(url).host?.lowercase().orEmpty()
+        val normalized = if (url.contains("://")) url.trim() else "https://${url.trim()}"
+        URI(normalized).host?.lowercase()?.removePrefix("www.").orEmpty()
     } catch (_: Exception) {
         ""
     }
 
     fun originOf(url: String): String = try {
-        val uri = URI(url)
+        val normalized = if (url.contains("://")) url.trim() else "https://${url.trim()}"
+        val uri = URI(normalized)
         val scheme = uri.scheme?.takeIf { it.isNotBlank() } ?: "https"
         val host = uri.host?.takeIf { it.isNotBlank() } ?: return url
         "$scheme://$host"
@@ -54,7 +57,9 @@ object MovieFoxNet {
         val clean = href.replace("\\/", "/").replace("&amp;", "&").trim()
         return when {
             clean.isBlank() -> ""
-            clean.startsWith("http://") || clean.startsWith("https://") || clean.startsWith("magnet:") -> clean
+            clean.startsWith("http://", ignoreCase = true) ||
+                clean.startsWith("https://", ignoreCase = true) ||
+                clean.startsWith("magnet:", ignoreCase = true) -> clean
             clean.startsWith("//") -> "https:$clean"
             clean.startsWith("/") -> originOf(base).trimEnd('/') + clean
             else -> base.trimEnd('/') + "/" + clean
@@ -65,6 +70,15 @@ object MovieFoxNet {
         URLEncoder.encode(raw, "UTF-8")
     } catch (_: Exception) {
         raw
+    }
+
+    private fun isJunkUrl(url: String): Boolean {
+        val low = url.lowercase()
+        return url.length < 10 ||
+            low.contains("google.com") ||
+            low.contains("gstatic.com") ||
+            low.contains("gravatar.com") ||
+            low.contains("cloudflare.com")
     }
 
     fun browserHeaders(
@@ -112,14 +126,14 @@ object MovieFoxNet {
         cfLocks.getOrPut(hostOf(url).ifBlank { url }) { Mutex() }
 
     fun isCfChallenge(res: NiceResponse): Boolean {
-        if (res.code in listOf(403, 503)) return true
+        if (res.code in listOf(403, 429, 503)) return true
         if (res.headers["cf-mitigated"].equals("challenge", ignoreCase = true)) return true
         val body = try {
             res.text.lowercase()
         } catch (_: Exception) {
             ""
         }
-        return (body.contains("just a moment") && body.contains("challenge-platform")) ||
+        return (body.contains("just a moment") && (body.contains("challenge-platform") || body.contains("cloudflare"))) ||
             body.contains("checking your browser") ||
             body.contains("checking if the site connection is secure") ||
             body.contains("cf-browser-verification")
@@ -133,6 +147,8 @@ object MovieFoxNet {
         repeat(attempts.coerceAtLeast(1)) { idx ->
             try {
                 block(idx)?.let { return it }
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
             }
             if (idx < attempts - 1) delay(gapMs)
@@ -150,6 +166,8 @@ object MovieFoxNet {
         val reqHeaders = headers ?: browserHeaders(referer)
         val plain = try {
             app.get(url, headers = reqHeaders, timeout = timeoutSec)
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             null
         }
@@ -167,6 +185,8 @@ object MovieFoxNet {
             }
             val solved = try {
                 app.get(url, headers = reqHeaders, interceptor = killer, timeout = solveTimeoutSec)
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
                 null
             }
@@ -191,14 +211,21 @@ object MovieFoxNet {
         val start = System.currentTimeMillis()
         val first = try {
             app.get(url, headers = reqHeaders, timeout = timeoutSec)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             MovieFoxSettingsDialog.logSiteError(sourceTag, url, e, "GET failed")
             null
         }
         if (first != null && first.code in 200..299 && !isCfChallenge(first)) {
             val ms = System.currentTimeMillis() - start
+            val body = try {
+                first.text
+            } finally {
+                first.closeQuietly()
+            }
             MovieFoxSettingsDialog.reportServerStatus(sourceTag, "LIVE", true, first.code, ms, url)
-            return first.text
+            return body
         }
         val needsCf = first != null && isCfChallenge(first)
         val code = first?.code ?: 0
@@ -208,9 +235,12 @@ object MovieFoxNet {
             val solved = fetchWithCf(url, referer, reqHeaders, timeoutSec = timeoutSec)
             if (solved != null) {
                 val ms = System.currentTimeMillis() - start
+                val body = try {
+                    solved.text
+                } finally {
+                    solved.closeQuietly()
+                }
                 MovieFoxSettingsDialog.reportServerStatus(sourceTag, "LIVE", true, solved.code, ms, url)
-                val body = solved.text
-                solved.closeQuietly()
                 return body
             }
             MovieFoxSettingsDialog.logSiteError(sourceTag, url, null, "CF BLOCKED HTTP $code")
@@ -240,17 +270,19 @@ object MovieFoxNet {
                     allowRedirects = false,
                     timeout = timeoutSec
                 )
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
                 return null
             }
             val loc = res.headers["location"]?.trim().orEmpty()
             res.closeQuietly()
             if (loc.isBlank()) {
-                return current.takeIf { it.startsWith("http") }
+                return current.takeIf { it.startsWith("http", ignoreCase = true) }
             }
             current = absolute(loc, current)
         }
-        return current.takeIf { it.startsWith("http") }
+        return current.takeIf { it.startsWith("http", ignoreCase = true) }
     }
 
     suspend fun probeRange(
@@ -267,6 +299,8 @@ object MovieFoxNet {
             val code = res.code
             res.closeQuietly()
             code
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             null
         }
@@ -277,14 +311,18 @@ object MovieFoxNet {
         headers: Map<String, String> = emptyMap(),
         timeoutSec: Long = 10L
     ): Boolean {
-        if (!url.startsWith("http")) return false
+        if (!url.startsWith("http", ignoreCase = true)) return false
         return try {
             val res = app.get(url, headers = headers, timeout = timeoutSec)
             if (res.code !in 200..299) {
                 res.closeQuietly()
                 return false
             }
-            val text = res.text
+            val text = try {
+                res.text
+            } finally {
+                res.closeQuietly()
+            }
             val trimmed = text.trimStart()
             if (trimmed.startsWith("#EXTM3U")) {
                 val entries = text.lineSequence()
@@ -294,6 +332,8 @@ object MovieFoxNet {
                 return entries.isNotEmpty() && entries.none { imageSegmentRegex.containsMatchIn(it) }
             }
             trimmed.contains("<MPD", ignoreCase = true)
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             false
         }
@@ -305,7 +345,7 @@ object MovieFoxNet {
         headers: Map<String, String> = emptyMap(),
         referer: String? = null
     ): Boolean {
-        if (!url.startsWith("http") || mfIsBrokenContainerUrl(url)) return false
+        if (!url.startsWith("http", ignoreCase = true) || mfIsBrokenContainerUrl(url)) return false
         if (url in verifiedUrls) return true
         val merged = if (referer != null && headers.keys.none { it.equals("Referer", true) }) {
             headers + mapOf("Referer" to referer)
@@ -317,6 +357,8 @@ object MovieFoxNet {
                 ExtractorLinkType.M3U8, ExtractorLinkType.DASH -> manifestAlive(url, merged)
                 else -> probeRange(url, referer, merged)?.let { it in 200..399 } ?: false
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             false
         }
@@ -374,7 +416,7 @@ object MovieFoxNet {
     ): String {
         val cacheKey = key.lowercase()
         if (!forceRefresh) {
-            resolvedDomainCache[cacheKey]?.let { return it }
+            resolvedDomainCache[cacheKey]?.let { if (!isJunkUrl(it)) return it }
         }
 
         val entry = MfSites.byKey(key)
@@ -394,12 +436,14 @@ object MovieFoxNet {
             if (fbObj != null) {
                 for (k in lookupKeys) {
                     val v = fbObj.opt(k)?.toString()?.trim()?.trim('"', '\'')?.trimEnd('/')
-                    if (!v.isNullOrBlank() && v.startsWith("http")) {
+                    if (!v.isNullOrBlank() && v.startsWith("http", ignoreCase = true) && !isJunkUrl(v)) {
                         resolvedDomainCache[cacheKey] = v
                         return v
                     }
                 }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
         }
 
@@ -410,12 +454,14 @@ object MovieFoxNet {
             if (uObj != null) {
                 for (k in lookupKeys) {
                     val v = uObj.optString(k).trim().trim('"', '\'').trimEnd('/')
-                    if (v.isNotBlank() && v.startsWith("http")) {
+                    if (v.isNotBlank() && v.startsWith("http", ignoreCase = true) && !isJunkUrl(v)) {
                         resolvedDomainCache[cacheKey] = v
                         return v
                     }
                 }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
         }
 
@@ -426,16 +472,19 @@ object MovieFoxNet {
             if (pObj != null) {
                 for (k in lookupKeys) {
                     val v = pObj.optString(k).trim().trim('"', '\'').trimEnd('/')
-                    if (v.isNotBlank() && v.startsWith("http")) {
+                    if (v.isNotBlank() && v.startsWith("http", ignoreCase = true) && !isJunkUrl(v)) {
                         resolvedDomainCache[cacheKey] = v
                         return v
                     }
                 }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
         }
 
-        val def = fallback.trim().trimEnd('/').ifBlank { entry?.baseUrl.orEmpty() }
+        val def = fallback.trim().trimEnd('/').takeIf { it.isNotBlank() && !isJunkUrl(it) }
+            ?: MfSites.candidatesFor(key).firstOrNull().orEmpty()
         if (def.isNotBlank()) resolvedDomainCache[cacheKey] = def
         return def
     }
@@ -445,3 +494,4 @@ object MovieFoxNet {
         verifiedUrls.clear()
     }
 }
+
