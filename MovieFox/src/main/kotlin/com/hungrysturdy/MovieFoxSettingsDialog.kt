@@ -56,7 +56,7 @@ import java.util.zip.ZipInputStream
 object MovieFoxSettingsDialog {
 
     const val LOG_TAG = "MovieFoxDiag"
-    private const val PREFS_NAME = "moviefox_ultra_max_v27"
+    private const val PREFS_NAME = "moviefox_ultra_max_v28"
     private const val KEY_SRV_PREFIX = "mf_srv_"
     private const val KEY_EXT_PREFIX = "mf_ext_"
     private const val KEY_SRV_ORDER = "mf_srv_order_csv"
@@ -255,8 +255,8 @@ object MovieFoxSettingsDialog {
         try {
             val conn = (URL(srv.probeUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 5000
-                readTimeout = 5000
+                connectTimeout = 12000
+                readTimeout = 12000
                 instanceFollowRedirects = true
                 setRequestProperty("User-Agent", CF_BYPASS_UA)
                 getCookieForDomain(appContext, srv.probeUrl)?.let { setRequestProperty("Cookie", it) }
@@ -665,11 +665,11 @@ object MovieFoxSettingsDialog {
     fun isDownloadOnly(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_DOWNLOAD_ONLY, false)
     fun setDownloadOnly(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_DOWNLOAD_ONLY, enabled).apply()
 
-    fun getConcurrency(ctx: Context): Int = prefs(ctx).getInt(KEY_CONCURRENCY, 24)
+    fun getConcurrency(ctx: Context): Int = prefs(ctx).getInt(KEY_CONCURRENCY, 20)
     fun setConcurrency(ctx: Context, value: Int) = prefs(ctx).edit().putInt(KEY_CONCURRENCY, value.coerceIn(2, 50)).apply()
 
-    fun getTimeoutSeconds(ctx: Context): Int = prefs(ctx).getInt(KEY_TIMEOUT_SEC, 7)
-    fun setTimeoutSeconds(ctx: Context, sec: Int) = prefs(ctx).edit().putInt(KEY_TIMEOUT_SEC, sec.coerceIn(3, 30)).apply()
+    fun getTimeoutSeconds(ctx: Context): Int = prefs(ctx).getInt(KEY_TIMEOUT_SEC, 18)
+    fun setTimeoutSeconds(ctx: Context, sec: Int) = prefs(ctx).edit().putInt(KEY_TIMEOUT_SEC, sec.coerceIn(4, 45)).apply()
 
     fun isShuffleHomeCategories(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_SHUFFLE_HOME, false)
     fun setShuffleHomeCategories(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_SHUFFLE_HOME, enabled).apply()
@@ -775,7 +775,7 @@ object MovieFoxSettingsDialog {
         prefs(ctx).edit().putString(KEY_CS3_REPOS, arr.toString()).apply()
     }
 
-    private fun readHttpBytes(urlStr: String, timeoutMs: Int = 6000): ByteArray? = try {
+    private fun readHttpBytes(urlStr: String, timeoutMs: Int = 10000): ByteArray? = try {
         val conn = (URL(toRawGithubUrl(urlStr)).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = timeoutMs
@@ -1448,7 +1448,7 @@ object MovieFoxSettingsDialog {
         makeStepperCard(streamPane, "Parallel Workers", "Concurrent server fetch threads", currentConcurrency, 2, 4, 30, "x") {
             currentConcurrency = it; setConcurrency(ctx, it); refreshStats()
         }
-        makeStepperCard(streamPane, "Request Timeout", "Per-server connection timeout", currentTimeout, 2, 3, 30, "s") {
+        makeStepperCard(streamPane, "Request Timeout", "Per-server connection timeout", currentTimeout, 2, 4, 45, "s") {
             currentTimeout = it; setTimeoutSeconds(ctx, it)
         }
 
