@@ -56,14 +56,14 @@ class MovieFoxProvider : MainAPI() {
         get() = MovieFoxSettingsDialog.CF_BYPASS_UA
 
     private val tmdbApiKey = "b030404650f279792a8d3287232358e3"
-    private val tmdbBaseUrl = "https://api.themoviedb.org/3"
-    private val firebaseDomainsUrl = "https://cloudstreampluginhelper-default-rtdb.firebaseio.com/.json"
-    private val phisherDomainsUrl = "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json"
-    private val kaperwanUrlsJson = "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json"
+    private val tmdbBaseUrl = MfRegistries.TMDB_API_BASE
+    private val firebaseDomainsUrl = MfRegistries.FIREBASE_RTDB_URL
+    private val phisherDomainsUrl = MfRegistries.PHISHER_DOMAINS_JSON
+    private val kaperwanUrlsJson = MfRegistries.KAPERWAN_URLS_JSON
 
     private val cineTvUrls = listOf("https://cinetv.app/en", "https://cinetv.app")
     private val cineTvBaseUrl = "https://cinetv.app"
-    private val cineTvHlsWorker = "https://silent-frost-f2dbv.nxstreamhub.workers.dev/hls"
+    private val cineTvHlsWorker = MfApiEndpoints.CINETV_HLS_WORKER
 
     private val prmoviesMirrors = listOf(
         "https://prmovies.com.cv",
@@ -78,16 +78,16 @@ class MovieFoxProvider : MainAPI() {
 
     private val hindiDramaBaseUrl = "https://hindidrama.net"
     private val animeWorldBaseUrl = "https://watchanimeworld.top"
-    private val sportApiBaseUrl = "https://h5-sport-api.aoneroom.com/wefeed-h5api-bff"
-    private val sportSiteUrl = "https://www.sportslive.wine/"
+    private val sportApiBaseUrl = MfApiEndpoints.SPORT_API_BFF
+    private val sportSiteUrl = MfApiEndpoints.SPORT_WEB_URL
 
     private val vegamoviesDomains = listOf(
-        "https://vegamovies.lease",
         "https://new1.vegamovies.lease",
-        "https://vegamovies.wales",
-        "https://rogmovies.vip",
+        "https://vegamovies.lease",
+        "https://rogmovies.autos",
         "https://rogmovies.im",
-        "https://rogmovies.autos"
+        "https://rogmovies.one",
+        "https://rogmovies.asia"
     )
 
     private val bollyflixMirrors = listOf(
@@ -125,9 +125,8 @@ class MovieFoxProvider : MainAPI() {
 
     private val netnaijaDomains = listOf(
         "https://netnaija.film",
-        "https://www.thenetnaija.net",
-        "https://netnaija.xyz",
-        "https://netnaija.com.ng"
+        "https://netnaija.com.ng",
+        "https://www.thenetnaija.net"
     )
     @Volatile
     private var activeNetnaijaBase = "https://netnaija.film"
@@ -140,7 +139,7 @@ class MovieFoxProvider : MainAPI() {
         "https://new15.hdhub4u.cl",
         "https://new13.hdhub4u.cl"
     )
-    private val hdhub4uTypesenseUrl = "https://search.pingora.fyi/collections/post/documents/search"
+    private val hdhub4uTypesenseUrl = MfApiEndpoints.HDHUB4U_TYPESENSE
     private val dramaVerseBaseUrl = "https://mydverse.com"
     private val gokuHdBaseUrl = "https://gokuhd.nl"
 
@@ -150,14 +149,14 @@ class MovieFoxProvider : MainAPI() {
         "https://drjuea.movielinkbd.at",
         "https://movielinkbd.com"
     )
-    private val netmirrorDomains = listOf("https://netmirror.gold", "https://net52.cc")
+    private val netmirrorDomains = listOf("https://net52.cc", "https://netmirror.gold")
     private val movyMainUrl = "https://www.movy.sx"
-    private val movyStreamApiBase = "https://api.wecollege.net"
+    private val movyStreamApiBase = MfApiEndpoints.MOVY_STREAM_API
     private val fourKhdHubDomains = listOf("https://4khdhub.one")
     private val movies4uDomains = listOf(
         "https://new8.movies4u.garden",
-        "https://new6.movies4u.garden",
-        "https://movies4u.vet"
+        "https://movies4u.vet",
+        "https://new6.movies4u.garden"
     )
     private val multimoviesDomains = listOf("https://m1.multimovies.courses", "https://multimovies.garden")
 
@@ -223,11 +222,6 @@ class MovieFoxProvider : MainAPI() {
         "play", "play now", "trailer", "all options", "go home", "search"
     )
 
-    private fun mfIsBrokenContainerUrl(url: String): Boolean {
-        val low = url.lowercase()
-        return low.contains("intent://") || low.startsWith("market://")
-    }
-
     private fun logError(source: String, url: String, err: Throwable?, extra: String = "") {
         if (err is CancellationException) return
         Log.e(logTag, "[$source] $extra | $url -> ${err?.message.orEmpty()}", err)
@@ -235,7 +229,10 @@ class MovieFoxProvider : MainAPI() {
     }
 
     private fun logTitleMismatch(sourceTag: String, url: String, candidateTitle: String?, targetTitle: String) {
-        if (!candidateTitle.isNullOrBlank() && !targetTitle.isBlank()) {
+        if (candidateTitle.isNullOrBlank() || targetTitle.isBlank()) return
+        val cWords = significantTitleWords(candidateTitle).toSet()
+        val tWords = significantTitleWords(targetTitle)
+        if (tWords.any { it in cWords }) {
             logError(
                 sourceTag,
                 url,
@@ -267,6 +264,8 @@ class MovieFoxProvider : MainAPI() {
             low.contains("gstatic.com") ||
             low.contains("gravatar.com") ||
             low.contains("cloudflare.com") ||
+            low.contains("vegamovies.wales") ||
+            low.contains("vegamovies.latino") ||
             low.length < 10
     }
 
@@ -300,6 +299,8 @@ class MovieFoxProvider : MainAPI() {
             } else {
                 fallback
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             fallback
         }
@@ -396,11 +397,16 @@ class MovieFoxProvider : MainAPI() {
                 val res = app.get(url, headers = headers, timeout = effectiveTimeout)
                 val ms = System.currentTimeMillis() - start
                 if (res.code in 200..299) {
+                    val body = try {
+                        res.text
+                    } finally {
+                        res.closeQuietly()
+                    }
                     MovieFoxSettingsDialog.reportServerStatus(sourceTag, "LIVE", true, res.code, ms, url)
-                    return res.text
+                    return body
                 }
                 val code = res.code
-                runCatching { res.okhttpResponse.close() }
+                res.closeQuietly()
                 if (isNoisyOrFastFail && (code == 404 || code == 403 || code == 429 || code == 500)) {
                     return null
                 }
@@ -427,11 +433,14 @@ class MovieFoxProvider : MainAPI() {
             val res = app.get(url, headers = headers, timeout = 5L)
             if (res.code !in 200..299) {
                 logError("Manifest", url, null, "HTTP ${res.code} • Video player manifest error")
-                runCatching { res.okhttpResponse.close() }
+                res.closeQuietly()
                 return false
             }
-            val head = res.text.trimStart().take(150)
-            runCatching { res.okhttpResponse.close() }
+            val head = try {
+                res.text.trimStart().take(150)
+            } finally {
+                res.closeQuietly()
+            }
             val valid = head.startsWith("#EXTM3U") || head.contains("<MPD", ignoreCase = true)
             if (!valid) logError("Manifest", url, null, "Invalid manifest head in video player: ${head.take(60)}")
             valid
@@ -599,7 +608,7 @@ class MovieFoxProvider : MainAPI() {
             val title = item.safeStr("title").ifBlank { item.safeStr("name") }
             if (title.isBlank()) continue
             val pPath = item.safeStr("poster_path")
-            val poster = if (pPath.startsWith("/")) "https://image.tmdb.org/t/p/w500$pPath" else null
+            val poster = if (pPath.startsWith("/")) "${MfRegistries.TMDB_IMAGE_W500}$pPath" else null
             val detailUrl = if (itemIsTv) "$mainUrl/tv/series-$id" else "$mainUrl/movie/movie-$id"
             if (itemIsTv) {
                 out.add(newTvSeriesSearchResponse(title, detailUrl, TvType.TvSeries) { this.posterUrl = poster })
@@ -706,7 +715,7 @@ class MovieFoxProvider : MainAPI() {
                     val t = r.safeStr("title").ifBlank { r.safeStr("name") }
                     if (t.isBlank()) continue
                     val pPath = r.safeStr("poster_path")
-                    val poster = if (pPath.startsWith("/")) "https://image.tmdb.org/t/p/w500$pPath" else null
+                    val poster = if (pPath.startsWith("/")) "${MfRegistries.TMDB_IMAGE_W500}$pPath" else null
                     val detailUrl = if (isTv) "$mainUrl/tv/series-$id" else "$mainUrl/movie/movie-$id"
                     if (isTv) {
                         responses.add(newTvSeriesSearchResponse(t, detailUrl, TvType.TvSeries) { this.posterUrl = poster })
@@ -861,7 +870,7 @@ class MovieFoxProvider : MainAPI() {
             val title = item.safeStr("title").ifBlank { item.safeStr("name") }
             if (title.isBlank()) continue
             val pPath = item.safeStr("poster_path")
-            val poster = if (pPath.startsWith("/")) "https://image.tmdb.org/t/p/w500$pPath" else null
+            val poster = if (pPath.startsWith("/")) "${MfRegistries.TMDB_IMAGE_W500}$pPath" else null
             val isTv = mType == "tv"
             val detailUrl = if (isTv) "$mainUrl/tv/series-$id" else "$mainUrl/movie/movie-$id"
             if (isTv) {
@@ -947,7 +956,7 @@ class MovieFoxProvider : MainAPI() {
             val title = obj.safeStr("title").ifBlank { obj.safeStr("name") }.ifBlank { "Title $id" }
             val imdbId = obj.optJSONObject("external_ids")?.safeStr("imdb_id").orEmpty().ifBlank { obj.safeStr("imdb_id") }
             val pPath = obj.safeStr("poster_path")
-            val poster = if (pPath.startsWith("/")) "https://image.tmdb.org/t/p/w500$pPath" else null
+            val poster = if (pPath.startsWith("/")) "${MfRegistries.TMDB_IMAGE_W500}$pPath" else null
             val plot = obj.safeStr("overview")
 
             if (!isTv) {
@@ -1002,7 +1011,7 @@ class MovieFoxProvider : MainAPI() {
 
         val posterPath: String? = Regex("\"posterPath\":\"(/[^\"\\\\]+)\"").find(flightText)?.groupValues?.get(1)
         val poster: String? = if (!posterPath.isNullOrBlank()) {
-            "https://image.tmdb.org/t/p/w500$posterPath"
+            "${MfRegistries.TMDB_IMAGE_W500}$posterPath"
         } else {
             document.select("main img, img.object-cover, img[data-nimg='fill']").firstOrNull()?.let {
                 it.attr("src").ifEmpty { it.attr("data-src") }
@@ -1053,7 +1062,7 @@ class MovieFoxProvider : MainAPI() {
                         this.season = sNum
                         this.episode = eNum
                         this.description = epOverview
-                        this.posterUrl = stillPath?.let { "https://image.tmdb.org/t/p/w500$it" }
+                        this.posterUrl = stillPath?.let { "${MfRegistries.TMDB_IMAGE_W500}$it" }
                     })
                 }
             }
@@ -1193,7 +1202,8 @@ class MovieFoxProvider : MainAPI() {
             url.contains("popads", true) ||
             url.contains("propeller", true) ||
             url.contains("ardance.org", true) ||
-            url.contains("fifa2026", true)
+            url.contains("fifa2026", true) ||
+            url.contains("adsboosters", true)
     }
 
     private fun isStreamOrHlsLink(url: String, type: ExtractorLinkType, typeHint: String = ""): Boolean {
@@ -1269,16 +1279,13 @@ class MovieFoxProvider : MainAPI() {
         if (tWords.isEmpty()) return cNorm.isNotBlank()
         if (cWords.isEmpty()) return false
 
-        if (tWords.size == 1) {
-            return tWords.first() in cWords
-        }
-
         val matchedCount = tWords.count { it in cWords }
         val ratio = matchedCount.toDouble() / tWords.size.toDouble()
-        return if (tWords.size == 2) {
-            matchedCount == 2 || (ratio >= 0.65 && tWords.first() in cWords)
-        } else {
-            matchedCount >= 2 && ratio >= 0.50
+
+        return when {
+            tWords.size == 1 -> tWords.first() in cWords
+            tWords.size == 2 -> matchedCount == 2 || (ratio >= 0.5 && tWords.last() in cWords)
+            else -> matchedCount >= 2 && ratio >= 0.5
         }
     }
 
@@ -1897,7 +1904,11 @@ class MovieFoxProvider : MainAPI() {
                             timeout = 12_000L
                         )
                     }.getOrNull() ?: continue
-                    val vObj = runCatching { JSONObject(postRes.text) }.getOrNull() ?: continue
+                    val vObj = runCatching {
+                        val txt = postRes.text
+                        postRes.closeQuietly()
+                        JSONObject(txt)
+                    }.getOrNull() ?: continue
                     val rawSrc = vObj.safeStr("videoSource").ifBlank { vObj.safeStr("securedLink") }
                     if (rawSrc.isBlank()) continue
                     val streamUrl = if (rawSrc.startsWith("http")) rawSrc else "$playerBase$rawSrc"
@@ -2487,7 +2498,7 @@ class MovieFoxProvider : MainAPI() {
                         if (href.isBlank()) return@async emptyList()
                         if (!href.contains("fastdlserver", true) && href.contains("?id=")) {
                             val id = href.substringAfterLast("id=")
-                            val bypassHtml = safeGetText("https://web.sidexfee.com/?id=$id", mapOf("Referer" to postUrl), timeoutSec = 5L, retries = 1, sourceTag = "bollyflix").orEmpty()
+                            val bypassHtml = safeGetText("${MfApiEndpoints.SIDEXFEE_BYPASS}/?id=$id", mapOf("Referer" to postUrl), timeoutSec = 5L, retries = 1, sourceTag = "bollyflix").orEmpty()
                             val encUrl = Regex("""link":"([^"]+)""").find(bypassHtml)?.groupValues?.get(1).orEmpty()
                             if (encUrl.isNotBlank()) {
                                 val decoded = runCatching { base64Decode(encUrl.replace("\\/", "/")) }.getOrNull().orEmpty()
@@ -3052,10 +3063,14 @@ class MovieFoxProvider : MainAPI() {
                     app.post("$bffBase/subject/search", headers = headers, json = mapOf("keyword" to lc.searchQueryTitle, "page" to 1, "perPage" to 15), timeout = 5L)
                 }.getOrNull() ?: continue
                 if (searchRes.code !in 200..299) {
-                    runCatching { searchRes.okhttpResponse.close() }
+                    searchRes.closeQuietly()
                     continue
                 }
-                val searchRaw = searchRes.text
+                val searchRaw = try {
+                    searchRes.text
+                } finally {
+                    searchRes.closeQuietly()
+                }
                 val itemsArr = runCatching { JSONObject(searchRaw).optJSONObject("data")?.optJSONArray("items") }.getOrNull() ?: continue
 
                 var matchedPath: String? = null
@@ -3525,14 +3540,18 @@ class MovieFoxProvider : MainAPI() {
                             }.getOrNull()
                             if (res != null) {
                                 if (res.code in 200..299) {
-                                    val bytes = res.body.bytes()
+                                    val bytes = try {
+                                        res.body.bytes()
+                                    } finally {
+                                        res.closeQuietly()
+                                    }
                                     if (bytes.isNotEmpty()) {
                                         file.writeBytes(bytes)
                                         runCatching { file.setReadOnly() }
                                     }
                                 } else {
                                     if (dlAttempt == 1) logError("CS3Plugin", cleanArchiveUrl, null, "HTTP ${res.code}")
-                                    runCatching { res.okhttpResponse.close() }
+                                    res.closeQuietly()
                                 }
                             }
                             if (!file.exists() || file.length() == 0L) delay(350L)
