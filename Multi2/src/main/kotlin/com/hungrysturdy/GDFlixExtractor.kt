@@ -3,7 +3,7 @@ package com.hungrysturdy
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 
-open class GDFlixExtractor : ExtractorAPI() {
+open class GDFlixExtractor : ExtractorApi() {
     override val name = "GDFlix"
     override val mainUrl = "https://gdflix.vip"
     override val requiresReferer = true
@@ -14,7 +14,7 @@ open class GDFlixExtractor : ExtractorAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val pageUrl = fixUrl(url)
+        val pageUrl = resolveUrl(url, mainUrl)
         val response = app.get(pageUrl, referer = referer ?: mainUrl)
         val basePageUrl = response.url.ifBlank { pageUrl }
         val doc = response.document
@@ -34,13 +34,7 @@ open class GDFlixExtractor : ExtractorAPI() {
                 if (rawHref.isBlank() || rawHref.startsWith("#") || rawHref.startsWith("javascript:")) {
                     return@mapNotNull null
                 }
-                val resolved = if (rawHref.startsWith("http", ignoreCase = true)) {
-                    rawHref
-                } else {
-                    val origin = Regex("""^(https?://[^/]+)""").find(basePageUrl)?.groupValues?.getOrNull(1)
-                        ?: mainUrl
-                    "$origin/${rawHref.trimStart('/')}"
-                }
+                val resolved = resolveUrl(rawHref, basePageUrl)
                 val label = el.text().replace(Regex("""\s+"""), " ").trim().ifBlank { "Mirror" }
                 label to resolved
             }
@@ -112,7 +106,7 @@ open class GDFlixExtractor : ExtractorAPI() {
                 if (cleaned.isBlank() || cleaned.startsWith("#") || cleaned.startsWith("javascript:")) {
                     null
                 } else {
-                    fixUrl(cleaned)
+                    resolveUrl(cleaned, cloudUrl)
                 }
             }
             .distinct()
@@ -141,6 +135,19 @@ open class GDFlixExtractor : ExtractorAPI() {
                 )
             } else if (!link.contains("gdflix", ignoreCase = true)) {
                 loadExtractor(link, cloudUrl, subtitleCallback, callback)
+            }
+        }
+    }
+
+    private fun resolveUrl(rawUrl: String, baseUrl: String): String {
+        val trimmed = rawUrl.trim()
+        return when {
+            trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true) -> trimmed
+            trimmed.startsWith("//") -> "https:$trimmed"
+            else -> {
+                val origin = Regex("""^(https?://[^/]+)""").find(baseUrl)?.groupValues?.getOrNull(1)
+                    ?: mainUrl
+                "$origin/${trimmed.trimStart('/')}"
             }
         }
     }
