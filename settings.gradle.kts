@@ -20,4 +20,5 @@ dependencyResolutionManagement {
 rootProject.name = "hungrysturdy"
 include(":Multi")
 include(":Multi2")
+include(":MovieFox")
 
