@@ -2,9 +2,10 @@ package com.hungrysturdy
 
 import android.content.Context
 import android.util.Base64
-import com.lagradost.cloudstream3.AcraApplication
+import com.lagradost.cloudstream3.CloudStreamApp
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
@@ -19,7 +20,7 @@ import java.net.URI
 import java.net.URLDecoder
 
 private fun extContext(): Context? =
-    MovieFoxSettingsDialog.currentContext() ?: AcraApplication.context
+    MovieFoxSettingsDialog.currentContext() ?: CloudStreamApp.context
 
 private fun isExtractorAllowed(key: String): Boolean {
     val ctx = extContext() ?: return true
@@ -170,7 +171,7 @@ open class BaseJWPExtractor : ExtractorApi() {
                 .map { it.groupValues[1].replace("\\/", "/").trim() }
                 .filter { emittedSubs.add(it) }
                 .forEach { subUrl ->
-                    subtitleCallback.invoke(SubtitleFile(lang = "Hindi / English", url = subUrl))
+                    subtitleCallback.invoke(newSubtitleFile(lang = "Hindi / English", url = subUrl))
                 }
         } catch (e: Exception) {
             logExtractorError(this.name, url, e, "BaseJWP getUrl failed")
@@ -899,7 +900,7 @@ object KatServerLogic {
 
     private suspend fun extractGdFlixCloudSubpage(cloudUrl: String, refererUrl: String, quality: Int, callback: (ExtractorLink) -> Unit) {
         runCatching {
-            var resp = app.get(cloudUrl, headers = katBrowserHeaders, referer = refererUrl, interceptor = katCfKiller)
+            val resp = app.get(cloudUrl, headers = katBrowserHeaders, referer = refererUrl, interceptor = katCfKiller)
             if (parseJsonResponse(resp.text.trim(), quality, callback)) return
             val emitted = mutableSetOf<String>()
             resp.document.select("a[href*='workers.dev'], a:contains(CLOUD RESUME DOWNLOAD), a:contains(Download)").forEach { a ->
