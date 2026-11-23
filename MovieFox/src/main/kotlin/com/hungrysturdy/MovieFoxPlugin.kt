@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class MovieFoxPlugin : Plugin() {
     override fun load(context: Context) {
+        MovieFoxSettingsDialog.bindContext(context)
         registerMainAPI(MovieFoxProvider())
 
         // Drive, Cloud & Mirror Extractors
@@ -62,15 +63,41 @@ class MovieFoxPlugin : Plugin() {
         registerExtractorAPI(Otakuhg())
         registerExtractorAPI(Minochinos())
 
+        // CineStream Extractors
+        registerExtractorAPI(CsVideostr())
+        registerExtractorAPI(CsStreameeeeee())
+        registerExtractorAPI(CsGofile())
+        registerExtractorAPI(CsWootly())
+        registerExtractorAPI(CsVibePlayer())
+        registerExtractorAPI(CsVivibebe())
+        registerExtractorAPI(CsBibiemb())
+        registerExtractorAPI(CsPlaymogo())
+        registerExtractorAPI(CsOtakuvid())
+        registerExtractorAPI(CsOtakuhg())
+        registerExtractorAPI(CsMinochinos())
+        registerExtractorAPI(CsHdStream4u())
+        registerExtractorAPI(CsHubstream())
+        registerExtractorAPI(CsIqsmartgames())
+        registerExtractorAPI(CsVidwish())
+        registerExtractorAPI(CsVidtube())
+        registerExtractorAPI(CsMegaPlay())
+        registerExtractorAPI(CsAsianload())
+        registerExtractorAPI(CsEmbedload())
+        registerExtractorAPI(CsFlixCloud())
+        registerExtractorAPI(CsPpzjYoutube())
+
         openSettings = { ctx ->
             try {
                 val activeAct = CommonActivity.activity
-                val targetCtx: Context = when {
+                val resolvedActivity: Activity? = when {
                     ctx is Activity && !ctx.isFinishing && !ctx.isDestroyed -> ctx
                     activeAct != null && !activeAct.isFinishing && !activeAct.isDestroyed -> activeAct
-                    else -> context
+                    context is Activity && !context.isFinishing && !context.isDestroyed -> context
+                    else -> null
                 }
-                MovieFoxSettingsDialog.show(targetCtx)
+                if (resolvedActivity != null) {
+                    MovieFoxSettingsDialog.show(resolvedActivity)
+                }
             } catch (_: Exception) {
             }
         }
