@@ -4,8 +4,9 @@ import android.util.Base64
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
 import java.net.URI
+import java.net.URLDecoder
 
-open class HubCloudExtractor : ExtractorAPI() {
+open class HubCloudExtractor : ExtractorApi() {
     override val name = "HubCloud"
     override val mainUrl = "https://hubcloud.mov"
     override val requiresReferer = true
@@ -16,27 +17,40 @@ open class HubCloudExtractor : ExtractorAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val pageUrl = fixUrl(url)
-        val response = app.get(pageUrl, referer = referer ?: mainUrl)
-        val basePageUrl = response.url.ifBlank { pageUrl }
-        val doc = response.document
-        val html = response.text
+        val links = collectLinks(url, referer, subtitleCallback)
+        for (link in links) {
+            callback.invoke(link)
+        }
+    }
 
-        val titleText = doc.selectFirst(".card-header")
+    internal suspend fun collectLinks(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit
+    ): List<ExtractorLink> {
+        val results = mutableListOf<ExtractorLink>()
+        val seenUrls = linkedSetOf<String>()
+
+        val pageUrl: String = resolveUrl(url, mainUrl)
+        val response = app.get(pageUrl, referer = referer ?: mainUrl)
+        val basePageUrl: String = response.url.ifBlank { pageUrl }
+        val doc = response.document
+        val html: String = response.text
+
+        val titleText: String = doc.selectFirst(".card-header")
             ?.text()
             ?.trim()
-            ?.ifBlank { doc.title().trim() }
-            ?: name
+            ?.takeIf { it.isNotBlank() }
+            ?: doc.title().trim().ifBlank { name }
 
-        val episodeTag = Regex("""\bS\d+E\d+\b""", RegexOption.IGNORE_CASE)
+        val episodeTag: String? = Regex("""\bS\d+E\d+\b""", RegexOption.IGNORE_CASE)
             .find(titleText)?.value?.uppercase()
-        val labelPrefix = if (episodeTag != null) "$name $episodeTag" else name
-        val baseQuality = detectQualityFromText(titleText)
-        val emittedUrls = linkedSetOf<String>()
+        val labelPrefix: String = if (episodeTag != null) "$name $episodeTag" else name
+        val baseQuality: Int = detectQualityFromText(titleText)
 
-        suspend fun emitDirect(serverLabel: String, mediaUrl: String, ref: String = basePageUrl) {
-            val cleanUrl = unescapeJsString(mediaUrl).trim()
-            if (cleanUrl.isBlank() || !emittedUrls.add(cleanUrl)) return
+        suspend fun addDirectLink(serverLabel: String, rawMediaUrl: String, refUrl: String = basePageUrl) {
+            val cleanUrl: String = unescapeUrl(rawMediaUrl).trim()
+            if (cleanUrl.isBlank() || !seenUrls.add(cleanUrl)) return
 
             val linkType = if (cleanUrl.contains(".m3u8", ignoreCase = true)) {
                 ExtractorLinkType.M3U8
@@ -44,131 +58,194 @@ open class HubCloudExtractor : ExtractorAPI() {
                 ExtractorLinkType.VIDEO
             }
 
-            callback.invoke(
+            val resolvedQuality: Int = detectQualityFromText(cleanUrl).let { detected ->
+                if (detected != Qualities.Unknown.value) detected else baseQuality
+            }
+
+            results.add(
                 newExtractorLink(
                     source = name,
                     name = "$labelPrefix - $serverLabel",
                     url = cleanUrl,
                     type = linkType
                 ) {
-                    this.referer = ref
-                    this.quality = detectQualityFromText(cleanUrl).let {
-                        if (it != Qualities.Unknown.value) it else baseQuality
-                    }
+                    this.referer = refUrl
+                    this.quality = resolvedQuality
                 }
             )
         }
 
-        doc.select("a[href]").forEach { el ->
-            val href = el.attr("href").trim()
-            if (href.isBlank() || href.startsWith("#") || href.startsWith("javascript:")) return@forEach
+        // 1. Page anchors
+        val anchors = doc.select("a[href]")
+        for (el in anchors) {
+            val hrefRaw: String = el.attr("href").trim()
+            if (hrefRaw.isBlank() || hrefRaw.startsWith("#") || hrefRaw.startsWith("javascript:")) {
+                continue
+            }
 
-            val fullHref = fixUrl(href)
-            val btnText = el.text().replace(Regex("""\s+"""), " ").trim()
+            val fullHref: String = resolveUrl(hrefRaw, basePageUrl)
+            val btnText: String = el.text().replace(Regex("""\s+"""), " ").trim()
 
             when {
                 fullHref.contains("r2.cloudflarestorage.com", ignoreCase = true) ||
                     fullHref.contains(".mkv", ignoreCase = true) ||
                     fullHref.contains(".mp4", ignoreCase = true) ||
                     fullHref.contains(".m3u8", ignoreCase = true) -> {
-                    val serverName = btnText.ifBlank { "Direct Server" }
-                    emitDirect(serverName, fullHref)
+                    val serverName: String = btnText.ifBlank { "Direct Server" }
+                    addDirectLink(serverName, fullHref)
                 }
 
                 fullHref.contains("hbplay.pages.dev", ignoreCase = true) -> {
-                    decodeBase64ParamU(fullHref)?.let { decoded ->
-                        emitDirect("Watch Online", decoded)
+                    val decoded: String? = decodeBase64ParamU(fullHref)
+                    if (!decoded.isNullOrBlank()) {
+                        addDirectLink("Watch Online", decoded)
                     }
                 }
 
                 fullHref.contains("pixel.hubcloud", ignoreCase = true) ||
                     fullHref.contains("gpdl.hubcloud", ignoreCase = true) -> {
-                    val serverName = btnText.ifBlank { "10Gbps Server" }
-                    extractFromHubCloudServer(fullHref, basePageUrl, serverName, ::emitDirect)
+                    val serverName: String = btnText.ifBlank { "10Gbps Server" }
+                    val subLinks = extractServerLinks(fullHref, basePageUrl, labelPrefix, serverName, baseQuality)
+                    for (sub in subLinks) {
+                        if (seenUrls.add(sub.url)) {
+                            results.add(sub)
+                        }
+                    }
                 }
 
                 fullHref.contains("fuckingfast.net", ignoreCase = true) ||
                     fullHref.contains("pixeldrain.dev", ignoreCase = true) -> {
-                    if (emittedUrls.add(fullHref)) {
-                        loadExtractor(fullHref, basePageUrl, subtitleCallback, callback)
+                    if (seenUrls.add(fullHref)) {
+                        loadExtractor(fullHref, basePageUrl, subtitleCallback) { extLink ->
+                            results.add(extLink)
+                        }
                     }
                 }
             }
         }
 
-        Regex("""L\s*=\s*\[(.*?)]""", setOf(RegexOption.DOT_MATCHES_ALL))
-            .find(html)
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.let { arrayBody ->
-                Regex("""https?://[^\s"']+r2\.cloudflarestorage\.com[^\s"']*""")
-                    .findAll(arrayBody)
-                    .forEachIndexed { idx, match ->
-                        emitDirect("T3 Mirror ${idx + 1}", match.value)
-                    }
-            }
+        // 2. Regional R2 mirror array `L=[...]`
+        val lMatch = Regex("""L\s*=\s*\[(.*?)]""", setOf(RegexOption.DOT_MATCHES_ALL)).find(html)
+        val arrayBody: String = lMatch?.groupValues?.getOrNull(1).orEmpty()
+        if (arrayBody.isNotBlank()) {
+            val mirrorMatches = Regex("""https?://[^\s"']+r2\.cloudflarestorage\.com[^\s"']*""")
+                .findAll(arrayBody)
+                .map { it.value.trim() }
+                .filter { it.isNotBlank() }
+                .toList()
 
-        Regex("""var\s+pxl\s*=\s*["']([^"']+)["']""")
-            .find(html)
-            ?.groupValues
-            ?.getOrNull(1)
-            ?.let { pxlUrl ->
-                val fixedPxl = fixUrl(pxlUrl)
-                if (emittedUrls.add(fixedPxl)) {
-                    loadExtractor(fixedPxl, basePageUrl, subtitleCallback, callback)
+            mirrorMatches.forEachIndexed { index, mirrorUrl ->
+                addDirectLink("T3 Mirror ${index + 1}", mirrorUrl)
+            }
+        }
+
+        // 3. `var pxl = "..."` fallback
+        val pxlMatch = Regex("""var\s+pxl\s*=\s*["']([^"']+)["']""").find(html)
+        val pxlRaw: String = pxlMatch?.groupValues?.getOrNull(1)?.trim().orEmpty()
+        if (pxlRaw.isNotBlank()) {
+            val fixedPxl: String = resolveUrl(pxlRaw, basePageUrl)
+            if (seenUrls.add(fixedPxl)) {
+                loadExtractor(fixedPxl, basePageUrl, subtitleCallback) { extLink ->
+                    results.add(extLink)
                 }
             }
+        }
+
+        return results
     }
 
-    private suspend fun extractFromHubCloudServer(
+    private suspend fun extractServerLinks(
         serverUrl: String,
         refererUrl: String,
+        labelPrefix: String,
         serverLabel: String,
-        emitDirect: suspend (label: String, mediaUrl: String, ref: String) -> Unit
-    ) {
+        baseQuality: Int
+    ): List<ExtractorLink> {
+        val out = mutableListOf<ExtractorLink>()
         val doc = try {
             app.get(serverUrl, referer = refererUrl).document
         } catch (_: Exception) {
-            return
+            return out
         }
 
-        val foundLinks = doc.select("a[href], source[src], video[src]")
-            .mapNotNull { el ->
-                val raw = if (el.tagName() == "a") el.attr("href") else el.attr("src")
-                raw.trim().takeIf {
-                    it.isNotBlank() && !it.startsWith("#") && !it.startsWith("javascript:")
-                }?.let { fixUrl(it) }
+        val candidates = mutableListOf<String>()
+        for (el in doc.select("a[href], source[src], video[src]")) {
+            val raw: String = if (el.tagName().equals("a", ignoreCase = true)) {
+                el.attr("href").trim()
+            } else {
+                el.attr("src").trim()
             }
-            .distinct()
+            if (raw.isNotBlank() && !raw.startsWith("#") && !raw.startsWith("javascript:")) {
+                val fixed: String = resolveUrl(raw, serverUrl)
+                if (!candidates.contains(fixed)) {
+                    candidates.add(fixed)
+                }
+            }
+        }
 
-        for (link in foundLinks) {
+        for (link in candidates) {
             if (link.contains("r2.cloudflarestorage.com", ignoreCase = true) ||
                 link.contains(".mkv", ignoreCase = true) ||
                 link.contains(".mp4", ignoreCase = true) ||
                 link.contains(".m3u8", ignoreCase = true)
             ) {
-                emitDirect(serverLabel, link, serverUrl)
+                val clean: String = unescapeUrl(link)
+                val linkType = if (clean.contains(".m3u8", ignoreCase = true)) {
+                    ExtractorLinkType.M3U8
+                } else {
+                    ExtractorLinkType.VIDEO
+                }
+                val resolvedQuality: Int = detectQualityFromText(clean).let { q ->
+                    if (q != Qualities.Unknown.value) q else baseQuality
+                }
+                out.add(
+                    newExtractorLink(
+                        source = name,
+                        name = "$labelPrefix - $serverLabel",
+                        url = clean,
+                        type = linkType
+                    ) {
+                        this.referer = serverUrl
+                        this.quality = resolvedQuality
+                    }
+                )
+            }
+        }
+
+        return out
+    }
+
+    private fun resolveUrl(rawUrl: String, baseUrl: String): String {
+        val trimmed: String = rawUrl.trim()
+        return when {
+            trimmed.startsWith("http://", ignoreCase = true) ||
+                trimmed.startsWith("https://", ignoreCase = true) -> trimmed
+            trimmed.startsWith("//") -> "https:$trimmed"
+            else -> {
+                val origin: String = Regex("""^(https?://[^/]+)""").find(baseUrl)?.groupValues?.getOrNull(1)
+                    ?: mainUrl
+                "$origin/${trimmed.trimStart('/')}"
             }
         }
     }
 
     private fun decodeBase64ParamU(url: String): String? {
         return try {
-            val query = URI(url).rawQuery ?: return null
-            val encodedU = query.split("&")
+            val query: String = URI(url).rawQuery ?: return null
+            val encodedPart: String = query.split("&")
                 .firstOrNull { it.startsWith("u=", ignoreCase = true) }
                 ?.substringAfter("=")
-                ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
                 ?: return null
-
-            val decodedBytes = Base64.decode(encodedU, Base64.DEFAULT)
-            String(decodedBytes, Charsets.UTF_8).trim().takeIf { it.startsWith("http", ignoreCase = true) }
+            val decodedParam: String = URLDecoder.decode(encodedPart, "UTF-8")
+            val bytes = Base64.decode(decodedParam, Base64.DEFAULT)
+            val decodedStr: String = String(bytes, Charsets.UTF_8).trim()
+            if (decodedStr.startsWith("http", ignoreCase = true)) decodedStr else null
         } catch (_: Exception) {
             null
         }
     }
 
-    private fun unescapeJsString(input: String): String {
+    private fun unescapeUrl(input: String): String {
         return input.replace("\\u0026", "&").replace("&amp;", "&")
     }
 
@@ -180,3 +257,4 @@ open class HubCloudExtractor : ExtractorAPI() {
         else -> Qualities.Unknown.value
     }
 }
+
