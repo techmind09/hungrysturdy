@@ -169,15 +169,21 @@ object MovieFoxSettingsDialog {
         ExtractorItem("basejwp", "BaseJWP / Nitrox / NxStream", "itsnitrox.tech • nxstreamhub • vibuxer • vidprime", "WORKER"),
         ExtractorItem("jwp_embeds", "Lulu / Vidara / MegaCloud / Wish / Moon", "luluvid • vidara • megacloud • streamwish • filemoon", "EMBED")
     )
+    
 
     val BASE_SERVERS = listOf(
-        ServerItem("prmovies", "Prmovies", "HI/M3U8", "https://prmovies.kids/", "#F59E0B", false, true, "Movies", "⚡ SKY"),
-        ServerItem("dramaverse", "DramaVerse", "K-DRAMA", "https://mydverse.com/", "#A855F7", false, true, "AsianDrama", "⚡ SKY"),
-        ServerItem("hindidrama", "HindiDrama", "K-DRA", "https://hindidrama.net/", "#EC4899", false, true, "AsianDrama", "⚡ SKY"),
-        ServerItem("katdrama", "KatDrama", "ASIAN", "https://katdrama.org/", "#38BDF8", false, true, "AsianDrama", "⚡ SKY"),
-        ServerItem("sflix", "Sflix", "HLS/MP4", "https://sflix.film/", "#34D399", false, false, "Series", "⚡ SKY")
+        ServerItem("prmovies", "Prmovies", "HI/M3U8", "https://prmovies.com.cv/", "#F59E0B", false, true, "Movies", "⚡ MF"),
+        ServerItem("dramaverse", "DramaVerse", "K-DRAMA", "https://mydverse.com/", "#A855F7", false, true, "AsianDrama", "⚡ MF"),
+        ServerItem("hindidrama", "HindiDrama", "K-DRA", "https://hindidrama.net/", "#EC4899", false, true, "AsianDrama", "⚡ MF"),
+        ServerItem("katdrama", "KatDrama", "ASIAN", "https://katdrama.org/", "#38BDF8", false, true, "AsianDrama", "⚡ MF"),
+        ServerItem("sflix", "Sflix", "HLS/MP4", "https://sflix.film/", "#34D399", false, false, "Series", "⚡ MF"),
+        ServerItem("play4u", "Play4u", "HI/M3U8", "https://play4u.org/", "#FB923C", false, true, "Movies", "⚡ MF"),
+        ServerItem("animeworld", "AnimeWorld", "ANIME", "https://watchanimeworld.top/", "#818CF8", false, true, "AsianDrama", "⚡ MF"),
+        ServerItem("themoviesflix", "TheMoviesFlix", "4K/1080p", "https://one.1moviesflix.lol/", "#22D3EE", false, true, "Movies", "⚡ MF"),
+        ServerItem("vegamovies", "VegaMovies", "DUAL/HI", "https://vegamovies.pm/", "#FACC15", false, true, "Movies", "⚡ MF")
     )
 
+    
     private val AVATAR_PALETTE = listOf(
         "#38BDF8", "#A855F7", "#F43F5E", "#34D399",
         "#FB923C", "#818CF8", "#22D3EE", "#EC4899", "#FACC15"
