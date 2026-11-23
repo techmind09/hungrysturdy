@@ -53,7 +53,7 @@ import java.util.zip.ZipInputStream
 object MovieFoxSettingsDialog {
 
     private const val LOG_TAG = "MovieFoxDiag"
-    private const val PREFS_NAME = "moviefox_ultra_max_v21"
+    private const val PREFS_NAME = "moviefox_ultra_max_v22"
     private const val KEY_SRV_PREFIX = "mf_srv_"
     private const val KEY_EXT_PREFIX = "mf_ext_"
     private const val KEY_SRV_ORDER = "mf_srv_order_csv"
@@ -262,7 +262,7 @@ object MovieFoxSettingsDialog {
         ServerItem("cinetv_api", "CineTV API", "WEB/API", "https://cinetv.app/en", "#F43F5E", false, true, "Movies", "🎬 MF"),
         ServerItem("cinetv_hls", "CineTV HLS", "WORKER", "https://cinetv.app/en", "#FB7185", false, true, "Movies", "🎬 MF"),
         ServerItem("nuvio", "Nuvio / Stremio", "MANIFEST", DEFAULT_STREMIO_MANIFEST, "#A855F7", false, true, "Series", "🎬 MF"),
-        ServerItem("moviebox", "MovieBox / NetNaija API", "BFF", "https://h5-api.aoneroom.com/wefeed-mobile-bff/tab/ranking-list?tabId=0&page=1&perPage=1", "#34D399", false, true, "Movies", "🎬 MF"),
+        ServerItem("moviebox", "MovieBox / NetNaija API", "BFF", "https://h5-api.aoneroom.com/", "#34D399", false, true, "Movies", "🎬 MF"),
         ServerItem("sportslive", "SportsLive", "LIVE/SPORTS", "https://h5-sport-api.aoneroom.com/wefeed-h5api-bff/live/match-list-v5", "#22D3EE", false, false, "Movies", "🎬 MF"),
         ServerItem("hicine", "HiCine", "HAPI", "https://hicine.biz/hapi/home", "#38BDF8", false, true, "Hindi", "🎬 MF"),
         ServerItem("movy", "Movy", "API", "https://api.wecollege.net/seed?mediaId=550", "#22D3EE", false, true, "Movies", "🎬 MF"),
@@ -428,7 +428,7 @@ object MovieFoxSettingsDialog {
 
     private suspend fun probeServerLive(srv: ServerItem, apiHost: String): ServerHealthInfo = withContext(Dispatchers.IO) {
         val probeTarget = when (srv.key) {
-            "moviebox" -> "https://$apiHost/wefeed-mobile-bff/tab/ranking-list?tabId=0&page=1&perPage=1"
+            "moviebox" -> "https://$apiHost/"
             "hicine" -> {
                 val hicineBase = srv.probeUrl.removeSuffix("/hapi/home").trimEnd('/')
                 "$hicineBase/hapi/home"
@@ -1688,7 +1688,6 @@ object MovieFoxSettingsDialog {
         val cs3Pane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val healthPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
 
-        // --- Extractors Pane ---
         extractorPane.addView(TextView(ctx).apply {
             text = "Extractor.kt Host Resolvers (${EXTRACTORS.size} active)"
             textSize = 12f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#38BDF8"))
@@ -1716,7 +1715,6 @@ object MovieFoxSettingsDialog {
             extractorPane.addView(card)
         }
 
-        // --- Streaming Pane ---
         val themeCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#253046", 20f)
             setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
@@ -1869,7 +1867,6 @@ object MovieFoxSettingsDialog {
             currentTimeout = it; setTimeoutSeconds(ctx, it)
         }
 
-        // --- Home Page Pane ---
         makeToggleCard(homePane, "Shuffle Categories", "Randomize home screen categories", shuffleHome) {
             shuffleHome = it; setShuffleHomeCategories(ctx, it)
         }
@@ -1908,7 +1905,6 @@ object MovieFoxSettingsDialog {
         }
         renderHomeCats(); homePane.addView(homeCatHolder)
 
-        // --- CS3 Repos Pane ---
         val cs3AddBox = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL; background = cardBg("#131826", "#2563EB", 22f)
             setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
@@ -1980,7 +1976,6 @@ object MovieFoxSettingsDialog {
         })
         cs3Pane.addView(cs3AddBox); cs3Pane.addView(cs3RepoListHolder); renderCs3Repos()
 
-        // --- Health & Logs Pane ---
         val healthCfCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = cardBg("#0D1017", "#232C40", 20f, 2)
