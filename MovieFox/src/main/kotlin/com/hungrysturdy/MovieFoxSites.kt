@@ -674,4 +674,3 @@ object MfSites {
         return MfApiEndpoints.ALLOWED_STREAM_AND_FILE_HOSTS.any { low.contains(it) }
     }
 }
-
