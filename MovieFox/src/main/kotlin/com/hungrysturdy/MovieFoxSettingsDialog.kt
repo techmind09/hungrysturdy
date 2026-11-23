@@ -90,9 +90,6 @@ object MovieFoxSettingsDialog {
     const val CNC_UNIVERSE_REPO_URL =
         "https://raw.githubusercontent.com/NivinCNC/CNCVerse-Repository/main/repo.json"
 
-    const val DYNAMIC_URLS_JSON_URL =
-        "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json"
-
     const val CF_BYPASS_UA =
         "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36"
 
@@ -246,7 +243,8 @@ object MovieFoxSettingsDialog {
     val VEGA_ALLOWED_HOSTS = listOf(
         "pixeldrain", "fsl2", "fsl", "gdrive", "gdflix", "hubcloud",
         "nexdrive", "vcloud", "vegadrive", "fastdl", "filebee", "filepress",
-        "fpgo", "gofile", "gpdl", ".r2.dev", ".r2.cloudflarestorage.com", "buzzserver", "10gbps"
+        "fpgo", "gofile", "gpdl", ".r2.dev", ".r2.cloudflarestorage.com", "buzzserver", "10gbps",
+        "vegamovies.wales", "rogmovies.vip"
     )
 
     val EXTRACTORS = listOf(
@@ -261,7 +259,7 @@ object MovieFoxSettingsDialog {
         ExtractorItem("gofile", "Gofile", "gofile.io / api.gofile.io", "DIRECT"),
         ExtractorItem("voe", "Voe", "voe.sx", "HLS"),
         ExtractorItem("streamtape", "StreamTape", "streamtape.com / stape.*", "MP4"),
-        ExtractorItem("nxstreamhub", "NxStreamHub", "nxstreamhub.workers.dev / silent-frost-f2dbv.nxstreamhub.workers.dev/hls", "HLS"),
+        ExtractorItem("nxstreamhub", "NxStreamHub", "nxstreamhub.workers.dev / proxy.nxstreamhub.workers.dev / silent-frost-f2dbv.nxstreamhub.workers.dev", "HLS"),
         ExtractorItem("itsnitrox", "Nitrox", "itsnitrox.tech / wts.itsnitrox.tech", "HLS"),
         ExtractorItem("vibuxer", "Vibuxer", "vibuxer.com", "HLS"),
         ExtractorItem("gokuhd", "GokuHD / NexDrive / VegaDrive", "nexdrive.beer / nexdrive.fit / one.vegadrive.app", "MULTI"),
@@ -269,96 +267,96 @@ object MovieFoxSettingsDialog {
     )
 
     val BASE_SERVERS = listOf(
-        ServerItem("moviefox", "MovieFox Main", "HOME/TMDB", "https://moviefox.pro", "#7C3AED", false, true, "Movies", "🎬 MF"),
-        ServerItem("purstream", "Purstream", "API", "https://moviefox.pro/api/stream/purstream", "#38BDF8", false, true, "Movies", "🎬 MF"),
-        ServerItem("castle", "Castle", "API", "https://moviefox.pro/api/stream/castle", "#818CF8", false, true, "Series", "🎬 MF"),
-        ServerItem("watchout", "Watchout", "API", "https://moviefox.pro/api/stream/watchout", "#2DD4BF", false, false, "Movies", "🎬 MF"),
+        ServerItem("moviefox", "MovieFox Main", "HOME/TMDB", "https://api.themoviedb.org/3/trending/movie/day?api_key=b030404650f279792a8d3287232358e3", "#7C3AED", false, true, "Movies", "🎬 MF"),
         ServerItem("cinestream", "CineStream", "CINEMETA/KITSU", "https://cinemeta-catalogs.strem.io/top/catalog/movie/top/skip=0.json", "#38BDF8", false, true, "Movies", "☁️ CS"),
-        ServerItem("cinetv_api", "CineTV API", "WEB/API", "https://cinetv.app", "#F43F5E", false, true, "Movies", "🎬 MF"),
+        ServerItem("purstream", "Purstream", "API", "https://cinemeta-catalogs.strem.io/top/catalog/movie/top/skip=0.json", "#38BDF8", false, true, "Movies", "🎬 MF"),
+        ServerItem("castle", "Castle", "API", "https://cinemeta-catalogs.strem.io/top/catalog/series/top/skip=0.json", "#818CF8", false, true, "Movies", "🎬 MF"),
+        ServerItem("watchout", "Watchout", "API", "https://v3-cinemeta.strem.io/catalog/movie/top.json", "#2DD4BF", false, false, "Movies", "🎬 MF"),
+        ServerItem("cinetv_api", "CineTV API", "WEB/API", "https://cinetv.app/en", "#F43F5E", false, true, "Movies", "🎬 MF"),
         ServerItem("cinetv_hls", "CineTV HLS", "WORKER", "https://silent-frost-f2dbv.nxstreamhub.workers.dev/hls", "#FB7185", false, true, "Movies", "🎬 MF"),
         ServerItem("nuvio", "Nuvio / Stremio", "MANIFEST", DEFAULT_STREMIO_MANIFEST, "#A855F7", false, true, "Series", "🎬 MF"),
         ServerItem("moviebox", "MovieBox / NetNaija API", "BFF", "https://h5-api.aoneroom.com/", "#34D399", false, true, "Movies", "🎬 MF"),
         ServerItem("sportslive", "SportsLive", "LIVE/SPORTS", "https://h5-sport-api.aoneroom.com/wefeed-h5api-bff/live/match-list-v5", "#22D3EE", false, false, "Movies", "🎬 MF"),
-        ServerItem("hicine", "HiCine", "HAPI", "https://hicine.biz", "#38BDF8", false, true, "Hindi", "🎬 MF"),
-        ServerItem("movy", "Movy", "API", "https://www.movy.sx", "#22D3EE", false, true, "Movies", "🎬 MF"),
-        ServerItem("sflix", "Sflix", "HLS/MP4", "https://sflix.film", "#F97316", false, true, "Series", "⚡ SKY"),
-        ServerItem("prmovies", "Prmovies", "HI/M3U8", "https://prmovies.beer", "#F59E0B", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("hindidrama", "HindiDrama", "K-DRAMA", "https://hindidrama.net", "#EC4899", false, true, "Series", "⚡ SKY"),
-        ServerItem("vegamovies", "VegaMovies", "PXL•FSL•GDRIVE", "https://vegamovies.lease", "#EC4899", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("rogmovies", "RogMovies", "PXL•FSL•GDRIVE", "https://rogmovies.vip", "#EC4899", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("bollyflix", "Bollyflix", "HI/4K", "https://new1.bollyflix.tours", "#38BDF8", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("play4u", "Play4u", "HLS/API", "https://play4u.org", "#FB7185", false, true, "Movies", "⚡ SKY"),
-        ServerItem("hdhub4u", "HDHub4u", "SITE", "https://new15.hdhub4u.cl", "#34D399", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("dramaverse", "DramaVerse", "XCLOUD", "https://mydverse.com", "#A855F7", false, true, "Series", "⚡ SKY"),
-        ServerItem("gokuhd", "GokuHD", "ANIME", "https://gokuhd.nl", "#38BDF8", false, true, "Anime", "⚡ SKY"),
-        ServerItem("animeworldindia", "Anime World India", "ZEPHYR/M3U8", "https://watchanimeworld.top", "#F43F5E", false, true, "Anime", "⚡ SKY"),
-        ServerItem("netnaija", "NetNaija", "SITE", "https://netnaija.film", "#FACC15", false, false, "Series", "⚡ SKY"),
-        ServerItem("hindmoviez", "HindMoviez", "SITE", "https://v3.hindmovie.im", "#FACC15", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("movielinkbd", "MovieLinkBD", "SITE", "https://drjuea.movielinkbd.at", "#818CF8", false, false, "Movies", "⚡ SKY"),
-        ServerItem("netmirror", "NetMirror", "OTT", "https://net52.cc", "#F43F5E", false, true, "Series", "⚡ SKY"),
-        ServerItem("4khdhub", "4KHDHub", "4K", "https://4khdhub.one", "#C084FC", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("movies4u", "Movies4u", "SITE", "https://new8.movies4u.garden", "#FB923C", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("moviesmod", "Moviesmod", "SITE/4K", "https://moviesleech.rest", "#38BDF8", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("topmovies", "TopMovies", "HI/MOVIES", "https://topmovies.pet", "#34D399", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("multimovies", "Multimovies", "ANIME/HI", "https://m1.multimovies.courses", "#22D3EE", false, true, "Anime", "⚡ SKY"),
-        ServerItem("bollyhq", "BollyHQ", "MIRROR", "https://bolly-hq.info", "#38BDF8", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("moviesdrive", "MoviesDrive", "MIRROR", "https://new4.moviesdrive.cyou", "#F43F5E", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("filmyfly", "FilmyFly", "MIRROR", "https://filmyfly.kred", "#F59E0B", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("filmyking", "FilmyKing", "MIRROR", "https://filmyking.co", "#34D399", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("myfilms", "MyFilms", "MIRROR", "https://myfilms.pro", "#A855F7", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("vipfilm", "VipFilm", "MIRROR", "https://vipfilm.pro", "#EC4899", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("kmmovies", "KMmovies", "MIRROR", "https://kmmovies.quest", "#22D3EE", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("hicine", "HiCine", "HAPI", "https://hicine.biz/hapi/home", "#38BDF8", false, true, "Hindi", "🎬 MF"),
+        ServerItem("movy", "Movy", "API", "https://www.movy.sx/", "#22D3EE", false, true, "Movies", "🎬 MF"),
+        ServerItem("sflix", "Sflix", "HLS/MP4", "https://sflix.film/", "#F97316", false, true, "Series", "⚡ SKY"),
+        ServerItem("prmovies", "Prmovies", "HI/M3U8", "https://prmovies.beer/", "#F59E0B", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("hindidrama", "HindiDrama", "K-DRAMA", "https://hindidrama.net/", "#EC4899", false, true, "Series", "⚡ SKY"),
+        ServerItem("vegamovies", "VegaMovies", "PXL•FSL•GDRIVE", "https://vegamovies.lease/", "#EC4899", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("rogmovies", "RogMovies", "PXL•FSL•GDRIVE", "https://rogmovies.autos/", "#EC4899", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("bollyflix", "Bollyflix", "HI/4K", "https://new1.bollyflix.tours/", "#38BDF8", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("play4u", "Play4u", "HLS/API", "https://play4u.org/api/search.php?q=&page=1&per_page=24", "#FB7185", false, true, "Movies", "⚡ SKY"),
+        ServerItem("hdhub4u", "HDHub4u", "SITE", "https://new15.hdhub4u.cl/", "#34D399", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("dramaverse", "DramaVerse", "XCLOUD", "https://mydverse.com/", "#A855F7", false, true, "Series", "⚡ SKY"),
+        ServerItem("gokuhd", "GokuHD", "ANIME", "https://gokuhd.nl/", "#38BDF8", false, true, "Anime", "⚡ SKY"),
+        ServerItem("animeworldindia", "Anime World India", "ZEPHYR/M3U8", "https://watchanimeworld.top/", "#F43F5E", false, true, "Anime", "⚡ SKY"),
+        ServerItem("netnaija", "NetNaija", "SITE", "https://netnaija.film/", "#FACC15", false, false, "Series", "⚡ SKY"),
+        ServerItem("hindmoviez", "HindMoviez", "SITE", "https://v3.hindmovie.im/", "#FACC15", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("movielinkbd", "MovieLinkBD", "SITE", "https://drjuea.movielinkbd.at/", "#818CF8", false, false, "Movies", "⚡ SKY"),
+        ServerItem("netmirror", "NetMirror", "OTT", "https://net52.cc/", "#F43F5E", false, true, "Series", "⚡ SKY"),
+        ServerItem("4khdhub", "4KHDHub", "4K", "https://4khdhub.one/", "#C084FC", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("movies4u", "Movies4u", "SITE", "https://new8.movies4u.garden/", "#FB923C", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("moviesmod", "Moviesmod", "SITE/4K", "https://moviesleech.rest/", "#38BDF8", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("topmovies", "TopMovies", "HI/MOVIES", "https://topmovies.pet/", "#34D399", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("multimovies", "Multimovies", "ANIME/HI", "https://m1.multimovies.courses/", "#22D3EE", false, true, "Anime", "⚡ SKY"),
+        ServerItem("bollyhq", "BollyHQ", "MIRROR", "https://bolly-hq.info/", "#38BDF8", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("moviesdrive", "MoviesDrive", "MIRROR", "https://new4.moviesdrive.cyou/", "#F43F5E", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("filmyfly", "FilmyFly", "MIRROR", "https://filmyfly.kred/", "#F59E0B", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("filmyking", "FilmyKing", "MIRROR", "https://filmyking.co/", "#34D399", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("myfilms", "MyFilms", "MIRROR", "https://myfilms.pro/", "#A855F7", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("vipfilm", "VipFilm", "MIRROR", "https://vipfilm.pro/", "#EC4899", false, true, "Hindi", "⚡ SKY"),
+        ServerItem("kmmovies", "KMmovies", "MIRROR", "https://kmmovies.quest/", "#22D3EE", false, true, "Hindi", "⚡ SKY"),
+        // Video 3 CineStream Providers
         ServerItem("torrentio", "Torrentio", "TORRENT", "https://torrentio.strem.fun/manifest.json", "#38BDF8", false, false, "Movies", "☁️ CS"),
-        ServerItem("torrentsdb", "TorrentsDB", "TORRENT", "https://torrentsdb.com/manifest.json", "#34D399", false, false, "Movies", "☁️ CS"),
-        ServerItem("animetosho", "AnimeTosho", "ANIME", "https://animetosho.org", "#F43F5E", false, true, "Anime", "☁️ CS"),
-        ServerItem("wyziesubs", "WYZIESubs", "SUBS", "https://sub.wyzie.ru", "#A855F7", false, false, "Movies", "🎬 MF"),
-        ServerItem("stremiosubs", "StremioSubs", "SUBS", "https://opensubtitles-v3.strem.io/manifest.json", "#818CF8", false, false, "Series", "☁️ CS"),
-        ServerItem("showbox", "ShowBox", "API", "https://www.movie-box.co", "#34D399", false, true, "Movies", "🎬 MF"),
-        ServerItem("vidrock", "Vidrock", "EMBED", "https://vidrock.net", "#22D3EE", false, false, "Movies", "⚡ SKY"),
-        ServerItem("moviebox_alt", "Moviebox", "SITE", "https://www.movie-box.co", "#34D399", false, true, "Movies", "🎬 MF"),
-        ServerItem("movieblast", "MovieBlast", "SITE", "https://movieblast.net", "#F97316", false, true, "Movies", "⚡ SKY"),
-        ServerItem("fibwatch", "Fibwatch", "SITE", "https://fibwatch.com", "#EC4899", false, true, "Movies", "⚡ SKY"),
-        ServerItem("allmovieland", "Allmovieland", "SITE", "https://allmovieland.ac", "#38BDF8", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("hexa", "Hexa", "EMBED", "https://hexa.watch", "#A855F7", false, false, "Movies", "⚡ SKY"),
-        ServerItem("fshare", "Fshare", "DIRECT", "https://www.fshare.vn", "#F59E0B", false, false, "Movies", "⚡ SKY"),
-        ServerItem("videasy", "Videasy", "EMBED", "https://player.videasy.net", "#22D3EE", false, false, "Movies", "⚡ SKY"),
-        ServerItem("vaplayer", "VaPlayer", "EMBED", "https://vaplayer.me", "#818CF8", false, false, "Movies", "⚡ SKY"),
-        ServerItem("vidzee", "Vidzee", "EMBED", "https://vidzee.wtf", "#F43F5E", false, false, "Movies", "⚡ SKY"),
-        ServerItem("peachify", "Peachify", "EMBED", "https://peachify.top", "#EC4899", false, false, "Series", "⚡ SKY"),
-        ServerItem("vidfastpro", "VidFastPro", "EMBED", "https://vidfast.pro", "#34D399", false, false, "Movies", "⚡ SKY"),
-        ServerItem("cinejoy", "Cinejoy", "SITE", "https://cinejoy.tv", "#38BDF8", false, true, "Movies", "⚡ SKY"),
-        ServerItem("vidcore", "Vidcore", "EMBED", "https://vidcore.net", "#FB923C", false, false, "Movies", "⚡ SKY"),
-        ServerItem("av1encodes", "Av1encodes", "4K/AV1", "https://av1encodes.com", "#C084FC", false, false, "Movies", "⚡ SKY"),
-        ServerItem("reanime", "Reanime", "ANIME", "https://reanime.org", "#F43F5E", false, true, "Anime", "⚡ SKY"),
-        ServerItem("just4anime", "Just4Anime", "ANIME", "https://just4anime.com", "#38BDF8", false, true, "Anime", "⚡ SKY"),
-        ServerItem("zinkmovies", "Zinkmovies", "SITE", "https://zinkmovies.pro", "#34D399", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("gramcinema", "Gramcinema", "SITE", "https://gramcinema.com", "#FACC15", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("vidup", "Vidup", "EMBED", "https://vidup.to", "#818CF8", false, false, "Movies", "⚡ SKY"),
-        ServerItem("meowtv", "Meowtv", "SERIES", "https://meowtv.org", "#EC4899", false, true, "Series", "⚡ SKY"),
-        ServerItem("dudefilms", "Dudefilms", "HINDI", "https://dudefilms.pro", "#FB923C", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("uhdmovies", "UHDMovies", "4K", "https://uhdmovies.stream", "#C084FC", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("primesrc", "PrimeSrc", "EMBED", "https://primesrc.me", "#22D3EE", false, false, "Movies", "⚡ SKY"),
-        ServerItem("projectfreetv", "ProjectFreeTV", "SERIES", "https://projectfreetv.pro", "#38BDF8", false, false, "Series", "⚡ SKY"),
-        ServerItem("mlsbd", "Mlsbd", "SITE", "https://mlsbd.shop", "#34D399", false, false, "Movies", "⚡ SKY"),
-        ServerItem("levidia", "Levidia", "MOVIES", "https://www.levidia.ch", "#F59E0B", false, false, "Movies", "⚡ SKY"),
-        ServerItem("animesalt", "Animesalt", "ANIME", "https://animesalt.cc", "#F43F5E", false, true, "Anime", "⚡ SKY"),
-        ServerItem("m4ufree", "M4ufree", "MOVIES", "https://m4ufree.tv", "#38BDF8", false, false, "Movies", "⚡ SKY"),
-        ServerItem("akwam", "Akwam", "ARABIC", "https://akwam.to", "#34D399", false, false, "Movies", "⚡ SKY"),
-        ServerItem("rtally", "Rtally", "SITE", "https://rtally.org", "#818CF8", false, false, "Movies", "⚡ SKY"),
-        ServerItem("asiaflix", "Asiaflix", "K-DRAMA", "https://asiaflix.app", "#EC4899", false, true, "Series", "⚡ SKY"),
-        ServerItem("skymovies", "SkyMovies", "HINDI", "https://skymovieshd.pro", "#38BDF8", false, true, "Hindi", "⚡ SKY"),
-        ServerItem("kisskh", "KissKH", "K-DRAMA", "https://kisskh.co", "#F43F5E", false, true, "Series", "⚡ SKY"),
-        ServerItem("onetouchtv", "Onetouchtv", "SERIES", "https://onetouchtv.com", "#A855F7", false, false, "Series", "⚡ SKY"),
-        ServerItem("toonstream", "Toonstream", "ANIME/TOON", "https://toonstream.one", "#22D3EE", false, true, "Anime", "⚡ SKY"),
-        ServerItem("anineko", "Anineko", "ANIME", "https://anineko.org", "#F43F5E", false, true, "Anime", "⚡ SKY"),
-        ServerItem("animedao", "Animedao", "ANIME", "https://animedao.to", "#38BDF8", false, true, "Anime", "⚡ SKY"),
-        ServerItem("anikoto", "Anikoto", "ANIME", "https://anikoto.to", "#A855F7", false, true, "Anime", "⚡ SKY"),
-        ServerItem("anikage", "Anikage", "ANIME", "https://anikage.com", "#34D399", false, true, "Anime", "⚡ SKY"),
-        ServerItem("anidb", "Anidb", "ANIME", "https://anidb.net", "#818CF8", false, true, "Anime", "⚡ SKY"),
-        ServerItem("animetoshohttp", "AnimeToshoHttp", "ANIME", "https://animetosho.org/http", "#FB923C", false, true, "Anime", "☁️ CS"),
-        ServerItem("tokyoinsider", "TokyoInsider", "ANIME", "https://www.tokyoinsider.com", "#EC4899", false, true, "Anime", "⚡ SKY"),
-        ServerItem("anizone", "Anizone", "ANIME", "https://anizone.to", "#22D3EE", false, true, "Anime", "⚡ SKY"),
-        ServerItem("animekizz", "Animekizz", "ANIME", "https://animekizz.com", "#C084FC", false, true, "Anime", "⚡ SKY")
+        ServerItem("torrentsdb", "TorrentsDB", "TORRENT", "https://torrentsdb.com/manifest.json", "#818CF8", false, false, "Movies", "☁️ CS"),
+        ServerItem("animetosho", "AnimeTosho", "ANIME/TORRENT", "https://animetosho.org/", "#F43F5E", false, true, "Anime", "☁️ CS"),
+        ServerItem("wyziesubs", "WYZIESubs", "SUBS", "https://sub.wyzie.ru/", "#34D399", false, true, "Movies", "☁️ CS"),
+        ServerItem("stremiosubs", "StremioSubs", "SUBS", "https://opensubtitles-v3.strem.io/manifest.json", "#A855F7", false, true, "Series", "☁️ CS"),
+        ServerItem("showbox", "ShowBox", "STREAM", "https://www.showbox.media/", "#38BDF8", false, true, "Movies", "☁️ CS"),
+        ServerItem("vidrock", "Vidrock", "STREAM", "https://vidrock.net/", "#F59E0B", false, true, "Movies", "☁️ CS"),
+        ServerItem("movieblast", "MovieBlast", "MULTI AUDIO", "https://movieblast.io/", "#EC4899", false, true, "Hindi", "☁️ CS"),
+        ServerItem("fibwatch", "Fibwatch", "STREAM", "https://fibwatch.com/", "#22D3EE", false, true, "Movies", "☁️ CS"),
+        ServerItem("allmovieland", "Allmovieland", "TELUGU/HI", "https://allmovieland.link/", "#FB923C", false, true, "Hindi", "☁️ CS"),
+        ServerItem("hexa", "Hexa", "STREAM", "https://hexa.watch/", "#818CF8", false, true, "Movies", "☁️ CS"),
+        ServerItem("fshare", "Fshare", "CLOUD", "https://www.fshare.vn/", "#34D399", false, false, "Movies", "☁️ CS"),
+        ServerItem("videasy", "Videasy", "HLS/STREAM", "https://player.videasy.net/", "#38BDF8", false, true, "Movies", "☁️ CS"),
+        ServerItem("vaplayer", "VaPlayer", "PLAYER", "https://vaplayer.com/", "#A855F7", false, true, "Movies", "☁️ CS"),
+        ServerItem("vidzee", "Vidzee", "STREAM", "https://vidzee.wtf/", "#F43F5E", false, true, "Movies", "☁️ CS"),
+        ServerItem("peachify", "Peachify", "STREAM", "https://peachify.top/", "#FB7185", false, true, "Movies", "☁️ CS"),
+        ServerItem("vidfastpro", "VidFastPro", "FAST HLS", "https://vidfast.pro/", "#22D3EE", false, true, "Movies", "☁️ CS"),
+        ServerItem("cinejoy", "Cinejoy", "STREAM", "https://cinejoy.tv/", "#F59E0B", false, true, "Movies", "☁️ CS"),
+        ServerItem("vidcore", "Vidcore", "STREAM", "https://vidcore.net/", "#34D399", false, true, "Movies", "☁️ CS"),
+        ServerItem("av1encodes", "Av1encodes", "AV1/4K", "https://av1encodes.com/", "#C084FC", false, true, "Movies", "☁️ CS"),
+        ServerItem("reanime", "Reanime", "ANIME", "https://reanime.org/", "#F43F5E", false, true, "Anime", "☁️ CS"),
+        ServerItem("just4anime", "Just4Anime", "ANIME", "https://just4anime.com/", "#38BDF8", false, true, "Anime", "☁️ CS"),
+        ServerItem("zinkmovies", "Zinkmovies", "MOVIES", "https://zinkmovies.com/", "#EC4899", false, true, "Hindi", "☁️ CS"),
+        ServerItem("gramcinema", "Gramcinema", "MOVIES", "https://gramcinema.com/", "#34D399", false, true, "Hindi", "☁️ CS"),
+        ServerItem("vidup", "Vidup", "STREAM", "https://vidup.to/", "#818CF8", false, true, "Movies", "☁️ CS"),
+        ServerItem("meowtv", "Meowtv", "TV/ANIME", "https://meowtv.org/", "#FB923C", false, true, "Anime", "☁️ CS"),
+        ServerItem("dudefilms", "Dudefilms", "HUBCLOUD", "https://dudefilms.dad/", "#38BDF8", false, true, "Hindi", "☁️ CS"),
+        ServerItem("uhdmovies", "UHDMovies", "4K/1080P", "https://uhdmovies.cat/", "#C084FC", false, true, "Hindi", "☁️ CS"),
+        ServerItem("primesrc", "PrimeSrc", "MULTI", "https://primesrc.me/", "#22D3EE", false, true, "Movies", "☁️ CS"),
+        ServerItem("projectfreetv", "ProjectFreeTV", "SERIES", "https://projectfreetv.sx/", "#F59E0B", false, false, "Series", "☁️ CS"),
+        ServerItem("mlsbd", "Mlsbd", "MOVIES", "https://mlsbd.shop/", "#34D399", false, true, "Hindi", "☁️ CS"),
+        ServerItem("levidia", "Levidia", "MOVIES", "https://www.levidia.ch/", "#818CF8", false, false, "Movies", "☁️ CS"),
+        ServerItem("animesalt", "Animesalt", "ANIME/HI", "https://animesalt.cc/", "#F43F5E", false, true, "Anime", "☁️ CS"),
+        ServerItem("m4ufree", "M4ufree", "MOVIES", "https://m4ufree.tv/", "#38BDF8", false, false, "Movies", "☁️ CS"),
+        ServerItem("akwam", "Akwam", "SERIES/MOVIES", "https://akwam.to/", "#F59E0B", false, false, "Series", "☁️ CS"),
+        ServerItem("rtally", "Rtally", "MOVIES", "https://rtally.org/", "#A855F7", false, true, "Movies", "☁️ CS"),
+        ServerItem("asiaflix", "Asiaflix", "K-DRAMA", "https://asiaflix.app/", "#EC4899", false, true, "Series", "☁️ CS"),
+        ServerItem("skymovies", "SkyMovies", "VOE/MP4", "https://skymovieshd.diy/", "#38BDF8", false, true, "Hindi", "☁️ CS"),
+        ServerItem("kisskh", "KissKH", "ASIAN DRAMA", "https://kisskh.co/", "#F43F5E", false, true, "Series", "☁️ CS"),
+        ServerItem("onetouchtv", "Onetouchtv", "TV/SERIES", "https://onetouchtv.com/", "#22D3EE", false, true, "Series", "☁️ CS"),
+        ServerItem("toonstream", "Toonstream", "ANIME/TOON", "https://toonstream.one/", "#FACC15", false, true, "Anime", "☁️ CS"),
+        ServerItem("anineko", "Anineko", "ANIME", "https://anineko.com/", "#A855F7", false, true, "Anime", "☁️ CS"),
+        ServerItem("animedao", "Animedao", "ANIME", "https://animedao.to/", "#34D399", false, true, "Anime", "☁️ CS"),
+        ServerItem("anikoto", "Anikoto", "ANIME", "https://anikoto.to/", "#38BDF8", false, true, "Anime", "☁️ CS"),
+        ServerItem("anikage", "Anikage", "ANIME", "https://anikage.com/", "#FB923C", false, true, "Anime", "☁️ CS"),
+        ServerItem("anidb", "Anidb", "ANIME", "https://anidb.net/", "#818CF8", false, true, "Anime", "☁️ CS"),
+        ServerItem("animetoshohttp", "AnimeToshoHttp", "ANIME/HTTP", "https://animetosho.org/", "#22D3EE", false, true, "Anime", "☁️ CS"),
+        ServerItem("tokyoinsider", "TokyoInsider", "ANIME", "https://www.tokyoinformer.com/", "#F43F5E", false, true, "Anime", "☁️ CS"),
+        ServerItem("anizone", "Anizone", "ANIME", "https://anizone.to/", "#38BDF8", false, true, "Anime", "☁️ CS"),
+        ServerItem("animekizz", "Animekizz", "ANIME", "https://animekizz.com/", "#C084FC", false, true, "Anime", "☁️ CS")
     )
 
     private val DEFAULT_HOME_CATEGORIES = listOf(
@@ -502,6 +500,7 @@ object MovieFoxSettingsDialog {
             .takeIf { !it.equals("api3.aoneroom.com", ignoreCase = true) } ?: "h5-api.aoneroom.com"
         val probeTarget = when (srv.key) {
             "moviebox" -> "https://$cleanHost/"
+            "movy" -> "https://api.wecollege.net/seed?mediaId=550"
             "hicine" -> {
                 val hicineBase = srv.probeUrl.removeSuffix("/hapi/home").trimEnd('/')
                 "$hicineBase/hapi/home"
@@ -979,9 +978,6 @@ object MovieFoxSettingsDialog {
         }
         if (list.none { it.repoUrl.equals(CNC_UNIVERSE_REPO_URL, ignoreCase = true) }) {
             list.add(1, Cs3RepoConfig("cnc_universe_repo", "CNC Universe Repo", CNC_UNIVERSE_REPO_URL, true, 0))
-        }
-        if (list.none { it.repoUrl.equals(DYNAMIC_URLS_JSON_URL, ignoreCase = true) }) {
-            list.add(2, Cs3RepoConfig("dynamic_urls_json", "Dynamic URLs JSON", DYNAMIC_URLS_JSON_URL, true, 0))
         }
         cachedCs3Repos = list
         saveCs3Repos(ctx, list)
@@ -1733,7 +1729,7 @@ object MovieFoxSettingsDialog {
                 else -> byHindi.filter { it.category.equals(selectedServerCat, true) }
             }
             val filtered = if (currentQuery.isEmpty()) byCat else byCat.filter {
-                it.name.lowercase().contains(currentQuery) || it.tag.lowercase().contains(currentQuery) || it.probeUrl.lowercase().contains(currentQuery)
+                it.name.lowercase().contains(currentQuery) || it.tag.lowercase().contains(currentQuery)
             }
             serverAdapter.submitList(filtered)
             refreshStats()
