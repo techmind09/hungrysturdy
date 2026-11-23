@@ -19,12 +19,15 @@ class MovieFoxPlugin : Plugin() {
             MovieFoxSettingsDialog.show(ctx)
         }
 
-        // Main MovieFox Provider (Prmovies, DramaVerse, HindiDrama, KatDrama & Sflix)
+        // Main MovieFox Provider (All Core + CineStream + Nuvio Manifest Servers)
         registerMainAPI(MovieFoxProvider())
 
-        // Base & Google Drive Extractors
+        // Base & Google Drive / Gofile / Driveleech Extractors
         registerExtractorAPI(BaseJWPExtractor())
         registerExtractorAPI(GDriveExtractor())
+        registerExtractorAPI(Gofile())
+        registerExtractorAPI(Driveleech())
+        registerExtractorAPI(Driveseed())
 
         // StreamTape & Mirrors
         registerExtractorAPI(StreamTapeExtractor())
@@ -74,9 +77,10 @@ class MovieFoxPlugin : Plugin() {
         registerExtractorAPI(SwVidMolyExtractor())
         registerExtractorAPI(VidMolyToExtractor())
 
-        // HubCloud / GDFlix / Buzz / HBPlay / GoFlix Extractors
+        // HubCloud / VCloud / GDFlix / Buzz / HBPlay / GoFlix Extractors
         registerExtractorAPI(KatFastDlServer())
         registerExtractorAPI(KatHubCloudExtractor())
+        registerExtractorAPI(VCloud())
         registerExtractorAPI(HubCloudDrive())
         registerExtractorAPI(HubCloudClub())
         registerExtractorAPI(HubCloudOne())
@@ -94,6 +98,33 @@ class MovieFoxPlugin : Plugin() {
         registerExtractorAPI(KatHBPlayExtractor())
         registerExtractorAPI(KatFuckingFastExtractor())
         registerExtractorAPI(KatGoFlixExtractor())
+
+        // CineStream Extractors
+        registerExtractorAPI(Videostr())
+        registerExtractorAPI(Streameeeeee())
+        registerExtractorAPI(Wootly())
+        registerExtractorAPI(Linksmod())
+        registerExtractorAPI(HdStream4u())
+        registerExtractorAPI(Otakuvid())
+        registerExtractorAPI(Otakuhg())
+        registerExtractorAPI(Minochinos())
+        registerExtractorAPI(Hubstream())
+        registerExtractorAPI(Hblinks())
+        registerExtractorAPI(Hubdrive())
+        registerExtractorAPI(Howblogs())
+        registerExtractorAPI(FlixCloud())
+        registerExtractorAPI(Asianload())
+        registerExtractorAPI(Embedload())
+        registerExtractorAPI(VibePlayer())
+        registerExtractorAPI(Vivibebe())
+        registerExtractorAPI(Bibiemb())
+        registerExtractorAPI(Playmogo())
+        registerExtractorAPI(PpzjYoutube())
+        registerExtractorAPI(MegaPlay())
+        registerExtractorAPI(Vidwish())
+        registerExtractorAPI(Vidtube())
+        registerExtractorAPI(Modiplay())
+        registerExtractorAPI(Iqsmartgames())
     }
 }
 
