@@ -56,7 +56,7 @@ import java.util.zip.ZipInputStream
 object MovieFoxSettingsDialog {
 
     const val LOG_TAG = "MovieFoxDiag"
-    private const val PREFS_NAME = "moviefox_ultra_max_v28"
+    private const val PREFS_NAME = "moviefox_ultra_max_v30"
     private const val KEY_SRV_PREFIX = "mf_srv_"
     private const val KEY_EXT_PREFIX = "mf_ext_"
     private const val KEY_SRV_ORDER = "mf_srv_order_csv"
@@ -146,9 +146,23 @@ object MovieFoxSettingsDialog {
         val id: String,
         val name: String,
         val repoUrl: String,
+        val repoType: String = "CS3", // CS3, SKYSTREAM, NUVIO
         var enabled: Boolean = true,
         var serverCount: Int = 0
     )
+
+    data class DiagLogEntry(
+        val timestamp: String,
+        val category: String, // SEARCH, LOADLINK, PARSING, TIMEOUT, ERROR, INFO
+        val source: String,
+        val message: String,
+        val latencyMs: Long = -1L
+    ) {
+        fun formatLine(): String {
+            val msPart = if (latencyMs >= 0L) " [${latencyMs}ms]" else ""
+            return "[$timestamp] [$category] [$source]$msPart $message"
+        }
+    }
 
     @Volatile
     private var appContext: Context? = null
@@ -157,7 +171,7 @@ object MovieFoxSettingsDialog {
     @Volatile
     private var cachedCs3Repos: MutableList<Cs3RepoConfig>? = null
     private val cachedCs3Servers = CopyOnWriteArrayList<ServerItem>()
-    private val errorLogRing = CopyOnWriteArrayList<String>()
+    private val diagLogs = CopyOnWriteArrayList<DiagLogEntry>()
     private val serverHealthMap = ConcurrentHashMap<String, ServerHealthInfo>()
     @Volatile
     private var cs3Loaded = false
@@ -190,7 +204,12 @@ object MovieFoxSettingsDialog {
         ServerItem("dramaverse", "DramaVerse", "K-DRAMA", "https://mydverse.com/", "#A855F7", false, true, "AsianDrama", "⚡ MF"),
         ServerItem("katdrama", "KatDrama", "ASIAN", "https://katdrama.org/", "#38BDF8", false, true, "AsianDrama", "⚡ MF"),
         ServerItem("animeworld", "AnimeWorld", "ANIME", "https://watchanimeworld.top/", "#818CF8", false, true, "AsianDrama", "⚡ MF"),
-        ServerItem("vegamovies", "VegaMovies", "DUAL/HI", "https://vegamovies.ps/", "#FACC15", false, true, "Movies", "⚡ MF")
+        ServerItem("vegamovies", "VegaMovies", "DUAL/HI", "https://vegamovies.ps/", "#FACC15", false, true, "Movies", "⚡ MF"),
+        ServerItem("cinestream", "CineStream Hub", "ALL/MULTI", "https://api.speedracelight.com/", "#10B981", false, true, "Movies", "⚡ CS"),
+        ServerItem("videasy", "Videasy", "HLS/MP4", "https://api.speedracelight.com/", "#38BDF8", false, true, "Movies", "⚡ CS"),
+        ServerItem("vidzee", "Vidzee", "MULTI/HLS", "https://player.vidzee.wtf/", "#C084FC", false, true, "Movies", "⚡ CS"),
+        ServerItem("hexa", "Hexa", "HLS/1080p", "https://theemoviedb.hexa.su/", "#22D3EE", false, true, "Movies", "⚡ CS"),
+        ServerItem("moviebox", "MovieBox", "MULTI/HD", "https://h5-api.aoneroom.com/", "#FB7185", false, true, "Series", "⚡ CS")
     )
 
     private val AVATAR_PALETTE = listOf(
@@ -206,6 +225,12 @@ object MovieFoxSettingsDialog {
             return BASE_SERVERS + cachedCs3Servers.toList()
         }
 
+    fun getNuvioManifestServers(ctx: Context?): List<ServerItem> {
+        val c = ctx ?: appContext
+        if (c != null && !cs3Loaded) prefs(c)
+        return cachedCs3Servers.filter { it.tag.equals("NUVIO", true) || it.tag.equals("MANIFEST", true) }
+    }
+
     fun copyToClipboard(ctx: Context?, label: String, text: String) {
         if (ctx == null || text.isBlank()) return
         runCatching {
@@ -213,6 +238,36 @@ object MovieFoxSettingsDialog {
             cb?.setPrimaryClip(ClipData.newPlainText(label, text))
             safeToast(ctx, "Copied: $label")
         }
+    }
+
+    private fun nowTs(): String = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+
+    private fun appendDiagLog(category: String, source: String, message: String, latencyMs: Long = -1L) {
+        val entry = DiagLogEntry(nowTs(), category.uppercase(), source, message.trim(), latencyMs)
+        diagLogs.add(entry)
+        while (diagLogs.size > 250) diagLogs.removeAt(0)
+        Log.d(LOG_TAG, entry.formatLine())
+    }
+
+    fun logSearch(source: String, query: String, resultCount: Int, latencyMs: Long = -1L, detail: String = "") {
+        val extra = if (detail.isNotBlank()) " | $detail" else ""
+        appendDiagLog("SEARCH", source, "title=\"$query\" -> hits=$resultCount$extra", latencyMs)
+    }
+
+    fun logLoadLink(source: String, title: String, linksFound: Int, latencyMs: Long = -1L, detail: String = "") {
+        val extra = if (detail.isNotBlank()) " | $detail" else ""
+        appendDiagLog("LOADLINK", source, "title=\"$title\" -> links=$linksFound$extra", latencyMs)
+    }
+
+    fun logParsing(source: String, url: String, stage: String, error: Throwable? = null, detail: String = "") {
+        val err = error?.let { " -> ${it.javaClass.simpleName}: ${it.message.orEmpty()}" }.orEmpty()
+        val extra = if (detail.isNotBlank()) " | $detail" else ""
+        appendDiagLog("PARSING", source, "[$stage] $url$extra$err")
+    }
+
+    fun logTimeout(source: String, url: String, timeoutSec: Long, stage: String = "HTTP") {
+        appendDiagLog("TIMEOUT", source, "[$stage] timeout(${timeoutSec}s) | $url", timeoutSec * 1000L)
+        reportServerStatus(source, "TIMEOUT", false, 0, timeoutSec * 1000L, "Timeout ${timeoutSec}s • $url")
     }
 
     fun reportServerStatus(
@@ -223,7 +278,6 @@ object MovieFoxSettingsDialog {
         latencyMs: Long = -1L,
         detail: String = ""
     ) {
-        val ts = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
         serverHealthMap[key.lowercase()] = ServerHealthInfo(
             key = key.lowercase(),
             status = status,
@@ -231,32 +285,50 @@ object MovieFoxSettingsDialog {
             httpCode = httpCode,
             latencyMs = latencyMs,
             detail = detail,
-            updatedAt = ts
+            updatedAt = nowTs()
         )
     }
 
     fun getServerHealth(key: String): ServerHealthInfo? = serverHealthMap[key.lowercase()]
 
     fun logSiteError(source: String, url: String, error: Throwable?, extra: String = "") {
-        val ts = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-        val errMsg = error?.let { "${it.javaClass.simpleName}: ${it.message.orEmpty()}" }.orEmpty()
-        val line = "[$ts] [$source] ${if (extra.isNotBlank()) "$extra | " else ""}$url -> $errMsg".trim()
-        Log.e(LOG_TAG, line, error)
-        errorLogRing.add(line)
-        while (errorLogRing.size > 150) errorLogRing.removeAt(0)
-        reportServerStatus(source, "ERROR", false, 0, -1L, extra.ifBlank { errMsg })
+        val errClass = error?.javaClass?.simpleName.orEmpty()
+        val errText = error?.message.orEmpty()
+        val combined = "$source $extra $errClass $errText $url".lowercase()
+        val category = when {
+            combined.contains("timeout") || combined.contains("interruptedio") || combined.contains("sockettimeout") -> "TIMEOUT"
+            combined.contains("json") || combined.contains("parse") || combined.contains("jsoup") || combined.contains("jackson") -> "PARSING"
+            combined.contains("?s=") || combined.contains("search") -> "SEARCH"
+            combined.contains("loadlinks") || combined.contains("extract") || combined.contains("play") -> "LOADLINK"
+            else -> "ERROR"
+        }
+        val errMsg = error?.let { "$errClass: $errText" }.orEmpty()
+        val msg = "${if (extra.isNotBlank()) "$extra | " else ""}$url${if (errMsg.isNotBlank()) " -> $errMsg" else ""}"
+        Log.e(LOG_TAG, "[$category] [$source] $msg", error)
+        appendDiagLog(category, source, msg)
+        val statusLabel = if (category == "TIMEOUT") "TIMEOUT" else "ERROR"
+        reportServerStatus(source, statusLabel, false, 0, -1L, extra.ifBlank { errMsg })
     }
 
-    fun getDiagnosticLogs(): List<String> = errorLogRing.toList()
-    fun clearDiagnosticLogs() = errorLogRing.clear()
+    fun getDiagnosticLogs(categoryFilter: String = "ALL"): List<String> {
+        val list = if (categoryFilter.equals("ALL", true)) {
+            diagLogs.toList()
+        } else {
+            diagLogs.filter { it.category.equals(categoryFilter, true) }
+        }
+        return list.map { it.formatLine() }
+    }
+
+    fun clearDiagnosticLogs() = diagLogs.clear()
 
     private suspend fun probeServerLive(srv: ServerItem): ServerHealthInfo = withContext(Dispatchers.IO) {
         val start = System.currentTimeMillis()
+        val tMs = (appContext?.let { getTimeoutSeconds(it) } ?: 12).coerceIn(5, 20) * 1000
         try {
             val conn = (URL(srv.probeUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 12000
-                readTimeout = 12000
+                connectTimeout = tMs
+                readTimeout = tMs
                 instanceFollowRedirects = true
                 setRequestProperty("User-Agent", CF_BYPASS_UA)
                 getCookieForDomain(appContext, srv.probeUrl)?.let { setRequestProperty("Cookie", it) }
@@ -267,29 +339,40 @@ object MovieFoxSettingsDialog {
             runCatching { conn.errorStream?.close() }
             conn.disconnect()
             val ok = code in 200..399 || code == 405
+            val status = when {
+                ok -> "LIVE"
+                code == 403 || code == 503 -> "CF $code"
+                else -> "HTTP $code"
+            }
             val info = ServerHealthInfo(
                 key = srv.key,
-                status = if (ok) "LIVE" else "HTTP $code",
+                status = status,
                 isHealthy = ok,
                 httpCode = code,
                 latencyMs = ms,
                 detail = srv.probeUrl,
-                updatedAt = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                updatedAt = nowTs()
             )
             serverHealthMap[srv.key.lowercase()] = info
+            if (!ok) appendDiagLog("ERROR", srv.key, "Probe $status | ${srv.probeUrl}", ms)
             info
         } catch (e: Exception) {
             val ms = System.currentTimeMillis() - start
+            val isTimeout = e.message?.contains("timeout", true) == true ||
+                e.javaClass.simpleName.contains("Timeout", true) ||
+                e.javaClass.simpleName.contains("InterruptedIO", true)
+            val status = if (isTimeout) "TIMEOUT" else "DOWN"
             val info = ServerHealthInfo(
                 key = srv.key,
-                status = "DOWN",
+                status = status,
                 isHealthy = false,
                 httpCode = 0,
                 latencyMs = ms,
-                detail = "${e.message ?: "Timeout/Network"} • ${srv.probeUrl}",
-                updatedAt = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+                detail = "${e.message ?: "Network error"} • ${srv.probeUrl}",
+                updatedAt = nowTs()
             )
             serverHealthMap[srv.key.lowercase()] = info
+            appendDiagLog(if (isTimeout) "TIMEOUT" else "ERROR", srv.key, "Probe $status: ${e.message ?: "Network"} | ${srv.probeUrl}", ms)
             info
         }
     }
@@ -339,7 +422,7 @@ object MovieFoxSettingsDialog {
     private fun cardBg(
         bgHex: String = "#141822",
         strokeHex: String = "#252E42",
-        radius: Float = 22f,
+        radius: Float = 20f,
         strokeWidth: Int = 2
     ): GradientDrawable = GradientDrawable().apply {
         setColor(safeColor(bgHex, "#141822"))
@@ -347,7 +430,7 @@ object MovieFoxSettingsDialog {
         setStroke(strokeWidth, safeColor(strokeHex, "#252E42"))
     }
 
-    private fun pillBg(bgHex: String, radius: Float = 16f): GradientDrawable = GradientDrawable().apply {
+    private fun pillBg(bgHex: String, radius: Float = 14f): GradientDrawable = GradientDrawable().apply {
         setColor(safeColor(bgHex, "#1C2230"))
         cornerRadius = radius
     }
@@ -433,44 +516,107 @@ object MovieFoxSettingsDialog {
         return map[host] ?: map.entries.firstOrNull { host.endsWith(it.key) || it.key.endsWith(host) }?.value
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
+    // =========================================================================
+    // Advance CF WebView Solver — Single Server OR Sequential All-Servers Queue
+    // =========================================================================
     fun openCfBypassWindow(
         rawCtx: Context,
         targetName: String,
         targetUrl: String,
         onCompleted: (() -> Unit)? = null
     ) {
+        val single = ServerItem(
+            key = targetName.lowercase(),
+            name = targetName,
+            tag = "CF",
+            probeUrl = targetUrl,
+            accentHex = "#38BDF8"
+        )
+        openCfBypassQueue(rawCtx, listOf(single), onCompleted)
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    fun openCfBypassQueue(
+        rawCtx: Context,
+        targets: List<ServerItem>,
+        onCompleted: (() -> Unit)? = null
+    ) {
         val ctx = resolveActivityContext(rawCtx)
-        if (!isContextAlive(ctx)) return
+        if (!isContextAlive(ctx) || targets.isEmpty()) return
         bindContext(ctx)
 
         val handler = Handler(Looper.getMainLooper())
-        val finished = AtomicBoolean(false)
+        val closed = AtomicBoolean(false)
         var dialogRef: Dialog? = null
         var webViewRef: WebView? = null
+        var idx = 0
+        var savedCount = 0
 
+        val titleTv = TextView(ctx).apply {
+            textSize = 14.5f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+        }
         val statusTv = TextView(ctx).apply {
-            text = "Loading $targetUrl..."
-            textSize = 11f
+            textSize = 10.5f
             setTextColor(safeColor("#93C5FD"))
             setPadding(0, dp(ctx, 2), 0, dp(ctx, 6))
         }
 
-        fun tryCaptureCookie(forceSave: Boolean = false): Boolean {
+        fun currentTarget(): ServerItem = targets[idx.coerceIn(0, targets.lastIndex)]
+
+        fun tryCaptureCookie(url: String, forceSave: Boolean = false): Boolean {
             return runCatching {
                 val cm = CookieManager.getInstance()
                 cm.flush()
-                val cookie = cm.getCookie(targetUrl).orEmpty()
+                val cookie = cm.getCookie(url).orEmpty()
                 val hasClearance = cookie.contains("cf_clearance", true) ||
-                    cookie.contains("PHPSESSID", true) ||
-                    cookie.contains("__cf_bm", true)
+                    cookie.contains("__cf_bm", true) ||
+                    cookie.contains("PHPSESSID", true)
                 if (hasClearance || (forceSave && cookie.isNotBlank())) {
-                    saveCookieForDomain(ctx, targetUrl, cookie)
+                    saveCookieForDomain(ctx, url, cookie)
+                    appendDiagLog("INFO", currentTarget().key, "CF cookie saved (${cookie.length} chars)")
                     true
                 } else {
                     false
                 }
             }.getOrDefault(false)
+        }
+
+        fun closeAll() {
+            if (!closed.compareAndSet(false, true)) return
+            handler.removeCallbacksAndMessages(null)
+            runCatching { webViewRef?.stopLoading(); webViewRef?.destroy() }
+            webViewRef = null
+            runCatching { dialogRef?.dismiss() }
+            dialogRef = null
+            syncCookiesFromWebView(ctx)
+            if (savedCount > 0) safeToast(ctx, "CF Solved & Saved ($savedCount/${targets.size})")
+            onCompleted?.invoke()
+        }
+
+        fun loadCurrentTarget() {
+            if (closed.get()) return
+            if (idx >= targets.size) {
+                closeAll()
+                return
+            }
+            val srv = currentTarget()
+            titleTv.text = "🛡️ CF Bypass (${idx + 1}/${targets.size}) • ${srv.name}"
+            statusTv.text = "Loading ${srv.probeUrl}..."
+            webViewRef?.stopLoading()
+            webViewRef?.loadUrl(srv.probeUrl)
+        }
+
+        fun advanceNext(markSaved: Boolean) {
+            if (closed.get()) return
+            if (markSaved) savedCount++
+            idx++
+            if (idx >= targets.size) {
+                closeAll()
+            } else {
+                loadCurrentTarget()
+            }
         }
 
         fun clickWebViewCenter() {
@@ -499,45 +645,27 @@ object MovieFoxSettingsDialog {
             }
         }
 
-        fun closeWindow(saved: Boolean) {
-            if (!finished.compareAndSet(false, true)) return
-            handler.removeCallbacksAndMessages(null)
-            runCatching { webViewRef?.stopLoading(); webViewRef?.destroy() }
-            webViewRef = null
-            runCatching { dialogRef?.dismiss() }
-            dialogRef = null
-            if (saved) {
-                safeToast(ctx, "CF cookie saved for $targetName")
-            }
-            onCompleted?.invoke()
-        }
-
         val pollRunnable = object : Runnable {
             override fun run() {
-                if (finished.get()) return
-                if (tryCaptureCookie(forceSave = false)) {
-                    closeWindow(saved = true)
-                    return
+                if (closed.get()) return
+                val srv = currentTarget()
+                if (tryCaptureCookie(srv.probeUrl, forceSave = false)) {
+                    statusTv.text = "✓ Solved ${srv.name}! Moving next..."
+                    handler.postDelayed({ advanceNext(true) }, 450L)
                 }
-                handler.postDelayed(this, 1200L)
+                handler.postDelayed(this, 1400L)
             }
         }
 
         val container = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = cardBg("#0A0F1A", "#2563EB", 24f, 2)
-            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
+            setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
         }
-
-        container.addView(TextView(ctx).apply {
-            text = "🛡️ CF Advance Bypass • $targetName"
-            textSize = 15f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE)
-        })
+        container.addView(titleTv)
         container.addView(statusTv)
 
-        val wvHeight = (ctx.resources.displayMetrics.heightPixels * 0.56f).toInt().coerceAtLeast(dp(ctx, 300))
+        val wvHeight = (ctx.resources.displayMetrics.heightPixels * 0.54f).toInt().coerceAtLeast(dp(ctx, 290))
         val wv = WebView(ctx).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, wvHeight).apply {
                 bottomMargin = dp(ctx, 8)
@@ -554,10 +682,12 @@ object MovieFoxSettingsDialog {
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
                 override fun onPageFinished(view: WebView?, url: String?) {
-                    if (finished.get()) return
-                    statusTv.text = "Loaded: ${url ?: targetUrl} • Tap CF Click if needed"
-                    if (tryCaptureCookie(forceSave = false)) {
-                        closeWindow(saved = true)
+                    if (closed.get()) return
+                    val srv = currentTarget()
+                    statusTv.text = "Loaded ${srv.name} • Tap CF Click or Save & Next"
+                    if (tryCaptureCookie(url ?: srv.probeUrl, forceSave = false)) {
+                        statusTv.text = "✓ Auto-saved ${srv.name}!"
+                        handler.postDelayed({ advanceNext(true) }, 400L)
                     }
                 }
             }
@@ -571,44 +701,53 @@ object MovieFoxSettingsDialog {
         }
         btnRow.addView(Button(ctx).apply {
             text = "⚡ CF Click"
-            textSize = 10.5f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
             background = pillBg("#059669", 12f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1f).apply { marginEnd = dp(ctx, 5) }
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1f).apply { marginEnd = dp(ctx, 4) }
             setOnClickListener {
                 clickWebViewCenter()
                 handler.postDelayed({
-                    if (tryCaptureCookie(forceSave = true)) {
-                        closeWindow(saved = true)
+                    val srv = currentTarget()
+                    if (tryCaptureCookie(srv.probeUrl, forceSave = true)) {
+                        advanceNext(true)
                     } else {
                         statusTv.text = "Clicked! Complete challenge & tap Save"
                     }
-                }, 900L)
+                }, 800L)
             }
         })
         btnRow.addView(Button(ctx).apply {
-            text = "✓ Save"
-            textSize = 10.5f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            text = if (targets.size > 1) "✓ Save & Next" else "✓ Save"
+            textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
             background = pillBg("#2563EB", 12f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1f).apply { marginEnd = dp(ctx, 5) }
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1.1f).apply { marginEnd = dp(ctx, 4) }
             setOnClickListener {
-                tryCaptureCookie(forceSave = true)
-                closeWindow(saved = true)
+                val srv = currentTarget()
+                val ok = tryCaptureCookie(srv.probeUrl, forceSave = true)
+                advanceNext(ok)
             }
         })
+        if (targets.size > 1) {
+            btnRow.addView(Button(ctx).apply {
+                text = "Skip ➔"
+                textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+                background = pillBg("#475569", 12f)
+                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 0.75f).apply { marginEnd = dp(ctx, 4) }
+                setOnClickListener { advanceNext(false) }
+            })
+        }
         btnRow.addView(Button(ctx).apply {
             text = "Close"
-            textSize = 10.5f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
             background = pillBg("#334155", 12f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 0.8f)
-            setOnClickListener { closeWindow(saved = false) }
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 0.75f)
+            setOnClickListener { closeAll() }
         })
         container.addView(btnRow)
 
         val dlg = AlertDialog.Builder(ctx).setView(container).setCancelable(false).create()
         dialogRef = dlg
-        dlg.setOnDismissListener {
-            if (!finished.get()) closeWindow(saved = false)
-        }
+        dlg.setOnDismissListener { if (!closed.get()) closeAll() }
 
         runCatching {
             CookieManager.getInstance().setAcceptCookie(true)
@@ -617,7 +756,7 @@ object MovieFoxSettingsDialog {
             dlg.show()
             val width = (ctx.resources.displayMetrics.widthPixels * 0.95).toInt()
             dlg.window?.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT)
-            wv.loadUrl(targetUrl)
+            loadCurrentTarget()
             handler.postDelayed(pollRunnable, 1500L)
         }
     }
@@ -665,7 +804,7 @@ object MovieFoxSettingsDialog {
     fun isDownloadOnly(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_DOWNLOAD_ONLY, false)
     fun setDownloadOnly(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_DOWNLOAD_ONLY, enabled).apply()
 
-    fun getConcurrency(ctx: Context): Int = prefs(ctx).getInt(KEY_CONCURRENCY, 20)
+    fun getConcurrency(ctx: Context): Int = prefs(ctx).getInt(KEY_CONCURRENCY, 24)
     fun setConcurrency(ctx: Context, value: Int) = prefs(ctx).edit().putInt(KEY_CONCURRENCY, value.coerceIn(2, 50)).apply()
 
     fun getTimeoutSeconds(ctx: Context): Int = prefs(ctx).getInt(KEY_TIMEOUT_SEC, 18)
@@ -703,6 +842,9 @@ object MovieFoxSettingsDialog {
     fun getOrderedEnabledKeys(ctx: Context): List<String> =
         getServerOrder(ctx).filter { isServerEnabled(ctx, it) }
 
+    // =========================================================================
+    // CS3 / SkyStream / Nuvio Manifest Repo Storage & Parser
+    // =========================================================================
     private fun toRawGithubUrl(raw: String): String {
         val trimmed = raw.trim()
         val fixed = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed else "https://$trimmed"
@@ -712,6 +854,16 @@ object MovieFoxSettingsDialog {
             fixed.contains("github.com/") && fixed.contains("/raw/") ->
                 fixed.replace("https://github.com/", "https://raw.githubusercontent.com/").replace("/raw/", "/")
             else -> fixed
+        }
+    }
+
+    private fun detectRepoType(url: String, explicit: String): String {
+        if (!explicit.equals("AUTO", true)) return explicit.uppercase()
+        val low = url.lowercase()
+        return when {
+            low.contains("manifest.json") || low.contains("nuvio") || low.contains("stremio") -> "NUVIO"
+            low.contains("skystream") || low.contains("sky") -> "SKYSTREAM"
+            else -> "CS3"
         }
     }
 
@@ -726,17 +878,19 @@ object MovieFoxSettingsDialog {
                 val name = obj.optString("name").trim()
                 val probeUrl = obj.optString("probeUrl").trim()
                 if (key.isNotBlank() && name.isNotBlank() && probeUrl.isNotBlank()) {
+                    val tag = obj.optString("tag", "CS3").ifBlank { "CS3" }
+                    val badge = obj.optString("runtimeBadge", if (tag == "NUVIO") "⚡ NUV" else if (tag == "SKY") "⚡ SKY" else "⚡ CS3")
                     out.add(
                         ServerItem(
                             key = key,
                             name = name,
-                            tag = obj.optString("tag", "CS3").ifBlank { "CS3" },
+                            tag = tag,
                             probeUrl = probeUrl,
                             accentHex = obj.optString("accentHex", "#38BDF8"),
                             isCustom = true,
                             isHindi = true,
                             category = "Movies",
-                            runtimeBadge = "⚡ MF"
+                            runtimeBadge = badge
                         )
                     )
                 }
@@ -751,26 +905,67 @@ object MovieFoxSettingsDialog {
         cachedCs3Servers.addAll(deduped)
         val arr = JSONArray()
         deduped.forEach { srv ->
-            arr.put(JSONObject().put("key", srv.key).put("name", srv.name).put("tag", srv.tag).put("probeUrl", srv.probeUrl).put("accentHex", srv.accentHex))
+            arr.put(
+                JSONObject()
+                    .put("key", srv.key)
+                    .put("name", srv.name)
+                    .put("tag", srv.tag)
+                    .put("probeUrl", srv.probeUrl)
+                    .put("accentHex", srv.accentHex)
+                    .put("runtimeBadge", srv.runtimeBadge)
+            )
         }
         prefs(ctx).edit().putString(KEY_CS3_SERVERS, arr.toString()).apply()
     }
 
     fun getCs3Repos(ctx: Context): MutableList<Cs3RepoConfig> {
-        prefs(ctx)
+        val p = prefs(ctx)
         cachedCs3Repos?.let { return it }
-        val list = mutableListOf(
-            Cs3RepoConfig("hungrysturdy_repo", "HungrySturdy Builds Repo", HUNGRYSTURDY_REPO_URL, true, 0)
-        )
-        cachedCs3Repos = list
-        return list
+        val loaded = mutableListOf<Cs3RepoConfig>()
+        val raw = p.getString(KEY_CS3_REPOS, null)
+        if (!raw.isNullOrBlank()) {
+            runCatching {
+                val arr = JSONArray(raw)
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val id = obj.optString("id").trim()
+                    val name = obj.optString("name").trim()
+                    val url = obj.optString("repoUrl").trim()
+                    if (id.isNotBlank() && url.isNotBlank()) {
+                        loaded.add(
+                            Cs3RepoConfig(
+                                id = id,
+                                name = name.ifBlank { url.substringAfter("://").substringBefore("/") },
+                                repoUrl = url,
+                                repoType = obj.optString("repoType", "CS3").ifBlank { "CS3" },
+                                enabled = obj.optBoolean("enabled", true),
+                                serverCount = obj.optInt("serverCount", 0)
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        if (loaded.none { it.id == "hungrysturdy_repo" }) {
+            loaded.add(0, Cs3RepoConfig("hungrysturdy_repo", "HungrySturdy Builds Repo", HUNGRYSTURDY_REPO_URL, "CS3", true, 0))
+        }
+        cachedCs3Repos = loaded
+        return loaded
     }
 
     fun saveCs3Repos(ctx: Context, list: List<Cs3RepoConfig>) {
         cachedCs3Repos = list.toMutableList()
         val arr = JSONArray()
         list.forEach { r ->
-            arr.put(JSONObject().put("id", r.id).put("name", r.name).put("repoUrl", r.repoUrl).put("enabled", r.enabled).put("serverCount", r.serverCount))
+            arr.put(
+                JSONObject()
+                    .put("id", r.id)
+                    .put("name", r.name)
+                    .put("repoUrl", r.repoUrl)
+                    .put("repoType", r.repoType)
+                    .put("enabled", r.enabled)
+                    .put("serverCount", r.serverCount)
+            )
         }
         prefs(ctx).edit().putString(KEY_CS3_REPOS, arr.toString()).apply()
     }
@@ -787,11 +982,30 @@ object MovieFoxSettingsDialog {
         runCatching { conn.errorStream?.close() }
         conn.disconnect()
         bytes
-    } catch (_: Exception) {
+    } catch (e: Exception) {
+        logParsing("RepoFetch", urlStr, "HTTP", e)
         null
     }
 
-    private fun parseJsonServerEntries(body: String, idTag: String, defaultUrl: String, out: MutableList<ServerItem>) {
+    private fun parseJsonServerEntries(
+        body: String,
+        idTag: String,
+        defaultUrl: String,
+        repoType: String,
+        out: MutableList<ServerItem>
+    ): List<String> {
+        val nestedPluginLists = mutableListOf<String>()
+        val tagLabel = when (repoType.uppercase()) {
+            "NUVIO" -> "NUVIO"
+            "SKYSTREAM" -> "SKY"
+            else -> "CS3"
+        }
+        val badgeLabel = when (repoType.uppercase()) {
+            "NUVIO" -> "⚡ NUV"
+            "SKYSTREAM" -> "⚡ SKY"
+            else -> "⚡ CS3"
+        }
+
         runCatching {
             val entries = mutableListOf<JSONObject>()
             if (body.startsWith("[")) {
@@ -799,20 +1013,71 @@ object MovieFoxSettingsDialog {
                 for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { entries.add(it) }
             } else if (body.startsWith("{")) {
                 val root = JSONObject(body)
-                listOf("plugins", "items", "providers", "servers", "sources").forEach { key ->
+
+                // 1. Nuvio / Stremio Manifest detection
+                if (root.has("resources") || root.has("catalogs") || (root.has("id") && root.has("version") && root.has("name") && !root.has("pluginLists"))) {
+                    val mName = root.optString("name").trim().ifBlank { "Nuvio Addon" }
+                    val baseAddonUrl = defaultUrl.substringBefore("/manifest.json").trimEnd('/')
+                    val slug = mName.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
+                    out.add(
+                        ServerItem(
+                            key = "nuv_${idTag}_${slug.ifBlank { "addon" }}",
+                            name = mName,
+                            tag = "NUVIO",
+                            probeUrl = baseAddonUrl.ifBlank { defaultUrl },
+                            accentHex = "#10B981",
+                            isCustom = true,
+                            isHindi = true,
+                            category = "Movies",
+                            runtimeBadge = "⚡ NUV"
+                        )
+                    )
+                    return nestedPluginLists
+                }
+
+                // 2. CloudStream / SkyStream repo.json -> pluginLists
+                root.optJSONArray("pluginLists")?.let { pLists ->
+                    for (i in 0 until pLists.length()) {
+                        val u = pLists.optString(i).trim()
+                        if (u.startsWith("http")) nestedPluginLists.add(u)
+                    }
+                }
+
+                // 3. Direct arrays inside root object
+                listOf("plugins", "items", "providers", "servers", "sources", "addons").forEach { key ->
                     root.optJSONArray(key)?.let { arr ->
                         for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { entries.add(it) }
                     }
                 }
             }
+
             entries.forEachIndexed { idx, pObj ->
                 val finalName = pObj.optString("name").trim().ifBlank { pObj.optString("internalName").trim() }
                 if (finalName.isBlank()) return@forEachIndexed
-                val url = pObj.optString("url").ifBlank { pObj.optString("mainUrl") }.ifBlank { pObj.optString("pluginUrl") }.ifBlank { defaultUrl }.trim()
+                val url = pObj.optString("url")
+                    .ifBlank { pObj.optString("mainUrl") }
+                    .ifBlank { pObj.optString("pluginUrl") }
+                    .ifBlank { pObj.optString("manifestUrl") }
+                    .ifBlank { defaultUrl }.trim()
                 val slug = finalName.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
-                out.add(ServerItem("cs3_${idTag}_${slug.ifBlank { "srv$idx" }}", finalName, "CS3", toRawGithubUrl(url), AVATAR_PALETTE[idx % AVATAR_PALETTE.size], true, true, "Movies", "⚡ MF"))
+                out.add(
+                    ServerItem(
+                        key = "ext_${idTag}_${slug.ifBlank { "srv$idx" }}",
+                        name = finalName,
+                        tag = tagLabel,
+                        probeUrl = toRawGithubUrl(url),
+                        accentHex = AVATAR_PALETTE[idx % AVATAR_PALETTE.size],
+                        isCustom = true,
+                        isHindi = true,
+                        category = "Movies",
+                        runtimeBadge = badgeLabel
+                    )
+                )
             }
+        }.onFailure {
+            logParsing("RepoParser", defaultUrl, "JSON", it)
         }
+        return nestedPluginLists
     }
 
     private suspend fun fetchServersFromCs3Repo(repo: Cs3RepoConfig): List<ServerItem> = withContext(Dispatchers.IO) {
@@ -828,17 +1093,26 @@ object MovieFoxSettingsDialog {
                     var entry = zis.nextEntry
                     while (entry != null) {
                         if (!entry.isDirectory && entry.name.endsWith(".json", true)) {
-                            parseJsonServerEntries(zis.bufferedReader().readText().trim(), idTag, rawUrl, out)
+                            parseJsonServerEntries(zis.bufferedReader().readText().trim(), idTag, rawUrl, repo.repoType, out)
                         }
                         entry = zis.nextEntry
                     }
                 }
-            }
+            }.onFailure { logParsing("CS3Zip", rawUrl, "ZIP", it) }
             return@withContext out.distinctBy { "${it.name.lowercase()}|${it.probeUrl.lowercase()}" }
         }
 
         val body = runCatching { String(bytes, Charsets.UTF_8).trim() }.getOrDefault("")
-        if (body.isNotBlank()) parseJsonServerEntries(body, idTag, rawUrl, out)
+        if (body.isNotBlank()) {
+            val nestedLists = parseJsonServerEntries(body, idTag, rawUrl, repo.repoType, out)
+            nestedLists.take(3).forEach { listUrl ->
+                val listBytes = readHttpBytes(listUrl) ?: return@forEach
+                val listBody = runCatching { String(listBytes, Charsets.UTF_8).trim() }.getOrDefault("")
+                if (listBody.isNotBlank()) {
+                    parseJsonServerEntries(listBody, idTag, listUrl, repo.repoType, out)
+                }
+            }
+        }
         out.distinctBy { "${it.name.lowercase()}|${it.probeUrl.lowercase()}" }
     }
 
@@ -881,12 +1155,12 @@ object MovieFoxSettingsDialog {
                 val card = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    background = cardBg("#121621", "#232C40", 20f)
-                    setPadding(dp(ctx, 10), dp(ctx, 10), dp(ctx, 10), dp(ctx, 10))
+                    background = cardBg("#121621", "#232C40", 18f)
+                    setPadding(dp(ctx, 10), dp(ctx, 9), dp(ctx, 10), dp(ctx, 9))
                 }
                 val avatarTv = TextView(ctx).apply {
                     textSize = 13f; gravity = Gravity.CENTER; setTypeface(typeface, Typeface.BOLD)
-                    layoutParams = LinearLayout.LayoutParams(dp(ctx, 34), dp(ctx, 34)).apply { marginEnd = dp(ctx, 10) }
+                    layoutParams = LinearLayout.LayoutParams(dp(ctx, 32), dp(ctx, 32)).apply { marginEnd = dp(ctx, 9) }
                 }
                 val col = LinearLayout(ctx).apply {
                     orientation = LinearLayout.VERTICAL
@@ -896,31 +1170,31 @@ object MovieFoxSettingsDialog {
                     orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                 }
                 val nameTv = TextView(ctx).apply {
-                    textSize = 13.5f; isSingleLine = true; ellipsize = TextUtils.TruncateAt.END
+                    textSize = 13f; isSingleLine = true; ellipsize = TextUtils.TruncateAt.END
                     setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
                 }
                 val platformTv = TextView(ctx).apply {
-                    textSize = 8.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
-                    setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2))
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                        .apply { marginStart = dp(ctx, 5) }
-                }
-                val tagTv = TextView(ctx).apply {
-                    textSize = 8.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
-                    setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2))
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                        .apply { marginStart = dp(ctx, 5) }
-                }
-                val statusTv = TextView(ctx).apply {
                     textSize = 8f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
                     setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2))
                     layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                         .apply { marginStart = dp(ctx, 5) }
                 }
+                val tagTv = TextView(ctx).apply {
+                    textSize = 8f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
+                    setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2))
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                        .apply { marginStart = dp(ctx, 4) }
+                }
+                val statusTv = TextView(ctx).apply {
+                    textSize = 8f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
+                    setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2))
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                        .apply { marginStart = dp(ctx, 4) }
+                }
                 topLine.addView(nameTv); topLine.addView(platformTv); topLine.addView(tagTv); topLine.addView(statusTv)
 
                 val urlTv = TextView(ctx).apply {
-                    textSize = 10f; isSingleLine = true; ellipsize = TextUtils.TruncateAt.END
+                    textSize = 9.5f; isSingleLine = true; ellipsize = TextUtils.TruncateAt.END
                     setTextColor(safeColor("#7C869C")); setPadding(0, dp(ctx, 2), dp(ctx, 4), 0)
                 }
                 col.addView(topLine); col.addView(urlTv)
@@ -947,7 +1221,7 @@ object MovieFoxSettingsDialog {
             val srv = items[position]
             holder.avatarTv.text = srv.name.take(1).uppercase()
             holder.avatarTv.setTextColor(safeColor(srv.accentHex, "#38BDF8"))
-            holder.avatarTv.background = pillBg("#192236", 12f)
+            holder.avatarTv.background = pillBg("#192236", 10f)
             holder.nameTv.text = srv.name
             holder.platformTv.text = srv.runtimeBadge
             holder.platformTv.setTextColor(safeColor("#38BDF8"))
@@ -995,16 +1269,19 @@ object MovieFoxSettingsDialog {
         val borderHex = when {
             h == null -> "#232C40"
             isHealthy -> "#22C55E"
+            statusText.contains("TIMEOUT", true) -> "#F59E0B"
             else -> "#EF4444"
         }
         val badgeBg = when {
             h == null -> "#192236"
             isHealthy -> "#0D2B22"
+            statusText.contains("TIMEOUT", true) -> "#2E2009"
             else -> "#2D1216"
         }
         val badgeFg = when {
             h == null -> "#94A3B8"
             isHealthy -> "#34D399"
+            statusText.contains("TIMEOUT", true) -> "#FBBF24"
             else -> "#F87171"
         }
         val hasCookie = getCookieForDomain(ctx, srv.probeUrl) != null
@@ -1012,15 +1289,15 @@ object MovieFoxSettingsDialog {
         return LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = cardBg("#121621", borderHex, 16f, 2)
-            setPadding(dp(ctx, 10), dp(ctx, 8), dp(ctx, 10), dp(ctx, 8))
+            background = cardBg("#121621", borderHex, 15f, 2)
+            setPadding(dp(ctx, 10), dp(ctx, 7), dp(ctx, 10), dp(ctx, 7))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { bottomMargin = dp(ctx, 6) }
 
             addView(View(ctx).apply {
-                layoutParams = LinearLayout.LayoutParams(dp(ctx, 9), dp(ctx, 9)).apply { marginEnd = dp(ctx, 8) }
+                layoutParams = LinearLayout.LayoutParams(dp(ctx, 8), dp(ctx, 8)).apply { marginEnd = dp(ctx, 8) }
                 background = GradientDrawable().apply {
                     shape = GradientDrawable.OVAL
                     setColor(safeColor(if (h == null) "#475569" else borderHex))
@@ -1037,13 +1314,13 @@ object MovieFoxSettingsDialog {
             }
             titleRow.addView(TextView(ctx).apply {
                 text = "${srv.name} ${srv.runtimeBadge}"
-                textSize = 12.5f
+                textSize = 12f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.WHITE)
             })
             titleRow.addView(TextView(ctx).apply {
                 text = if (h != null && h.latencyMs > 0) "$statusText • ${h.latencyMs}ms" else statusText
-                textSize = 8.5f
+                textSize = 8f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(safeColor(badgeFg))
                 background = pillBg(badgeBg, 8f)
@@ -1108,6 +1385,8 @@ object MovieFoxSettingsDialog {
         var useWebViewCf = isUseWebViewCf(ctx)
         var currentQuery = ""
         var selectedCategory = "All"
+        var selectedRepoType = "AUTO"
+        var selectedLogFilter = "ALL"
         var currentConcurrency = getConcurrency(ctx)
         var currentTimeout = getTimeoutSeconds(ctx)
         var hindiOnly = isHindiOnly(ctx)
@@ -1121,20 +1400,21 @@ object MovieFoxSettingsDialog {
 
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            background = cardBg("#07090F", "#1E273B", 34f, 3)
-            setPadding(dp(ctx, 14), dp(ctx, 14), dp(ctx, 14), dp(ctx, 14))
+            background = cardBg("#07090F", "#1E273B", 32f, 3)
+            setPadding(dp(ctx, 13), dp(ctx, 13), dp(ctx, 13), dp(ctx, 13))
         }
 
+        // ── Header ───────────────────────────────────────────────────────────
         val header = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
+            setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
         }
         fun applyHeaderTheme() {
             header.background = GradientDrawable(
                 GradientDrawable.Orientation.TL_BR,
                 intArrayOf(safeColor(activeTheme.gradStart), safeColor(activeTheme.gradMid), safeColor(activeTheme.gradEnd))
             ).apply {
-                cornerRadius = 24f
+                cornerRadius = 22f
                 setStroke(2, safeColor(activeTheme.primaryHex))
             }
         }
@@ -1146,12 +1426,12 @@ object MovieFoxSettingsDialog {
         }
         titleRow.addView(TextView(ctx).apply {
             text = "MOVIEFOX ULTRA MAX"
-            textSize = 16.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            textSize = 16f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
         titleRow.addView(TextView(ctx).apply {
             text = "⚡ TURBO FAST"
-            textSize = 9.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
+            textSize = 9f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
             setTextColor(safeColor("#6EE7B7"))
             background = pillBg("#064E3B", 10f)
             setPadding(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4))
@@ -1161,7 +1441,7 @@ object MovieFoxSettingsDialog {
         val statsRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                .apply { topMargin = dp(ctx, 10) }
+                .apply { topMargin = dp(ctx, 9) }
         }
         fun statChip(label: String, colorHex: String, marginEndDp: Int): Pair<LinearLayout, TextView> {
             val box = LinearLayout(ctx).apply {
@@ -1172,8 +1452,8 @@ object MovieFoxSettingsDialog {
                     if (marginEndDp > 0) marginEnd = dp(ctx, marginEndDp)
                 }
             }
-            val valTv = TextView(ctx).apply { text = "-"; textSize = 13f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor(colorHex)) }
-            val lblTv = TextView(ctx).apply { text = label; textSize = 8.5f; isSingleLine = true; setTextColor(safeColor("#94A3B8")) }
+            val valTv = TextView(ctx).apply { text = "-"; textSize = 12.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor(colorHex)) }
+            val lblTv = TextView(ctx).apply { text = label; textSize = 8f; isSingleLine = true; setTextColor(safeColor("#94A3B8")) }
             box.addView(valTv); box.addView(lblTv)
             return box to valTv
         }
@@ -1182,7 +1462,7 @@ object MovieFoxSettingsDialog {
         val (spdChip, spdValTv) = statChip("SPEED", "#FBBF24", 0)
         statsRow.addView(srvChip); statsRow.addView(extChip); statsRow.addView(spdChip)
         header.addView(statsRow)
-        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 10) })
+        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 9) })
 
         fun refreshStats() {
             val srvOn = SERVERS.count { isServerEnabled(ctx, it.key) }
@@ -1192,23 +1472,25 @@ object MovieFoxSettingsDialog {
         }
         refreshStats()
 
+        // ── Tab Bar ──────────────────────────────────────────────────────────
         val tabBar = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
-            background = cardBg("#0F131C", "#212A3D", 18f)
+            background = cardBg("#0F131C", "#212A3D", 16f)
             setPadding(dp(ctx, 4), dp(ctx, 4), dp(ctx, 4), dp(ctx, 4))
         }
-        val tabTitles = listOf("Providers", "Extractors", "Streaming", "CS3 Repos", "Health & Logs")
+        val tabTitles = listOf("Providers", "Extractors", "Streaming", "Repos & Manifest", "Health & Logs")
         val tabButtons = tabTitles.map { title ->
             Button(ctx).apply {
-                text = title; textSize = 11.5f; isAllCaps = false; isSingleLine = true
+                text = title; textSize = 11f; isAllCaps = false; isSingleLine = true
                 setTypeface(typeface, Typeface.BOLD)
-                setPadding(dp(ctx, 12), 0, dp(ctx, 12), 0)
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 34))
+                setPadding(dp(ctx, 11), 0, dp(ctx, 11), 0)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 33))
             }
         }
         tabButtons.forEach { tabBar.addView(it) }
         root.addView(HorizontalScrollView(ctx).apply { isHorizontalScrollBarEnabled = false; addView(tabBar) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) })
 
+        // ── Providers Filter Controls ────────────────────────────────────────
         val actionRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
@@ -1216,30 +1498,30 @@ object MovieFoxSettingsDialog {
         val searchBox = EditText(ctx).apply {
             hint = "🔍 Search servers..."
             setHintTextColor(safeColor("#64748B")); setTextColor(Color.WHITE); textSize = 12f; isSingleLine = true
-            background = cardBg("#10141E", "#253046", 15f)
-            setPadding(dp(ctx, 10), dp(ctx, 7), dp(ctx, 10), dp(ctx, 7))
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 1f).apply { marginEnd = dp(ctx, 6) }
+            background = cardBg("#10141E", "#253046", 14f)
+            setPadding(dp(ctx, 10), dp(ctx, 6), dp(ctx, 10), dp(ctx, 6))
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 35), 1f).apply { marginEnd = dp(ctx, 6) }
         }
         val allOnBtn = Button(ctx).apply {
             text = "ALL ON"; textSize = 9.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE); background = pillBg(activeTheme.primaryHex, 14f)
+            setTextColor(Color.WHITE); background = pillBg(activeTheme.primaryHex, 13f)
             setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 36)).apply { marginEnd = dp(ctx, 5) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 35)).apply { marginEnd = dp(ctx, 5) }
         }
         val allOffBtn = Button(ctx).apply {
             text = "ALL OFF"; textSize = 9.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE); background = pillBg("#334155", 14f)
+            setTextColor(Color.WHITE); background = pillBg("#334155", 13f)
             setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 36))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 35))
         }
         actionRow.addView(searchBox); actionRow.addView(allOnBtn); actionRow.addView(allOffBtn)
         root.addView(actionRow)
 
         val chipRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
         }
-        val categories = listOf("All", "Movies", "Series", "AsianDrama", "Hindi")
+        val categories = listOf("All", "Movies", "Series", "AsianDrama", "Hindi", "Custom")
         val chipViews = mutableListOf<TextView>()
         lateinit var applyServerFilter: () -> Unit
 
@@ -1247,13 +1529,13 @@ object MovieFoxSettingsDialog {
             chipViews.forEachIndexed { idx, tv ->
                 val active = categories[idx] == selectedCategory
                 tv.setTextColor(if (active) Color.WHITE else safeColor("#94A3B8"))
-                tv.background = pillBg(if (active) activeTheme.primaryHex else "#141926", 12f)
+                tv.background = pillBg(if (active) activeTheme.primaryHex else "#141926", 11f)
             }
         }
         categories.forEach { cat ->
             val tv = TextView(ctx).apply {
-                text = cat; textSize = 10.5f; setTypeface(typeface, Typeface.BOLD)
-                setPadding(dp(ctx, 11), dp(ctx, 5), dp(ctx, 11), dp(ctx, 5))
+                text = cat; textSize = 10f; setTypeface(typeface, Typeface.BOLD)
+                setPadding(dp(ctx, 10), dp(ctx, 5), dp(ctx, 10), dp(ctx, 5))
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 5) }
                 setOnClickListener {
                     selectedCategory = cat
@@ -1265,9 +1547,13 @@ object MovieFoxSettingsDialog {
             chipRow.addView(tv)
         }
         refreshCategoryChips()
-        root.addView(chipRow)
+        val chipScroll = HorizontalScrollView(ctx).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(chipRow)
+        }
+        root.addView(chipScroll)
 
-        val contentHeight = dp(ctx, 310)
+        val contentHeight = dp(ctx, 315)
         lateinit var serverAdapter: ServerListAdapter
         serverAdapter = ServerListAdapter(
             ctx = ctx,
@@ -1295,7 +1581,7 @@ object MovieFoxSettingsDialog {
         val serversListView = ListView(ctx).apply {
             adapter = serverAdapter
             divider = GradientDrawable().apply { setColor(Color.TRANSPARENT) }
-            dividerHeight = dp(ctx, 7)
+            dividerHeight = dp(ctx, 6)
             overScrollMode = View.OVER_SCROLL_NEVER
             isVerticalScrollBarEnabled = false
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, contentHeight)
@@ -1308,6 +1594,7 @@ object MovieFoxSettingsDialog {
                 val catOk = when (selectedCategory) {
                     "All" -> true
                     "Hindi" -> item.isHindi
+                    "Custom" -> item.isCustom
                     else -> item.category.equals(selectedCategory, ignoreCase = true)
                 }
                 val qOk = currentQuery.isEmpty() ||
@@ -1350,7 +1637,31 @@ object MovieFoxSettingsDialog {
         val cs3Pane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         val healthPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
 
+        // ── Tab 2: Extractors ────────────────────────────────────────────────
         EXTRACTORS.forEach { ext ->
+            val card = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                background = cardBg("#121621", "#232C40", 16f)
+                setPadding(dp(ctx, 11), dp(ctx, 9), dp(ctx, 11), dp(ctx, 9))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
+            }
+            val col = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            col.addView(TextView(ctx).apply { text = "${ext.name} [${ext.tag}]"; textSize = 12.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
+            col.addView(TextView(ctx).apply { text = ext.hosts; textSize = 9.5f; setTextColor(safeColor("#94A3B8")) })
+            val sw = Switch(ctx).apply {
+                isChecked = isExtractorEnabled(ctx, ext.key)
+                setOnCheckedChangeListener { _, checked -> setExtractorEnabled(ctx, ext.key, checked); refreshStats() }
+            }
+            card.setOnClickListener { sw.isChecked = !sw.isChecked }
+            card.addView(col); card.addView(sw)
+            extractorPane.addView(card)
+        }
+
+        // ── Tab 3: Streaming ─────────────────────────────────────────────────
+        fun makeToggleCard(parent: LinearLayout, title: String, desc: String, initial: Boolean, onChange: (Boolean) -> Unit) {
             val card = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
                 background = cardBg("#121621", "#232C40", 18f)
@@ -1361,30 +1672,8 @@ object MovieFoxSettingsDialog {
                 orientation = LinearLayout.VERTICAL
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             }
-            col.addView(TextView(ctx).apply { text = "${ext.name} [${ext.tag}]"; textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
-            col.addView(TextView(ctx).apply { text = ext.hosts; textSize = 10f; setTextColor(safeColor("#94A3B8")) })
-            val sw = Switch(ctx).apply {
-                isChecked = isExtractorEnabled(ctx, ext.key)
-                setOnCheckedChangeListener { _, checked -> setExtractorEnabled(ctx, ext.key, checked); refreshStats() }
-            }
-            card.setOnClickListener { sw.isChecked = !sw.isChecked }
-            card.addView(col); card.addView(sw)
-            extractorPane.addView(card)
-        }
-
-        fun makeToggleCard(parent: LinearLayout, title: String, desc: String, initial: Boolean, onChange: (Boolean) -> Unit) {
-            val card = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                background = cardBg("#121621", "#232C40", 20f)
-                setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
-            }
-            val col = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            col.addView(TextView(ctx).apply { text = title; textSize = 13.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
-            col.addView(TextView(ctx).apply { text = desc; textSize = 10.5f; setTextColor(safeColor("#8B93A7")) })
+            col.addView(TextView(ctx).apply { text = title; textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
+            col.addView(TextView(ctx).apply { text = desc; textSize = 10f; setTextColor(safeColor("#8B93A7")) })
             val sw = Switch(ctx).apply {
                 isChecked = initial
                 setOnCheckedChangeListener { _, checked -> onChange(checked) }
@@ -1398,9 +1687,9 @@ object MovieFoxSettingsDialog {
             var cur = initial
             val card = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                background = cardBg("#121621", "#232C40", 20f)
-                setPadding(dp(ctx, 13), dp(ctx, 10), dp(ctx, 13), dp(ctx, 10))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+                background = cardBg("#121621", "#232C40", 18f)
+                setPadding(dp(ctx, 12), dp(ctx, 9), dp(ctx, 12), dp(ctx, 9))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
             }
             val col = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
@@ -1445,7 +1734,7 @@ object MovieFoxSettingsDialog {
         makeToggleCard(streamPane, "Zero-Buffer Mode", "Prioritize fast HLS/MP4 streams first", lowBuffer) { lowBuffer = it; setLowBufferMode(ctx, it) }
         makeToggleCard(streamPane, "Shuffle Home", "Shuffle home categories", shuffleHome) { shuffleHome = it; setShuffleHomeCategories(ctx, it) }
 
-        makeStepperCard(streamPane, "Parallel Workers", "Concurrent server fetch threads", currentConcurrency, 2, 4, 30, "x") {
+        makeStepperCard(streamPane, "Parallel Workers", "Concurrent server fetch threads", currentConcurrency, 2, 4, 40, "x") {
             currentConcurrency = it; setConcurrency(ctx, it); refreshStats()
         }
         makeStepperCard(streamPane, "Request Timeout", "Per-server connection timeout", currentTimeout, 2, 4, 45, "s") {
@@ -1453,27 +1742,24 @@ object MovieFoxSettingsDialog {
         }
 
         val themeCard = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#232C40", 20f)
-            setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+            orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#232C40", 18f)
+            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
         }
-        themeCard.addView(TextView(ctx).apply { text = "🎨 UI Colour Theme"; textSize = 13.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
+        themeCard.addView(TextView(ctx).apply { text = "🎨 UI Colour Theme"; textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
         val themeScroll = HorizontalScrollView(ctx).apply { isHorizontalScrollBarEnabled = false }
-        val themeRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(ctx, 8), 0, 0)
-        }
+        val themeRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(ctx, 7), 0, 0) }
         UI_THEMES.forEach { pal ->
             themeRow.addView(TextView(ctx).apply {
-                text = pal.name; textSize = 11f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                background = pillBg(pal.primaryHex, 12f)
-                setPadding(dp(ctx, 11), dp(ctx, 6), dp(ctx, 11), dp(ctx, 6))
+                text = pal.name; textSize = 10.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+                background = pillBg(pal.primaryHex, 11f)
+                setPadding(dp(ctx, 10), dp(ctx, 6), dp(ctx, 10), dp(ctx, 6))
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 6) }
                 setOnClickListener {
                     activeTheme = pal
                     setSelectedTheme(ctx, pal.id)
                     applyHeaderTheme()
-                    allOnBtn.background = pillBg(pal.primaryHex, 14f)
+                    allOnBtn.background = pillBg(pal.primaryHex, 13f)
                     refreshCategoryChips()
                 }
             })
@@ -1483,15 +1769,15 @@ object MovieFoxSettingsDialog {
         streamPane.addView(themeCard)
 
         val hostCard = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#232C40", 20f)
-            setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+            orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#232C40", 18f)
+            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
         }
-        hostCard.addView(TextView(ctx).apply { text = "🌐 Sflix Mirror Host"; textSize = 13.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
+        hostCard.addView(TextView(ctx).apply { text = "🌐 Sflix Mirror Host"; textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
         val rg = RadioGroup(ctx)
         SFLIX_HOSTS.forEach { h ->
             rg.addView(RadioButton(ctx).apply {
-                text = h; textSize = 11.5f; setTextColor(safeColor("#CBD5E1"))
+                text = h; textSize = 11f; setTextColor(safeColor("#CBD5E1"))
                 isChecked = selectedSflixHost.equals(h, true)
                 setOnCheckedChangeListener { _, checked -> if (checked) selectedSflixHost = h }
             })
@@ -1499,86 +1785,266 @@ object MovieFoxSettingsDialog {
         hostCard.addView(rg)
         streamPane.addView(hostCard)
 
-        val cs3RepoHolder = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
-        cs3RepoList.forEach { repo ->
-            val card = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#232C40", 20f)
-                setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
-            }
-            card.addView(TextView(ctx).apply { text = repo.name; textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
-            card.addView(TextView(ctx).apply { text = repo.repoUrl; textSize = 10f; setTextColor(safeColor("#94A3B8")) })
-            val fetchBtn = Button(ctx).apply {
-                text = "FETCH REPO SERVERS"; textSize = 10.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                background = pillBg("#0284C7", 14f)
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 36)).apply { topMargin = dp(ctx, 6) }
-                setOnClickListener {
-                    dialogScope.launch {
-                        val fetched = fetchServersFromCs3Repo(repo)
-                        saveCs3Servers(ctx, fetched)
-                        repo.serverCount = fetched.size
-                        saveCs3Repos(ctx, cs3RepoList)
-                        applyServerFilter()
-                        safeToast(ctx, "${fetched.size} servers loaded!")
-                    }
-                }
-            }
-            card.addView(fetchBtn)
-            cs3RepoHolder.addView(card)
-        }
-        cs3Pane.addView(cs3RepoHolder)
-
-        val cfBox = LinearLayout(ctx).apply {
+        // ── Tab 4: Repos & Manifest (CS3 / SkyStream / Nuvio Manifest URL) ──
+        val addRepoCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            background = cardBg("#0A1617", "#1E3A3A", 18f, 2)
+            background = cardBg("#0C1322", "#2563EB", 18f, 2)
             setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
         }
-        val cfHeader = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        addRepoCard.addView(TextView(ctx).apply {
+            text = "🔗 Add CS3 / SkyStream / Nuvio Manifest URL"
+            textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+        })
+        addRepoCard.addView(TextView(ctx).apply {
+            text = "Paste repo.json, plugins.json, .cs3, SkyStream repo, or Nuvio/Stremio manifest.json link"
+            textSize = 9.5f; setTextColor(safeColor("#94A3B8"))
+            setPadding(0, dp(ctx, 2), 0, dp(ctx, 6))
+        })
+
+        val repoNameInput = EditText(ctx).apply {
+            hint = "Repo / Addon Name (optional)"
+            setHintTextColor(safeColor("#64748B")); setTextColor(Color.WHITE); textSize = 11.5f; isSingleLine = true
+            background = cardBg("#101726", "#2A3650", 12f)
+            setPadding(dp(ctx, 10), dp(ctx, 7), dp(ctx, 10), dp(ctx, 7))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 36)).apply { bottomMargin = dp(ctx, 6) }
         }
+        val repoUrlInput = EditText(ctx).apply {
+            hint = "https://.../repo.json or .../manifest.json"
+            setHintTextColor(safeColor("#64748B")); setTextColor(Color.WHITE); textSize = 11.5f; isSingleLine = true
+            background = cardBg("#101726", "#2A3650", 12f)
+            setPadding(dp(ctx, 10), dp(ctx, 7), dp(ctx, 10), dp(ctx, 7))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 36)).apply { bottomMargin = dp(ctx, 6) }
+        }
+
+        val repoTypes = listOf("AUTO", "CS3", "SKYSTREAM", "NUVIO")
+        val repoTypeChips = mutableListOf<TextView>()
+        val repoTypeRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+        }
+        fun refreshRepoTypeChips() {
+            repoTypeChips.forEachIndexed { i, tv ->
+                val active = repoTypes[i] == selectedRepoType
+                tv.setTextColor(if (active) Color.WHITE else safeColor("#94A3B8"))
+                tv.background = pillBg(if (active) activeTheme.primaryHex else "#161E31", 10f)
+            }
+        }
+        repoTypes.forEach { rt ->
+            val tv = TextView(ctx).apply {
+                text = rt; textSize = 9.5f; setTypeface(typeface, Typeface.BOLD)
+                setPadding(dp(ctx, 10), dp(ctx, 5), dp(ctx, 10), dp(ctx, 5))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 5) }
+                setOnClickListener { selectedRepoType = rt; refreshRepoTypeChips() }
+            }
+            repoTypeChips.add(tv)
+            repoTypeRow.addView(tv)
+        }
+        refreshRepoTypeChips()
+
+        val cs3RepoHolder = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        lateinit var renderRepoCards: () -> Unit
+
+        suspend fun syncAllReposAndSave(): Int {
+            val allFetched = mutableListOf<ServerItem>()
+            supervisorScope {
+                cs3RepoList.filter { it.enabled }.map { r ->
+                    async {
+                        val list = fetchServersFromCs3Repo(r)
+                        r.serverCount = list.size
+                        list
+                    }
+                }.awaitAll().forEach { allFetched.addAll(it) }
+            }
+            saveCs3Servers(ctx, allFetched)
+            saveCs3Repos(ctx, cs3RepoList)
+            applyServerFilter()
+            renderRepoCards()
+            return allFetched.size
+        }
+
+        val addBtnRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+        addBtnRow.addView(Button(ctx).apply {
+            text = "+ ADD & FETCH"; textSize = 10.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            background = pillBg("#059669", 12f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 1.3f).apply { marginEnd = dp(ctx, 5) }
+            setOnClickListener {
+                val rawUrl = repoUrlInput.text?.toString().orEmpty().trim()
+                if (rawUrl.isBlank() || !rawUrl.contains(".")) {
+                    safeToast(ctx, "Valid URL enter karein")
+                    return@setOnClickListener
+                }
+                val finalUrl = toRawGithubUrl(rawUrl)
+                val finalType = detectRepoType(finalUrl, selectedRepoType)
+                val customName = repoNameInput.text?.toString().orEmpty().trim().ifBlank {
+                    val host = runCatching { URL(finalUrl).host.removePrefix("www.") }.getOrDefault("Custom Repo")
+                    "$finalType • $host"
+                }
+                val newRepo = Cs3RepoConfig(
+                    id = "repo_${System.currentTimeMillis()}",
+                    name = customName,
+                    repoUrl = finalUrl,
+                    repoType = finalType,
+                    enabled = true,
+                    serverCount = 0
+                )
+                cs3RepoList.add(newRepo)
+                saveCs3Repos(ctx, cs3RepoList)
+                repoNameInput.setText("")
+                repoUrlInput.setText("")
+                renderRepoCards()
+                dialogScope.launch {
+                    val total = syncAllReposAndSave()
+                    safeToast(ctx, "Added $finalType! Total custom servers: $total")
+                }
+            }
+        })
+        addBtnRow.addView(Button(ctx).apply {
+            text = "FETCH ALL"; textSize = 10.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            background = pillBg("#0284C7", 12f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 1f)
+            setOnClickListener {
+                dialogScope.launch {
+                    val total = syncAllReposAndSave()
+                    safeToast(ctx, "Synced ${cs3RepoList.size} repos ($total servers)")
+                }
+            }
+        })
+
+        addRepoCard.addView(repoNameInput)
+        addRepoCard.addView(repoUrlInput)
+        addRepoCard.addView(repoTypeRow)
+        addRepoCard.addView(addBtnRow)
+
+        renderRepoCards = {
+            cs3RepoHolder.removeAllViews()
+            cs3RepoList.forEach { repo ->
+                val typeColor = when (repo.repoType.uppercase()) {
+                    "NUVIO" -> "#10B981"
+                    "SKYSTREAM" -> "#38BDF8"
+                    else -> "#A855F7"
+                }
+                val card = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#232C40", 18f)
+                    setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+                }
+                val head = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+                head.addView(TextView(ctx).apply {
+                    text = repo.name; textSize = 12.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                head.addView(TextView(ctx).apply {
+                    text = "${repo.repoType} • ${repo.serverCount}"
+                    textSize = 8.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+                    background = pillBg(typeColor, 8f)
+                    setPadding(dp(ctx, 6), dp(ctx, 2), dp(ctx, 6), dp(ctx, 2))
+                })
+                card.addView(head)
+                card.addView(TextView(ctx).apply {
+                    text = repo.repoUrl; textSize = 9.5f; setTextColor(safeColor("#94A3B8"))
+                    setPadding(0, dp(ctx, 3), 0, dp(ctx, 6))
+                })
+
+                val rowBtns = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
+                rowBtns.addView(Button(ctx).apply {
+                    text = "FETCH SERVERS"; textSize = 10f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+                    background = pillBg("#0284C7", 12f)
+                    layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 34), 1f).apply { marginEnd = dp(ctx, 5) }
+                    setOnClickListener {
+                        dialogScope.launch {
+                            val fetched = fetchServersFromCs3Repo(repo)
+                            repo.serverCount = fetched.size
+                            val existingOther = cachedCs3Servers.filterNot { it.key.contains(repo.id.takeLast(6)) }
+                            saveCs3Servers(ctx, existingOther + fetched)
+                            saveCs3Repos(ctx, cs3RepoList)
+                            applyServerFilter()
+                            renderRepoCards()
+                            safeToast(ctx, "${repo.name}: ${fetched.size} loaded!")
+                        }
+                    }
+                })
+                if (repo.id != "hungrysturdy_repo") {
+                    rowBtns.addView(Button(ctx).apply {
+                        text = "DELETE"; textSize = 10f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#FCA5A5"))
+                        background = cardBg("#2B1114", "#7F1D1D", 12f, 1)
+                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 34))
+                        setPadding(dp(ctx, 12), 0, dp(ctx, 12), 0)
+                        setOnClickListener {
+                            cs3RepoList.remove(repo)
+                            saveCs3Repos(ctx, cs3RepoList)
+                            val remaining = cachedCs3Servers.filterNot { it.key.contains(repo.id.takeLast(6)) }
+                            saveCs3Servers(ctx, remaining)
+                            applyServerFilter()
+                            renderRepoCards()
+                            safeToast(ctx, "Removed ${repo.name}")
+                        }
+                    })
+                }
+                card.addView(rowBtns)
+                cs3RepoHolder.addView(card)
+            }
+        }
+        renderRepoCards()
+        cs3Pane.addView(addRepoCard)
+        cs3Pane.addView(cs3RepoHolder)
+
+        // ── Tab 5: Health & Logs (CF Solve All + Structured Diagnostics) ─────
+        val cfBox = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardBg("#0A1617", "#1E3A3A", 18f, 2)
+            setPadding(dp(ctx, 11), dp(ctx, 10), dp(ctx, 11), dp(ctx, 10))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
+        }
+        val cfHeader = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         cfHeader.addView(TextView(ctx).apply {
-            text = "🛡️ Cloudflare Advance Bypass"
-            textSize = 13.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            text = "🛡️ Cloudflare Bypass"
+            textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
+
+        lateinit var refreshHealthPane: () -> Unit
+
         cfHeader.addView(Button(ctx).apply {
-            text = "⚡ CF Click"; textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            text = "⚡ Solve All"; textSize = 9.5f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
             background = pillBg("#059669", 10f)
             setPadding(dp(ctx, 9), 0, dp(ctx, 9), 0)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 30)).apply { marginEnd = dp(ctx, 5) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 30)).apply { marginEnd = dp(ctx, 4) }
             setOnClickListener {
-                val target = SERVERS.firstOrNull { it.key in listOf("prmovies", "dramaverse", "katdrama", "animeworld") } ?: SERVERS.first()
-                openCfBypassWindow(ctx, target.name, target.probeUrl) {
+                val cfTargets = SERVERS.filter { isServerEnabled(ctx, it.key) && getCookieForDomain(ctx, it.probeUrl) == null }
+                    .ifEmpty { SERVERS.filter { isServerEnabled(ctx, it.key) } }
+                openCfBypassQueue(ctx, cfTargets) {
+                    refreshHealthPane()
                     applyServerFilter()
                 }
             }
         })
         cfHeader.addView(Button(ctx).apply {
-            text = "✓ Save"; textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            text = "✓ Sync"; textSize = 9.5f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
             background = pillBg("#2563EB", 10f)
-            setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
+            setPadding(dp(ctx, 9), 0, dp(ctx, 9), 0)
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 30))
             setOnClickListener {
                 val synced = syncCookiesFromWebView(ctx)
-                safeToast(ctx, "Saved CF cookies ($synced domains)")
+                refreshHealthPane()
+                safeToast(ctx, "Synced CF cookies ($synced servers)")
             }
         })
         cfBox.addView(cfHeader)
 
         cfBox.addView(TextView(ctx).apply {
-            text = "Tap CF Click to open WebView & click/solve Cloudflare challenge — cookies are reused across servers."
-            textSize = 10f; setTextColor(safeColor("#94A3B8"))
-            setPadding(0, dp(ctx, 3), 0, dp(ctx, 6))
+            text = "Solve All runs sequential WebView solver across servers & saves cookies automatically."
+            textSize = 9.5f; setTextColor(safeColor("#94A3B8"))
+            setPadding(0, dp(ctx, 3), 0, dp(ctx, 5))
         })
 
         val wvRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 5) }
         }
         wvRow.addView(TextView(ctx).apply {
             text = "Use WebView for CF challenges"
-            textSize = 12f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            textSize = 11.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
         wvRow.addView(Switch(ctx).apply {
@@ -1588,51 +2054,128 @@ object MovieFoxSettingsDialog {
         cfBox.addView(wvRow)
 
         val cfStatusBanner = TextView(ctx).apply {
-            textSize = 11f; setTypeface(typeface, Typeface.BOLD); gravity = Gravity.CENTER
+            textSize = 10.5f; setTypeface(typeface, Typeface.BOLD); gravity = Gravity.CENTER
             setPadding(dp(ctx, 10), dp(ctx, 7), dp(ctx, 10), dp(ctx, 7))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 5) }
         }
         fun refreshCfBanner() {
-            val savedCount = getSavedCookiesMap(ctx).size
-            if (savedCount > 0) {
-                cfStatusBanner.text = "✓ CF Cookies Saved ($savedCount) - Tap for CF Click"
+            val totalSrvs = SERVERS.size.coerceAtLeast(1)
+            val solvedSrvs = SERVERS.count { getCookieForDomain(ctx, it.probeUrl) != null }
+            if (solvedSrvs >= totalSrvs) {
+                cfStatusBanner.text = "✓ CF Cookies Saved: ALL ($solvedSrvs/$totalSrvs Servers Solved)"
                 cfStatusBanner.setTextColor(safeColor("#6EE7B7"))
                 cfStatusBanner.background = cardBg("#08241C", "#10B981", 12f, 1)
+            } else if (solvedSrvs > 0) {
+                cfStatusBanner.text = "✓ CF Cookies Saved ($solvedSrvs/$totalSrvs) — Tap to Solve Remaining"
+                cfStatusBanner.setTextColor(safeColor("#FDE68A"))
+                cfStatusBanner.background = cardBg("#211A0A", "#D97706", 12f, 1)
             } else {
-                cfStatusBanner.text = "⚡ CF Click - Tap to Open Bypass & Click"
+                cfStatusBanner.text = "⚡ Tap Here to Solve CF Cookies for All Servers"
                 cfStatusBanner.setTextColor(safeColor("#93C5FD"))
                 cfStatusBanner.background = cardBg("#0B1B2E", "#2563EB", 12f, 1)
             }
         }
         cfStatusBanner.setOnClickListener {
-            val target = SERVERS.firstOrNull { it.key in listOf("prmovies", "dramaverse", "katdrama", "animeworld") } ?: SERVERS.first()
-            openCfBypassWindow(ctx, target.name, target.probeUrl) {
-                refreshCfBanner()
-            }
+            val remaining = SERVERS.filter { getCookieForDomain(ctx, it.probeUrl) == null }.ifEmpty { SERVERS }
+            openCfBypassQueue(ctx, remaining) { refreshHealthPane() }
         }
-        refreshCfBanner()
         cfBox.addView(cfStatusBanner)
 
         cfBox.addView(Button(ctx).apply {
-            text = "Clear CF cookies"; textSize = 11f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
+            text = "Clear CF cookies"; textSize = 10.5f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
             setTextColor(safeColor("#FCA5A5"))
             background = cardBg("#2B1114", "#7F1D1D", 12f, 1)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 36))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 34))
             setOnClickListener {
                 clearAllCfCookies(ctx)
-                refreshCfBanner()
+                refreshHealthPane()
                 safeToast(ctx, "CF cookies cleared")
             }
         })
 
+        // Live Diagnostics Metric Strip
+        val metricsRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+        }
+        fun metricPill(label: String, colorHex: String, endDp: Int): Pair<LinearLayout, TextView> {
+            val box = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
+                background = cardBg("#0E1320", "#232D42", 12f, 1)
+                setPadding(dp(ctx, 6), dp(ctx, 5), dp(ctx, 6), dp(ctx, 5))
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    if (endDp > 0) marginEnd = dp(ctx, endDp)
+                }
+            }
+            val vTv = TextView(ctx).apply { text = "0"; textSize = 11.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor(colorHex)) }
+            val lTv = TextView(ctx).apply { text = label; textSize = 7.5f; setTextColor(safeColor("#94A3B8")) }
+            box.addView(vTv); box.addView(lTv)
+            return box to vTv
+        }
+        val (mLiveBox, mLiveTv) = metricPill("LIVE", "#34D399", 5)
+        val (mToBox, mToTv) = metricPill("TIMEOUT", "#FBBF24", 5)
+        val (mParseBox, mParseTv) = metricPill("PARSE ERR", "#F87171", 5)
+        val (mAvgBox, mAvgTv) = metricPill("AVG MS", "#38BDF8", 0)
+        metricsRow.addView(mLiveBox); metricsRow.addView(mToBox); metricsRow.addView(mParseBox); metricsRow.addView(mAvgBox)
+
+        // Log Filter Chips
+        val logFilterNames = listOf("ALL", "SEARCH", "LOADLINK", "PARSING", "TIMEOUT", "ERROR")
+        val logFilterChips = mutableListOf<TextView>()
+        val logFilterRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+        }
         val healthCardsHolder = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         val logTv = TextView(ctx).apply {
-            textSize = 10f; setTextColor(safeColor("#E2E8F0"))
-            background = cardBg("#0A0E17", "#26324A", 16f, 2)
-            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+            textSize = 9.5f; setTextColor(safeColor("#E2E8F0"))
+            background = cardBg("#0A0E17", "#26324A", 14f, 2)
+            setPadding(dp(ctx, 10), dp(ctx, 9), dp(ctx, 10), dp(ctx, 9))
         }
-        fun refreshHealthPane() {
+        fun refreshLogChips() {
+            logFilterChips.forEachIndexed { idx, tv ->
+                val active = logFilterNames[idx] == selectedLogFilter
+                tv.setTextColor(if (active) Color.WHITE else safeColor("#94A3B8"))
+                tv.background = pillBg(if (active) activeTheme.primaryHex else "#141926", 10f)
+            }
+        }
+        fun renderFilteredLogs() {
+            val logs = getDiagnosticLogs(selectedLogFilter)
+            logTv.text = if (logs.isEmpty()) {
+                "No [$selectedLogFilter] logs yet • ADB tag: $LOG_TAG"
+            } else {
+                logs.asReversed().take(80).joinToString("\n\n")
+            }
+        }
+        logFilterNames.forEach { cat ->
+            val tv = TextView(ctx).apply {
+                text = cat; textSize = 9f; setTypeface(typeface, Typeface.BOLD)
+                setPadding(dp(ctx, 9), dp(ctx, 5), dp(ctx, 9), dp(ctx, 5))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 5) }
+                setOnClickListener {
+                    selectedLogFilter = cat
+                    refreshLogChips()
+                    renderFilteredLogs()
+                }
+            }
+            logFilterChips.add(tv)
+            logFilterRow.addView(tv)
+        }
+        refreshLogChips()
+
+        refreshHealthPane = {
             refreshCfBanner()
+            val healthValues = serverHealthMap.values
+            val liveCount = healthValues.count { it.isHealthy }
+            val timeoutCount = diagLogs.count { it.category == "TIMEOUT" }
+            val parseErrCount = diagLogs.count { it.category == "PARSING" }
+            val validLatencies = healthValues.map { it.latencyMs }.filter { it > 0L }
+            val avgMs = if (validLatencies.isNotEmpty()) validLatencies.average().toLong() else 0L
+
+            mLiveTv.text = "$liveCount/${SERVERS.size}"
+            mToTv.text = "$timeoutCount"
+            mParseTv.text = "$parseErrCount"
+            mAvgTv.text = if (avgMs > 0) "${avgMs}ms" else "-"
+
             healthCardsHolder.removeAllViews()
             SERVERS.forEach { srv ->
                 healthCardsHolder.addView(buildServerHealthCard(ctx, srv, getServerHealth(srv.key)) {
@@ -1640,18 +2183,18 @@ object MovieFoxSettingsDialog {
                     applyServerFilter()
                 })
             }
-            val logs = getDiagnosticLogs()
-            logTv.text = if (logs.isEmpty()) "No error logs yet (ADB tag: $LOG_TAG)" else logs.asReversed().joinToString("\n\n")
+            renderFilteredLogs()
         }
 
         healthPane.addView(cfBox)
+        healthPane.addView(metricsRow)
         healthPane.addView(LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
             addView(Button(ctx).apply {
-                text = "TEST ALL (${SERVERS.size})"; textSize = 10f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                background = pillBg("#059669", 14f)
-                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 1.2f).apply { marginEnd = dp(ctx, 5) }
+                text = "TEST ALL (${SERVERS.size})"; textSize = 9.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+                background = pillBg("#059669", 12f)
+                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 34), 1.25f).apply { marginEnd = dp(ctx, 5) }
                 setOnClickListener {
                     dialogScope.launch {
                         supervisorScope { SERVERS.map { srv -> async { probeServerLive(srv) } }.awaitAll() }
@@ -1661,17 +2204,26 @@ object MovieFoxSettingsDialog {
                 }
             })
             addView(Button(ctx).apply {
-                text = "COPY ALL"; textSize = 10f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                background = pillBg("#0284C7", 14f)
-                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 1f).apply { marginEnd = dp(ctx, 5) }
+                text = "COPY LOGS"; textSize = 9.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+                background = pillBg("#0284C7", 12f)
+                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 34), 1f).apply { marginEnd = dp(ctx, 5) }
                 setOnClickListener {
-                    copyToClipboard(ctx, "Diagnostic Logs", getDiagnosticLogs().joinToString("\n"))
+                    val report = buildString {
+                        appendLine("=== MovieFox Diagnostics ($selectedLogFilter) ===")
+                        SERVERS.forEach { srv ->
+                            val h = getServerHealth(srv.key)
+                            appendLine("${srv.name}: ${h?.status ?: "READY"} (${h?.latencyMs ?: -1}ms)")
+                        }
+                        appendLine()
+                        append(getDiagnosticLogs(selectedLogFilter).joinToString("\n"))
+                    }
+                    copyToClipboard(ctx, "Diagnostics", report)
                 }
             })
             addView(Button(ctx).apply {
-                text = "CLEAR"; textSize = 10f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                background = pillBg("#334155", 14f)
-                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 0.8f)
+                text = "CLEAR"; textSize = 9.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+                background = pillBg("#334155", 12f)
+                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 34), 0.75f)
                 setOnClickListener {
                     clearDiagnosticLogs()
                     serverHealthMap.clear()
@@ -1681,6 +2233,7 @@ object MovieFoxSettingsDialog {
             })
         })
         healthPane.addView(healthCardsHolder)
+        healthPane.addView(HorizontalScrollView(ctx).apply { isHorizontalScrollBarEnabled = false; addView(logFilterRow) })
         healthPane.addView(logTv)
         refreshHealthPane()
 
@@ -1692,19 +2245,19 @@ object MovieFoxSettingsDialog {
             if (idx == 0) {
                 serversListView.visibility = View.VISIBLE
                 actionRow.visibility = View.VISIBLE
-                chipRow.visibility = View.VISIBLE
+                chipScroll.visibility = View.VISIBLE
                 scrollView.visibility = View.GONE
             } else {
                 serversListView.visibility = View.GONE
                 actionRow.visibility = View.GONE
-                chipRow.visibility = View.GONE
+                chipScroll.visibility = View.GONE
                 scrollView.visibility = View.VISIBLE
                 scrollPanes.forEachIndexed { i, p -> p.visibility = if (i == idx - 1) View.VISIBLE else View.GONE }
                 if (idx == 4) refreshHealthPane()
             }
             tabButtons.forEachIndexed { i, btn ->
                 if (i == idx) {
-                    btn.background = pillBg(activeTheme.primaryHex, 15f)
+                    btn.background = pillBg(activeTheme.primaryHex, 13f)
                     btn.setTextColor(Color.WHITE)
                 } else {
                     btn.setBackgroundColor(Color.TRANSPARENT)
@@ -1723,23 +2276,26 @@ object MovieFoxSettingsDialog {
 
         val footer = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(ctx, 10) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(ctx, 9) }
         }
         footer.addView(Button(ctx).apply {
-            text = "RESET"; textSize = 12f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            background = pillBg("#1C2333", 16f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 42), 1f).apply { marginEnd = dp(ctx, 8) }
+            text = "RESET"; textSize = 11.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            background = pillBg("#1C2333", 15f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 40), 1f).apply { marginEnd = dp(ctx, 8) }
             setOnClickListener {
                 prefs(ctx).edit().clear().apply()
+                cachedCs3Repos = null
+                cachedCs3Servers.clear()
                 serverHealthMap.clear()
+                clearDiagnosticLogs()
                 applyServerFilter()
                 runCatching { dialog.dismiss() }
             }
         })
         footer.addView(Button(ctx).apply {
-            text = "SAVE & APPLY"; textSize = 12f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            background = pillBg(activeTheme.primaryHex, 16f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 42), 1.3f).apply { marginStart = dp(ctx, 8) }
+            text = "SAVE & APPLY"; textSize = 11.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            background = pillBg(activeTheme.primaryHex, 15f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 40), 1.3f).apply { marginStart = dp(ctx, 8) }
             setOnClickListener {
                 saveCs3Repos(ctx, cs3RepoList)
                 setSflixHost(ctx, selectedSflixHost)
