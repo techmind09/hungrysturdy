@@ -5,7 +5,7 @@ import com.lagradost.cloudstream3.plugins.BasePlugin
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 
 @CloudstreamPlugin
-class HungrySturdyPlugin : BasePlugin() {
+class Plugin : Plugin() {
 
     override fun load(context: Context) {
         MovieFoxSettingsDialog.bindContext(context)
