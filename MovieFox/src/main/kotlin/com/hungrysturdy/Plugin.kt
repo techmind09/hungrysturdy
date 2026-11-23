@@ -1,14 +1,14 @@
 package com.hungrysturdy
 
-import com.lagradost.cloudstream3.AcraApplication
+import android.content.Context
 import com.lagradost.cloudstream3.plugins.BasePlugin
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 
 @CloudstreamPlugin
 class Plugin : BasePlugin() {
 
-    override fun load() {
-        AcraApplication.context?.let { MovieFoxSettingsDialog.bindContext(it) }
+    override fun load(context: Context) {
+        MovieFoxSettingsDialog.bindContext(context)
 
         // Main MovieFox Provider (includes Prmovies, HindiDrama & Sflix servers)
         registerMainAPI(MovieFoxProvider())
@@ -85,6 +85,10 @@ class Plugin : BasePlugin() {
         registerExtractorAPI(KatHBPlayExtractor())
         registerExtractorAPI(KatFuckingFastExtractor())
         registerExtractorAPI(KatGoFlixExtractor())
+
+        openSettings = { ctx ->
+            MovieFoxSettingsDialog.show(ctx)
+        }
     }
 }
 
