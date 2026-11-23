@@ -1,4 +1,4 @@
-version = 15
+version = 4
 cloudstream {
     description = "MovieFox - Indian Hindi+English Movies&Web Series"
     authors = listOf("hungrysturdy")
