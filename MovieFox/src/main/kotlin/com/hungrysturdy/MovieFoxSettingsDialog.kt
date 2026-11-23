@@ -1,7 +1,9 @@
 package com.hungrysturdy
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.Dialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -9,15 +11,25 @@ import android.content.ContextWrapper
 import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.text.Editable
 import android.text.TextUtils
 import android.text.TextWatcher
 import android.util.Log
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -38,12 +50,13 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.ZipInputStream
 
 object MovieFoxSettingsDialog {
 
     const val LOG_TAG = "MovieFoxDiag"
-    private const val PREFS_NAME = "moviefox_ultra_max_v24"
+    private const val PREFS_NAME = "moviefox_ultra_max_v26"
     private const val KEY_SRV_PREFIX = "mf_srv_"
     private const val KEY_EXT_PREFIX = "mf_ext_"
     private const val KEY_SRV_ORDER = "mf_srv_order_csv"
@@ -80,9 +93,7 @@ object MovieFoxSettingsDialog {
 
     val SFLIX_HOSTS = listOf(
         "https://sflix.film",
-        "https://h5-api.aoneroom.com",
-        "https://movie-box.co",
-        "https://123moviesfree.club"
+        "https://h5-api.aoneroom.com"
     )
 
     data class ThemePalette(
@@ -111,7 +122,7 @@ object MovieFoxSettingsDialog {
         val isCustom: Boolean = false,
         val isHindi: Boolean = true,
         val category: String = "Movies",
-        val runtimeBadge: String = "⚡ SKY"
+        val runtimeBadge: String = "⚡ MF"
     )
 
     data class ExtractorItem(
@@ -169,10 +180,9 @@ object MovieFoxSettingsDialog {
         ExtractorItem("basejwp", "BaseJWP / Nitrox / NxStream", "itsnitrox.tech • nxstreamhub • vibuxer • vidprime", "WORKER"),
         ExtractorItem("jwp_embeds", "Lulu / Vidara / MegaCloud / Wish / Moon", "luluvid • vidara • megacloud • streamwish • filemoon", "EMBED")
     )
-    
 
     val BASE_SERVERS = listOf(
-        ServerItem("prmovies", "Prmovies", "HI/M3U8", "https://prmovies.com.cv/", "#F59E0B", false, true, "Movies", "⚡ MF"),
+        ServerItem("prmovies", "Prmovies", "HI/M3U8", "https://prmovies.coupons/", "#F59E0B", false, true, "Movies", "⚡ MF"),
         ServerItem("dramaverse", "DramaVerse", "K-DRAMA", "https://mydverse.com/", "#A855F7", false, true, "AsianDrama", "⚡ MF"),
         ServerItem("hindidrama", "HindiDrama", "K-DRA", "https://hindidrama.net/", "#EC4899", false, true, "AsianDrama", "⚡ MF"),
         ServerItem("katdrama", "KatDrama", "ASIAN", "https://katdrama.org/", "#38BDF8", false, true, "AsianDrama", "⚡ MF"),
@@ -180,10 +190,9 @@ object MovieFoxSettingsDialog {
         ServerItem("play4u", "Play4u", "HI/M3U8", "https://play4u.org/", "#FB923C", false, true, "Movies", "⚡ MF"),
         ServerItem("animeworld", "AnimeWorld", "ANIME", "https://watchanimeworld.top/", "#818CF8", false, true, "AsianDrama", "⚡ MF"),
         ServerItem("themoviesflix", "TheMoviesFlix", "4K/1080p", "https://one.1moviesflix.lol/", "#22D3EE", false, true, "Movies", "⚡ MF"),
-        ServerItem("vegamovies", "VegaMovies", "DUAL/HI", "https://vegamovies.pm/", "#FACC15", false, true, "Movies", "⚡ MF")
+        ServerItem("vegamovies", "VegaMovies", "DUAL/HI", "https://vegamovies.ps/", "#FACC15", false, true, "Movies", "⚡ MF")
     )
 
-    
     private val AVATAR_PALETTE = listOf(
         "#38BDF8", "#A855F7", "#F43F5E", "#34D399",
         "#FB923C", "#818CF8", "#22D3EE", "#EC4899", "#FACC15"
@@ -246,8 +255,8 @@ object MovieFoxSettingsDialog {
         try {
             val conn = (URL(srv.probeUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 8000
-                readTimeout = 8000
+                connectTimeout = 7000
+                readTimeout = 7000
                 instanceFollowRedirects = true
                 setRequestProperty("User-Agent", CF_BYPASS_UA)
                 getCookieForDomain(appContext, srv.probeUrl)?.let { setRequestProperty("Cookie", it) }
@@ -394,6 +403,7 @@ object MovieFoxSettingsDialog {
         var count = 0
         runCatching {
             val cm = CookieManager.getInstance()
+            cm.flush()
             SERVERS.forEach { srv ->
                 val cookie = cm.getCookie(srv.probeUrl)
                 if (!cookie.isNullOrBlank()) {
@@ -421,6 +431,198 @@ object MovieFoxSettingsDialog {
             URL(raw).host.lowercase().removePrefix("www.")
         }.getOrDefault(urlOrDomain.lowercase())
         return map[host] ?: map.entries.firstOrNull { host.endsWith(it.key) || it.key.endsWith(host) }?.value
+    }
+
+    // =========================================================================
+    // Advance CF WebView Solver + Auto Click Helper
+    // =========================================================================
+    @SuppressLint("SetJavaScriptEnabled")
+    fun openCfBypassWindow(
+        rawCtx: Context,
+        targetName: String,
+        targetUrl: String,
+        onCompleted: (() -> Unit)? = null
+    ) {
+        val ctx = resolveActivityContext(rawCtx)
+        if (!isContextAlive(ctx)) return
+        bindContext(ctx)
+
+        val handler = Handler(Looper.getMainLooper())
+        val finished = AtomicBoolean(false)
+        var dialogRef: Dialog? = null
+        var webViewRef: WebView? = null
+
+        val statusTv = TextView(ctx).apply {
+            text = "Loading $targetUrl..."
+            textSize = 11f
+            setTextColor(safeColor("#93C5FD"))
+            setPadding(0, dp(ctx, 2), 0, dp(ctx, 6))
+        }
+
+        fun tryCaptureCookie(forceSave: Boolean = false): Boolean {
+            return runCatching {
+                val cm = CookieManager.getInstance()
+                cm.flush()
+                val cookie = cm.getCookie(targetUrl).orEmpty()
+                val hasClearance = cookie.contains("cf_clearance", true) ||
+                    cookie.contains("PHPSESSID", true) ||
+                    cookie.contains("__cf_bm", true)
+                if (hasClearance || (forceSave && cookie.isNotBlank())) {
+                    saveCookieForDomain(ctx, targetUrl, cookie)
+                    true
+                } else {
+                    false
+                }
+            }.getOrDefault(false)
+        }
+
+        fun clickWebViewCenter() {
+            val wv = webViewRef ?: return
+            runCatching {
+                val cx = (wv.width / 2f).coerceAtLeast(10f)
+                val cy = (wv.height / 2f).coerceAtLeast(10f)
+                val now = SystemClock.uptimeMillis()
+                val down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, cx, cy, 0)
+                val up = MotionEvent.obtain(now, now + 90L, MotionEvent.ACTION_UP, cx, cy, 0)
+                wv.dispatchTouchEvent(down)
+                wv.dispatchTouchEvent(up)
+                down.recycle()
+                up.recycle()
+                wv.evaluateJavascript(
+                    """
+                    (function(){
+                        var btns = document.querySelectorAll('input[type=checkbox], button, [role=checkbox], .cb-i');
+                        for (var i=0; i<btns.length; i++) {
+                            try { btns[i].click(); } catch(e) {}
+                        }
+                    })();
+                    """.trimIndent(),
+                    null
+                )
+            }
+        }
+
+        fun closeWindow(saved: Boolean) {
+            if (!finished.compareAndSet(false, true)) return
+            handler.removeCallbacksAndMessages(null)
+            runCatching { webViewRef?.stopLoading(); webViewRef?.destroy() }
+            webViewRef = null
+            runCatching { dialogRef?.dismiss() }
+            dialogRef = null
+            if (saved) {
+                safeToast(ctx, "CF cookie saved for $targetName")
+            }
+            onCompleted?.invoke()
+        }
+
+        val pollRunnable = object : Runnable {
+            override fun run() {
+                if (finished.get()) return
+                if (tryCaptureCookie(forceSave = false)) {
+                    closeWindow(saved = true)
+                    return
+                }
+                handler.postDelayed(this, 1200L)
+            }
+        }
+
+        val container = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardBg("#0A0F1A", "#2563EB", 24f, 2)
+            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
+        }
+
+        container.addView(TextView(ctx).apply {
+            text = "🛡️ CF Advance Bypass • $targetName"
+            textSize = 15f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+        })
+        container.addView(statusTv)
+
+        val wvHeight = (ctx.resources.displayMetrics.heightPixels * 0.56f).toInt().coerceAtLeast(dp(ctx, 300))
+        val wv = WebView(ctx).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, wvHeight).apply {
+                bottomMargin = dp(ctx, 8)
+            }
+            settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                databaseEnabled = true
+                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                userAgentString = CF_BYPASS_UA
+                mediaPlaybackRequiresUserGesture = false
+            }
+            webChromeClient = WebChromeClient()
+            webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    if (finished.get()) return
+                    statusTv.text = "Loaded: ${url ?: targetUrl} • Tap CF Click if needed"
+                    if (tryCaptureCookie(forceSave = false)) {
+                        closeWindow(saved = true)
+                    }
+                }
+            }
+        }
+        webViewRef = wv
+        container.addView(wv)
+
+        val btnRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        btnRow.addView(Button(ctx).apply {
+            text = "⚡ CF Click"
+            textSize = 10.5f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            background = pillBg("#059669", 12f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1f).apply { marginEnd = dp(ctx, 5) }
+            setOnClickListener {
+                clickWebViewCenter()
+                handler.postDelayed({
+                    if (tryCaptureCookie(forceSave = true)) {
+                        closeWindow(saved = true)
+                    } else {
+                        statusTv.text = "Clicked! Complete challenge & tap Save Cookie"
+                    }
+                }, 900L)
+            }
+        })
+        btnRow.addView(Button(ctx).apply {
+            text = "✓ Save"
+            textSize = 10.5f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            background = pillBg("#2563EB", 12f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1f).apply { marginEnd = dp(ctx, 5) }
+            setOnClickListener {
+                tryCaptureCookie(forceSave = true)
+                closeWindow(saved = true)
+            }
+        })
+        btnRow.addView(Button(ctx).apply {
+            text = "Close"
+            textSize = 10.5f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            background = pillBg("#334155", 12f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 0.8f)
+            setOnClickListener { closeWindow(saved = false) }
+        })
+        container.addView(btnRow)
+
+        val dlg = AlertDialog.Builder(ctx).setView(container).setCancelable(false).create()
+        dialogRef = dlg
+        dlg.setOnDismissListener {
+            if (!finished.get()) closeWindow(saved = false)
+        }
+
+        runCatching {
+            CookieManager.getInstance().setAcceptCookie(true)
+            CookieManager.getInstance().setAcceptThirdPartyCookies(wv, true)
+            dlg.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            dlg.show()
+            val width = (ctx.resources.displayMetrics.widthPixels * 0.95).toInt()
+            dlg.window?.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT)
+            wv.loadUrl(targetUrl)
+            handler.postDelayed(pollRunnable, 1500L)
+        }
     }
 
     fun getSflixHost(ctx: Context): String =
@@ -537,7 +739,7 @@ object MovieFoxSettingsDialog {
                             isCustom = true,
                             isHindi = true,
                             category = "Movies",
-                            runtimeBadge = "⚡ SKY"
+                            runtimeBadge = "⚡ MF"
                         )
                     )
                 }
@@ -611,7 +813,7 @@ object MovieFoxSettingsDialog {
                 if (finalName.isBlank()) return@forEachIndexed
                 val url = pObj.optString("url").ifBlank { pObj.optString("mainUrl") }.ifBlank { pObj.optString("pluginUrl") }.ifBlank { defaultUrl }.trim()
                 val slug = finalName.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
-                out.add(ServerItem("cs3_${idTag}_${slug.ifBlank { "srv$idx" }}", finalName, "CS3", toRawGithubUrl(url), AVATAR_PALETTE[idx % AVATAR_PALETTE.size], true, true, "Movies", "⚡ SKY"))
+                out.add(ServerItem("cs3_${idTag}_${slug.ifBlank { "srv$idx" }}", finalName, "CS3", toRawGithubUrl(url), AVATAR_PALETTE[idx % AVATAR_PALETTE.size], true, true, "Movies", "⚡ MF"))
             }
         }
     }
@@ -785,7 +987,12 @@ object MovieFoxSettingsDialog {
         }
     }
 
-    private fun buildServerHealthCard(ctx: Context, srv: ServerItem, h: ServerHealthInfo?): LinearLayout {
+    private fun buildServerHealthCard(
+        ctx: Context,
+        srv: ServerItem,
+        h: ServerHealthInfo?,
+        onCfSolved: () -> Unit
+    ): LinearLayout {
         val isHealthy = h?.isHealthy == true
         val statusText = h?.status ?: "READY"
         val borderHex = when {
@@ -803,6 +1010,7 @@ object MovieFoxSettingsDialog {
             isHealthy -> "#34D399"
             else -> "#F87171"
         }
+        val hasCookie = getCookieForDomain(ctx, srv.probeUrl) != null
 
         return LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -860,19 +1068,18 @@ object MovieFoxSettingsDialog {
             addView(infoCol)
 
             addView(TextView(ctx).apply {
-                text = "CF"
+                text = if (hasCookie) "CF ✓" else "CF"
                 textSize = 8.5f
                 setTypeface(typeface, Typeface.BOLD)
-                setTextColor(safeColor(if (getCookieForDomain(ctx, srv.probeUrl) != null) "#34D399" else "#94A3B8"))
-                background = pillBg("#13202E", 10f)
+                setTextColor(safeColor(if (hasCookie) "#34D399" else "#38BDF8"))
+                background = pillBg(if (hasCookie) "#0D2B22" else "#0D2338", 10f)
                 setPadding(dp(ctx, 7), dp(ctx, 5), dp(ctx, 7), dp(ctx, 5))
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply { marginEnd = dp(ctx, 5) }
                 setOnClickListener {
-                    val c = getCookieForDomain(ctx, srv.probeUrl)
-                    safeToast(ctx, if (c != null) "CF cookie active for ${srv.name}" else "No saved CF cookie for ${srv.name}")
+                    openCfBypassWindow(ctx, srv.name, srv.probeUrl, onCfSolved)
                 }
             })
 
@@ -1334,9 +1541,21 @@ object MovieFoxSettingsDialog {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
         }
         cfHeader.addView(TextView(ctx).apply {
-            text = "🛡️ Cloudflare Bypass"
+            text = "🛡️ Cloudflare Advance Bypass"
             textSize = 13.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        cfHeader.addView(Button(ctx).apply {
+            text = "⚡ CF Click"; textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            background = pillBg("#059669", 10f)
+            setPadding(dp(ctx, 9), 0, dp(ctx, 9), 0)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 30)).apply { marginEnd = dp(ctx, 5) }
+            setOnClickListener {
+                val target = SERVERS.firstOrNull { it.key in listOf("prmovies", "dramaverse", "katdrama", "animeworld") } ?: SERVERS.first()
+                openCfBypassWindow(ctx, target.name, target.probeUrl) {
+                    applyServerFilter()
+                }
+            }
         })
         cfHeader.addView(Button(ctx).apply {
             text = "✓ Save"; textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
@@ -1351,7 +1570,7 @@ object MovieFoxSettingsDialog {
         cfBox.addView(cfHeader)
 
         cfBox.addView(TextView(ctx).apply {
-            text = "Solve the Cloudflare challenge once — cookies reused automatically across Prmovies, DramaVerse & KatDrama."
+            text = "Tap CF Click to open WebView & click/solve Cloudflare challenge — cookies are reused across servers."
             textSize = 10f; setTextColor(safeColor("#94A3B8"))
             setPadding(0, dp(ctx, 3), 0, dp(ctx, 6))
         })
@@ -1379,18 +1598,20 @@ object MovieFoxSettingsDialog {
         fun refreshCfBanner() {
             val savedCount = getSavedCookiesMap(ctx).size
             if (savedCount > 0) {
-                cfStatusBanner.text = "✓ CF Cookies Saved ($savedCount) - Refresh"
+                cfStatusBanner.text = "✓ CF Cookies Saved ($savedCount) - Tap for CF Click"
                 cfStatusBanner.setTextColor(safeColor("#6EE7B7"))
                 cfStatusBanner.background = cardBg("#08241C", "#10B981", 12f, 1)
             } else {
-                cfStatusBanner.text = "CF Cookies Ready - Tap to Sync"
+                cfStatusBanner.text = "⚡ CF Click - Tap to Open Bypass & Click"
                 cfStatusBanner.setTextColor(safeColor("#93C5FD"))
                 cfStatusBanner.background = cardBg("#0B1B2E", "#2563EB", 12f, 1)
             }
         }
         cfStatusBanner.setOnClickListener {
-            syncCookiesFromWebView(ctx)
-            refreshCfBanner()
+            val target = SERVERS.firstOrNull { it.key in listOf("prmovies", "dramaverse", "katdrama", "animeworld") } ?: SERVERS.first()
+            openCfBypassWindow(ctx, target.name, target.probeUrl) {
+                refreshCfBanner()
+            }
         }
         refreshCfBanner()
         cfBox.addView(cfStatusBanner)
@@ -1417,7 +1638,10 @@ object MovieFoxSettingsDialog {
             refreshCfBanner()
             healthCardsHolder.removeAllViews()
             SERVERS.forEach { srv ->
-                healthCardsHolder.addView(buildServerHealthCard(ctx, srv, getServerHealth(srv.key)))
+                healthCardsHolder.addView(buildServerHealthCard(ctx, srv, getServerHealth(srv.key)) {
+                    refreshHealthPane()
+                    applyServerFilter()
+                })
             }
             val logs = getDiagnosticLogs()
             logTv.text = if (logs.isEmpty()) "No error logs yet (ADB tag: $LOG_TAG)" else logs.asReversed().joinToString("\n\n")
