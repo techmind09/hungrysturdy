@@ -1943,63 +1943,118 @@ class MovieFoxProvider : MainAPI() {
         if (detailHtml.isBlank()) return
         val detailDoc = Jsoup.parse(detailHtml, matchedUrl)
 
-        var watchPageUrl = matchedUrl
-        if (lc.isTv && !matchedUrl.contains("/movies/")) {
-            val epLinks = detailDoc.select("a[href*=/episode/]").map { normalizeUrl(it.attr("href"), activeAnimeWorldBase) }.distinct()
-            epLinks.firstOrNull { href ->
+
+        val watchPageUrl = matchedUrl
+if (lc.isTv && !matchedUrl.contains("/movies/")) {
+    val epLinks = detailDoc.select("a[href*=/episode/]")
+        .map { normalizeUrl(it.attr("href"), activeAnimeWorldBase) }
+        .distinct()
+
+    val matchedEp = epLinks.firstOrNull { href ->
+        val m = Regex("""(\d+)x(\d+)""").find(href)
+        val sNum = m?.groupValues?.get(1)?.toIntOrNull()
+        val eNum = m?.groupValues?.get(2)?.toIntOrNull()
+        eNum == lc.episode && (sNum == null || sNum == lc.season)
+    }
+
+    if (matchedEp != null) {
+        watchPageUrl = matchedEp
+    } else {
+        val postId = detailDoc.select("[data-post]").firstOrNull()?.attr("data-post").orEmpty()
+        if (postId.isNotBlank()) {
+            val ajaxUrl = "$activeAnimeWorldBase/wp-admin/admin-ajax.php?action=action_select_season&season=${lc.season}&post=$postId"
+            val ajaxHtml = safeGetText(
+                ajaxUrl,
+                awHeaders + ("X-Requested-With" to "XMLHttpRequest"),
+                timeoutSec = lc.reqTimeoutSec,
+                retries = 2,
+                sourceTag = "animeworld"
+            ).orEmpty()
+            val ajaxEpLinks = Jsoup.parse(ajaxHtml, activeAnimeWorldBase)
+                .select("a[href*=/episode/]")
+                .map { normalizeUrl(it.attr("href"), activeAnimeWorldBase) }
+                .distinct()
+            ajaxEpLinks.firstOrNull { href ->
                 val m = Regex("""(\d+)x(\d+)""").find(href)
-                m?.groupValues?.get(2)?.toIntOrNull() == lc.episode
+                val eNum = m?.groupValues?.get(2)?.toIntOrNull()
+                eNum == lc.episode || ajaxEpLinks.size == 1
             }?.let { watchPageUrl = it }
         }
+    }
+}
 
-        val pageHtml = if (watchPageUrl == matchedUrl) detailHtml else {
-            safeGetText(watchPageUrl, awHeaders, timeoutSec = lc.reqTimeoutSec, retries = 2, sourceTag = "animeworld", useCloudflareBypass = true).orEmpty()
-        }
-        if (pageHtml.isBlank()) return
-        val pageDoc = Jsoup.parse(pageHtml, watchPageUrl)
+val pageHtml = if (watchPageUrl == matchedUrl) {
+    detailHtml
+} else {
+    safeGetText(
+        watchPageUrl,
+        awHeaders,
+        timeoutSec = lc.reqTimeoutSec,
+        retries = 2,
+        sourceTag = "animeworld",
+        useCloudflareBypass = true
+    ).orEmpty()
+}
+if (pageHtml.isBlank()) return
 
-        val iframes = pageDoc.select("iframe").mapNotNull { el ->
-            val src = el.attr("data-src").ifBlank { el.attr("src") }.trim()
-            if (src.isNotBlank()) normalizeUrl(src, activeAnimeWorldBase) else null
-        }.distinct()
+val pageDoc = Jsoup.parse(pageHtml, watchPageUrl)
+val iframes = pageDoc.select("iframe").mapNotNull { el ->
+    val src = el.attr("data-src").ifBlank { el.attr("src") }.trim()
+    if (src.isNotBlank()) normalizeUrl(src, activeAnimeWorldBase) else null
+}.distinct()
 
-        for (iframe in iframes) {
-            if (iframe.contains("zephyrix", true) || iframe.contains("zephyrflick", true)) {
-                val videoId = Regex("/video/([a-f0-9]+)").find(iframe)?.groupValues?.get(1) ?: continue
-                val playerBase = Regex("(https?://[^/]+)").find(iframe)?.groupValues?.get(1) ?: continue
-                val postRes = runCatching {
-                    app.post(
-                        "$playerBase/player/index.php?data=$videoId&do=getVideo",
-                        data = mapOf("hash" to videoId, "r" to "$activeAnimeWorldBase/"),
-                        headers = mapOf(
-                            "X-Requested-With" to "XMLHttpRequest",
-                            "Origin" to playerBase,
-                            "Referer" to "$playerBase/video/$videoId",
-                            "Accept" to "application/json, text/javascript, */*; q=0.01",
-                            "User-Agent" to awBrowserUa
-                        ),
-                        timeout = lc.reqTimeoutSec
-                    )
-                }.getOrNull() ?: continue
-                val vid = runCatching { parseJson<AwZephyrixVideo>(postRes.text) }.onFailure {
-                    MovieFoxSettingsDialog.logParsing("animeworld", iframe, "ZEPHYRIX_JSON", it)
-                }.getOrNull() ?: continue
-                val rawStream = vid.videoSource ?: vid.securedLink ?: continue
-                val streamUrl = if (rawStream.startsWith("http")) rawStream else "$playerBase$rawStream"
-                dispatchEmbedOrDirect(
-                    "AnimeWorld",
-                    "Multi-Audio HLS",
-                    streamUrl,
-                    "$playerBase/",
-                    lc,
-                    emitSub,
-                    emitLink,
-                    Qualities.P1080.value,
-                    mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-                )
+for (iframe in iframes) {
+    if (iframe.contains("zephyrix", true) || iframe.contains("zephyrflick", true)) {
+        val videoId = Regex("/video/([a-f0-9]+)").find(iframe)?.groupValues?.get(1) ?: continue
+        val playerBase = Regex("(https?://[^/]+)").find(iframe)?.groupValues?.get(1) ?: continue
+        val endpoint = "$playerBase/player/index.php?data=$videoId&do=getVideo"
+
+        val postRes = try {
+            app.post(
+                endpoint,
+                data = mapOf("hash" to videoId, "r" to "$activeAnimeWorldBase/"),
+                headers = mapOf(
+                    "X-Requested-With" to "XMLHttpRequest",
+                    "Origin" to playerBase,
+                    "Referer" to "$playerBase/video/$videoId",
+                    "Accept" to "application/json, text/javascript, */*; q=0.01",
+                    "User-Agent" to awBrowserUa
+                ),
+                timeout = lc.reqTimeoutSec
+            )
+        } catch (e: Exception) {
+            val isTimeout = e.message?.contains("timeout", true) == true ||
+                e.javaClass.simpleName.contains("Timeout", true) ||
+                e.javaClass.simpleName.contains("InterruptedIO", true)
+            if (isTimeout) {
+                MovieFoxSettingsDialog.logTimeout("animeworld", endpoint, lc.reqTimeoutSec, "GET_VIDEO")
+            } else {
+                logError("animeworld", endpoint, e, "GET_VIDEO")
             }
+            continue
+        }
+
+        val vid = runCatching { parseJson<AwZephyrixVideo>(postRes.text) }.onFailure {
+            MovieFoxSettingsDialog.logParsing("animeworld", iframe, "ZEPHYRIX_JSON", it)
+        }.getOrNull() ?: continue
+
+        val rawStream = vid.videoSource ?: vid.securedLink ?: continue
+        val streamUrl = normalizeUrl(rawStream, playerBase)
+        if (streamUrl.startsWith("http")) {
+            dispatchEmbedOrDirect(
+                "AnimeWorld",
+                "Multi-Audio HLS",
+                streamUrl,
+                "$playerBase/",
+                lc,
+                emitSub,
+                emitLink,
+                Qualities.P1080.value,
+                mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+            )
         }
     }
+}
 
     // =========================================================================
     // SERVER 8: THEMOVIESFLIX
