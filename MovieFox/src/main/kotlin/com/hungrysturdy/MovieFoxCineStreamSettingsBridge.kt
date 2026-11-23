@@ -37,18 +37,24 @@ object MovieFoxCineStreamSettingsBridge {
         BypassDomain("anidao.to/search?q=hi", "AniDao")
     )
 
+    private fun clearStoredKey(key: String) {
+        runCatching { setKey<String?>(key, null) }
+            .onFailure { runCatching { setKey(key, "") } }
+    }
+
     fun getCloudflareBypassDomains(): List<BypassDomain> = CLOUDFLARE_BYPASS_SITES
 
-    fun cloudflareBypassEnabled(): Boolean = getKey<Boolean>(CF_BYPASS_ENABLED) ?: true
+    fun cloudflareBypassEnabled(): Boolean =
+        runCatching { getKey<Boolean>(CF_BYPASS_ENABLED) }.getOrNull() ?: true
 
     fun getConcurrency(ctx: Context? = CloudStreamApp.context): Int {
-        val fromKey = getKey<Int>(CONCURRENCY_KEY)
+        val fromKey = runCatching { getKey<Int>(CONCURRENCY_KEY) }.getOrNull()
         if (fromKey != null && fromKey > 0) return fromKey.coerceIn(2, 50)
         return ctx?.let { MovieFoxSettingsDialog.getConcurrency(it) } ?: 10
     }
 
     fun allowDownloadLinks(ctx: Context? = CloudStreamApp.context): Boolean {
-        val fromKey = getKey<Boolean>(DOWNLOAD_ENABLE)
+        val fromKey = runCatching { getKey<Boolean>(DOWNLOAD_ENABLE) }.getOrNull()
         if (fromKey != null) return fromKey
         return ctx?.let { MovieFoxSettingsDialog.isDownloadOnly(it) } ?: false
     }
@@ -59,11 +65,17 @@ object MovieFoxCineStreamSettingsBridge {
             .removePrefix("http://")
             .removePrefix("www.")
             .substringBefore('/')
+            .substringBefore('?')
             .lowercase()
             .trim()
 
     fun hasCloudflareBypassForUrl(url: String): Boolean {
-        val host = Uri.parse(url).host?.lowercase()?.trim().orEmpty()
+        val trimmed = url.trim()
+        if (trimmed.isBlank()) return false
+        val withScheme = if (trimmed.contains("://")) trimmed else "https://$trimmed"
+        val host = runCatching { Uri.parse(withScheme).host?.lowercase()?.removePrefix("www.").orEmpty() }
+            .getOrDefault("")
+            .ifBlank { normalizeBypassDomain(trimmed) }
         if (host.isBlank()) return false
         return CLOUDFLARE_BYPASS_SITES.any { site ->
             val norm = normalizeBypassDomain(site.domain)
@@ -73,8 +85,8 @@ object MovieFoxCineStreamSettingsBridge {
 
     private fun cookieKeyForDomain(urlOrDomain: String): String {
         val domain = if (urlOrDomain.contains("://")) {
-            Uri.parse(urlOrDomain).host?.lowercase()?.removePrefix("www.")
-                ?: normalizeBypassDomain(urlOrDomain)
+            runCatching { Uri.parse(urlOrDomain).host?.lowercase()?.removePrefix("www.") }.getOrNull()
+                ?.takeIf { it.isNotBlank() } ?: normalizeBypassDomain(urlOrDomain)
         } else {
             normalizeBypassDomain(urlOrDomain)
         }
@@ -84,6 +96,7 @@ object MovieFoxCineStreamSettingsBridge {
     fun saveCookieForDomain(urlOrDomain: String, cookies: String) {
         val k = cookieKeyForDomain(urlOrDomain)
         val clean = cookies.trim()
+        if (k.isBlank() || clean.isBlank()) return
         localCookieStore[k] = clean
         runCatching { setKey(k, clean) }
     }
@@ -100,7 +113,7 @@ object MovieFoxCineStreamSettingsBridge {
     fun removeCookieForDomain(urlOrDomain: String) {
         val k = cookieKeyForDomain(urlOrDomain)
         localCookieStore.remove(k)
-        runCatching { setKey(k, null as String?) }
+        clearStoredKey(k)
     }
 
     fun stremioAddonKey(name: String): String =
@@ -109,20 +122,26 @@ object MovieFoxCineStreamSettingsBridge {
     fun getStremioAddons(): MutableList<StremioAddon> {
         val raw = runCatching { getKey<String>(STREMIO_ADDONS_KEY) }.getOrNull() ?: return mutableListOf()
         return raw.lines().filter { it.isNotBlank() }.mapNotNull { line ->
-            val parts = line.split("|")
-            if (parts.size < 3) return@mapNotNull null
-            val type = runCatching { AddonType.valueOf(parts[2]) }.getOrDefault(AddonType.HTTPS)
-            StremioAddon(name = parts[0], url = parts[1], type = type)
+            val firstPipe = line.indexOf('|')
+            val lastPipe = line.lastIndexOf('|')
+            if (firstPipe <= 0 || lastPipe <= firstPipe) return@mapNotNull null
+            val addonName = line.substring(0, firstPipe).trim()
+            val addonUrl = line.substring(firstPipe + 1, lastPipe).trim()
+            val typeStr = line.substring(lastPipe + 1).trim()
+            if (addonName.isBlank() || addonUrl.isBlank()) return@mapNotNull null
+            val type = runCatching { AddonType.valueOf(typeStr) }.getOrDefault(AddonType.HTTPS)
+            StremioAddon(name = addonName, url = addonUrl, type = type)
         }.toMutableList()
     }
 
     fun saveStremioAddons(addons: List<StremioAddon>) {
         if (addons.isEmpty()) {
-            runCatching { setKey(STREMIO_ADDONS_KEY, null as String?) }
+            clearStoredKey(STREMIO_ADDONS_KEY)
         } else {
-            runCatching {
-                setKey(STREMIO_ADDONS_KEY, addons.joinToString("\n") { "${it.name}|${it.url}|${it.type}" })
-            }
+            val serialized = addons
+                .filter { it.name.isNotBlank() && it.url.isNotBlank() }
+                .joinToString("\n") { "${it.name.trim()}|${it.url.trim()}|${it.type.name}" }
+            runCatching { setKey(STREMIO_ADDONS_KEY, serialized) }
         }
         val validKeys = addons.map { stremioAddonKey(it.name) }.toSet()
         val current = runCatching { getKey<String>(PROVIDER_ORDER_KEY) }.getOrNull()
@@ -161,3 +180,4 @@ object MovieFoxCineStreamSettingsBridge {
         return ctx?.let { MovieFoxSettingsDialog.getServerOrder(it) } ?: allKnown
     }
 }
+
