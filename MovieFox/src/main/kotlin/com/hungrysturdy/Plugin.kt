@@ -1,16 +1,25 @@
 package com.hungrysturdy
 
-import com.lagradost.cloudstream3.CloudStreamApp
-import com.lagradost.cloudstream3.plugins.BasePlugin
+import android.content.Context
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
+import com.lagradost.cloudstream3.plugins.Plugin
 
 @CloudstreamPlugin
-class Plugin : BasePlugin() {
+class MovieFoxPlugin : Plugin() {
 
-    override fun load() {
-        CloudStreamApp.context?.let { MovieFoxSettingsDialog.bindContext(it) }
+    init {
+        openSettings = { ctx: Context ->
+            MovieFoxSettingsDialog.show(ctx)
+        }
+    }
 
-        // Main MovieFox Provider (includes Prmovies, HindiDrama & Sflix servers)
+    override fun load(context: Context) {
+        MovieFoxSettingsDialog.bindContext(context)
+        openSettings = { ctx: Context ->
+            MovieFoxSettingsDialog.show(ctx)
+        }
+
+        // Main MovieFox Provider (Prmovies, DramaVerse, HindiDrama, KatDrama & Sflix)
         registerMainAPI(MovieFoxProvider())
 
         // Base & Google Drive Extractors
