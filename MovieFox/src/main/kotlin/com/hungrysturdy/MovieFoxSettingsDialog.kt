@@ -120,13 +120,9 @@ object MovieFoxSettingsDialog {
     )
 
     val BASE_SERVERS = listOf(
-        ServerItem("vidsrc_pro", "VidSrc Pro", "EMBED/M3U8", "https://vidsrc.pro/", "#38BDF8", false, false),
-        ServerItem("vidsrc_me", "VidSrc ME", "EMBED/M3U8", "https://vidsrc.me/", "#60A5FA", false, false),
-        ServerItem("embedsu", "EmbedSu", "EMBED/HLS", "https://embed.su/", "#22D3EE", false, false),
-        ServerItem("autoembed", "AutoEmbed", "STREAM/MP4", "https://autoembed.cc/", "#818CF8", false, false),
-        ServerItem("cinemacity", "CinemaCity", "EMBED/MP4", "https://cinemacity.cc/", "#34D399", false, true),
-        ServerItem("anidao", "AniDao", "ANIME/HLS", "https://anidao.to/", "#F472B6", false, true),
-        ServerItem("netmirror", "NetMirror", "STREAM/MP4", "https://net52.cc/", "#A78BFA", false, true),
+        ServerItem("purstream", "Purstream", "API", "https://moviefox.pro/api/stream/purstream", "#38BDF8", false, true),
+        ServerItem("castle", "Castle", "API", "https://moviefox.pro/api/stream/castle", "#818CF8", false, true),
+        ServerItem("watchout", "Watchout", "API", "https://moviefox.pro/api/stream/watchout", "#2DD4BF", false, false),
         ServerItem("cinetv_api", "CineTV API", "WEB/API", "https://cinetv.app/", "#F43F5E", false, true),
         ServerItem("cinetv_hls", "CineTV HLS", "WORKER", "https://silent-frost-f2dbv.nxstreamhub.workers.dev/hls/", "#FB7185", false, true),
         ServerItem("vegamovies", "VegaMovies", "FSL/PXL", "https://vegamovies.lease/", "#EC4899", false, true),
@@ -143,8 +139,6 @@ object MovieFoxSettingsDialog {
         BypassSite("anidao.to", "AniDao"),
         BypassSite("animepahe.ru", "AnimePahe"),
         BypassSite("net52.cc", "NetMirror"),
-        BypassSite("vidsrc.pro", "VidSrc Pro"),
-        BypassSite("embed.su", "EmbedSu"),
         BypassSite("moviefox.pro", "MovieFox"),
         BypassSite("cinetv.app", "CineTV"),
         BypassSite("vegamovies.lease", "VegaMovies"),
@@ -181,6 +175,29 @@ object MovieFoxSettingsDialog {
 
     val SERVERS: List<ServerItem>
         get() = BASE_SERVERS + cachedCs3Servers.toList()
+
+    fun bindContext(ctx: Context?) {
+        if (ctx != null) prefs(ctx)
+    }
+
+    fun reportServerStatus(
+        sourceTag: String,
+        status: String,
+        ok: Boolean,
+        code: Int,
+        latencyMs: Long,
+        url: String
+    ) {
+        reportServerResult(cachedPrefs?.let { null }, sourceTag, ok, latencyMs)
+    }
+
+    fun logSiteError(
+        sourceTag: String,
+        url: String,
+        error: Throwable?,
+        message: String
+    ) {
+    }
 
     private fun isContextAlive(ctx: Context?): Boolean {
         if (ctx == null) return false
@@ -296,7 +313,7 @@ object MovieFoxSettingsDialog {
     fun isStreamOnly(ctx: Context): Boolean = isLowBufferMode(ctx)
     fun getParallelServers(ctx: Context): Int = getConcurrency(ctx)
 
-    fun getConcurrency(ctx: Context): Int = prefs(ctx).getInt(KEY_CONCURRENCY, 16)
+    fun getConcurrency(ctx: Context): Int = prefs(ctx).getInt(KEY_CONCURRENCY, 15)
     fun setConcurrency(ctx: Context, value: Int) = prefs(ctx).edit().putInt(KEY_CONCURRENCY, value.coerceIn(2, 50)).apply()
 
     fun getTimeoutSeconds(ctx: Context): Int = prefs(ctx).getInt(KEY_TIMEOUT_SEC, 8)
@@ -1102,7 +1119,7 @@ object MovieFoxSettingsDialog {
             textSize = 12f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#C084FC"))
             setPadding(dp(ctx, 4), dp(ctx, 6), dp(ctx, 4), dp(ctx, 6))
         })
-        makeToggleCard(streamPane, "Hindi Providers Only 🇮🇳", "Hide English-only providers, show Hindi links only", hindiOnly) {
+        makeToggleCard(streamPane, "Hindi Providers Only", "Hide English-only providers, show Hindi links only", hindiOnly) {
             hindiOnly = it; setHindiOnly(ctx, it); applyServerFilter()
         }
         makeToggleCard(streamPane, "Download Only Links", "Prefer direct MP4/MKV links optimized for downloading", downloadOnly) {
@@ -1146,7 +1163,7 @@ object MovieFoxSettingsDialog {
             streamPane.addView(card)
         }
 
-        makeStepper("Concurrent Threads", "Up to 50 parallel requests (12-18 optimal)", currentConcurrency, 2, 50, 1, "x") {
+        makeStepper("Concurrent Threads", "Up to 50 parallel requests (10-15 optimal)", currentConcurrency, 2, 50, 1, "x") {
             currentConcurrency = it; setConcurrency(ctx, it); refreshStats()
         }
         makeStepper("Server Timeout", "Wait limit per source", currentTimeout, 4, 20, 1, "s") {
