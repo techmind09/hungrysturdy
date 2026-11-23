@@ -10,6 +10,11 @@ class Plugin : Plugin() {
         // Main Providers
         registerMainAPI(SflixProvider())
         registerMainAPI(HindiDramaProvider())
+        registerMainAPI(Movies4uProvider())
+
+        // HubCloud & GDFlix Extractors
+        registerExtractorAPI(HubCloudExtractor())
+        registerExtractorAPI(GDFlixExtractor())
 
         // LuluStream Extractors
         registerExtractorAPI(LuluVidExtractor())
