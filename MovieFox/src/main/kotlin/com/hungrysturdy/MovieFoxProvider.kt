@@ -1220,8 +1220,11 @@ class MovieFoxProvider : MainAPI() {
 
         val matchedCount = tWords.count { it in cWords }
         val ratio = matchedCount.toDouble() / tWords.size.toDouble()
-        val firstWordMatched = tWords.first() in cWords
-        return ratio >= 0.60 || (firstWordMatched && ratio >= 0.50)
+        return if (tWords.size == 2) {
+            matchedCount == 2 || (ratio >= 0.65 && tWords.first() in cWords)
+        } else {
+            matchedCount >= 2 && ratio >= 0.50
+        }
     }
 
     private fun buildSourceLabel(siteTag: String, server: String, info: String): String {
@@ -2951,12 +2954,9 @@ class MovieFoxProvider : MainAPI() {
                 }
                 if (matchedPath == null) {
                     logTitleMismatch("moviebox", "$bffBase/subject/search", firstItemTitle, lc.pageTitle)
-                    for (i in 0 until itemsArr.length()) {
-                        val dPath = itemsArr.optJSONObject(i)?.safeStr("detailPath").orEmpty()
-                        if (dPath.isNotBlank()) { matchedPath = dPath; break }
-                    }
+                    continue
                 }
-                val detailPath = matchedPath ?: continue
+                val detailPath = matchedPath
                 val detailRaw = safeGetText("$bffBase/detail?detailPath=${safeEncode(detailPath)}", headers, timeoutSec = 5L, retries = 1, sourceTag = "moviebox").orEmpty()
                 val subjectObj = runCatching { JSONObject(detailRaw).optJSONObject("data")?.optJSONObject("subject") }.getOrNull() ?: continue
                 val dubsArr = subjectObj.optJSONArray("dubs") ?: JSONArray().apply {
