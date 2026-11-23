@@ -61,20 +61,20 @@ class MovieFoxProvider : MainAPI() {
     private val phisherDomainsUrl = MfRegistries.PHISHER_DOMAINS_JSON
     private val kaperwanUrlsJson = MfRegistries.KAPERWAN_URLS_JSON
 
-    private val cineTvUrls = listOf("https://cinetv.app/en", "https://cinetv.app")
+    private val cineTvUrls = listOf("https://cinetv.app", "https://cinetv.app/en")
     private val cineTvBaseUrl = "https://cinetv.app"
-    private val cineTvHlsWorker = MfApiEndpoints.CINETV_HLS_WORKER
+    private val cineTvHlsWorker = "https://silent-frost-f2dbv.nxstreamhub.workers.dev/hls"
 
     private val prmoviesMirrors = listOf(
-        "https://prmovies.com.cv",
         "https://prmovies.beer",
         "https://prmovies.repair",
+        "https://prmovies.com.cv",
         "https://prmovies.coupons",
         "https://prmovies.kids",
         "https://prmovies.com"
     )
     @Volatile
-    private var activePrmoviesBase = "https://prmovies.com.cv"
+    private var activePrmoviesBase = "https://prmovies.beer"
 
     private val hindiDramaBaseUrl = "https://hindidrama.net"
     private val animeWorldBaseUrl = "https://watchanimeworld.top"
@@ -82,10 +82,12 @@ class MovieFoxProvider : MainAPI() {
     private val sportSiteUrl = MfApiEndpoints.SPORT_WEB_URL
 
     private val vegamoviesDomains = listOf(
-        "https://new1.vegamovies.lease",
         "https://vegamovies.lease",
-        "https://rogmovies.autos",
+        "https://vegamovies.wales",
+        "https://rogmovies.vip",
         "https://rogmovies.im",
+        "https://rogmovies.autos",
+        "https://new1.vegamovies.lease",
         "https://rogmovies.one",
         "https://rogmovies.asia"
     )
@@ -111,10 +113,10 @@ class MovieFoxProvider : MainAPI() {
         "https://sflix.film",
         "https://h5-api.aoneroom.com",
         "https://movie-box.co",
+        "https://123moviesfree.club",
         "https://movieboxonline.net",
         "https://movieboxhd.net",
-        "https://netnaija.film",
-        "https://123moviesfree.club"
+        "https://netnaija.film"
     )
     private val sflixPlayerUrl = "https://mzfi.me"
     private val sflixSecretB64 = "NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw=="
@@ -125,8 +127,9 @@ class MovieFoxProvider : MainAPI() {
 
     private val netnaijaDomains = listOf(
         "https://netnaija.film",
-        "https://netnaija.com.ng",
-        "https://www.thenetnaija.net"
+        "https://www.thenetnaija.net",
+        "https://netnaija.xyz",
+        "https://netnaija.com.ng"
     )
     @Volatile
     private var activeNetnaijaBase = "https://netnaija.film"
@@ -137,7 +140,8 @@ class MovieFoxProvider : MainAPI() {
 
     private val hdhub4uDomains = listOf(
         "https://new15.hdhub4u.cl",
-        "https://new13.hdhub4u.cl"
+        "https://new13.hdhub4u.cl",
+        "https://search.pingora.fyi"
     )
     private val hdhub4uTypesenseUrl = MfApiEndpoints.HDHUB4U_TYPESENSE
     private val dramaVerseBaseUrl = "https://mydverse.com"
@@ -151,7 +155,7 @@ class MovieFoxProvider : MainAPI() {
     )
     private val netmirrorDomains = listOf("https://net52.cc", "https://netmirror.gold")
     private val movyMainUrl = "https://www.movy.sx"
-    private val movyStreamApiBase = MfApiEndpoints.MOVY_STREAM_API
+    private val movyStreamApiBase = "https://api.wecollege.net"
     private val fourKhdHubDomains = listOf("https://4khdhub.one")
     private val movies4uDomains = listOf(
         "https://new8.movies4u.garden",
@@ -230,7 +234,8 @@ class MovieFoxProvider : MainAPI() {
         "moviefox", "cinestream", "purstream", "castle", "watchout", "cinetv_api", "cinetv_hls",
         "play4u", "sflix", "moviebox", "movy", "nuvio", "hicine", "hindidrama",
         "animeworldindia", "sportslive", "vidrock", "videasy", "vidzee", "allmovieland",
-        "skymovies", "4khdhub", "moviesdrive", "uhdmovies", "primesrc", "animesalt", "kisskh"
+        "skymovies", "4khdhub", "moviesdrive", "uhdmovies", "primesrc", "animesalt", "kisskh",
+        "movieblast", "hdhub4u", "vegamovies", "rogmovies", "bollyflix"
     ) + cineStreamProviderCatalog.keys
 
     private val dynamicDomainCache = ConcurrentHashMap<String, String>()
@@ -244,7 +249,7 @@ class MovieFoxProvider : MainAPI() {
     private val multiAudioRegex = Regex(
         """(?i)\b(hindi|english|tamil|telugu|kannada|malayalam|punjabi|marathi|bengali|urdu|gujarati|""" +
             """japanese|korean|chinese|spanish|french|german|russian|turkish|arabic|""" +
-            """dual[ -]?audio|multi[ -]?audio|hin|eng|tam|tel|mal|kan|kor|jpn|chi|spa|fre|ger)\b"""
+            """dual[ -]?audio|multi[ -]?audio|original|hin|eng|tam|tel|mal|kan|kor|jpn|chi|spa|fre|ger)\b"""
     )
 
     override val supportedTypes = setOf(
@@ -331,7 +336,6 @@ class MovieFoxProvider : MainAPI() {
             low.contains("gstatic.com") ||
             low.contains("gravatar.com") ||
             low.contains("cloudflare.com") ||
-            low.contains("vegamovies.wales") ||
             low.contains("vegamovies.latino") ||
             low.length < 10
     }
@@ -581,6 +585,7 @@ class MovieFoxProvider : MainAPI() {
         "korean", "kor" -> "Korean"
         "chinese", "chi" -> "Chinese"
         "spanish", "spa" -> "Spanish"
+        "original" -> "Original"
         "dualaudio" -> "Dual Audio"
         "multiaudio" -> "Multi Audio"
         else -> token.trim().replaceFirstChar { it.uppercase() }
@@ -595,6 +600,19 @@ class MovieFoxProvider : MainAPI() {
             }
         }
         return found.joinToString("/")
+    }
+
+    private fun extractQualityTag(vararg texts: String?): String {
+        val combined = texts.filterNot { it.isNullOrBlank() }.joinToString(" ")
+        return when {
+            Regex("""(?i)\b(2160p?|4k|uhd)\b""").containsMatchIn(combined) -> "4K"
+            Regex("""(?i)\b1440p?\b""").containsMatchIn(combined) -> "1440p"
+            Regex("""(?i)\b(1080p?|fhd)\b""").containsMatchIn(combined) -> "1080p"
+            Regex("""(?i)\b720p?\b""").containsMatchIn(combined) -> "720p"
+            Regex("""(?i)\b480p?\b""").containsMatchIn(combined) -> "480p"
+            Regex("""(?i)\b360p?\b""").containsMatchIn(combined) -> "360p"
+            else -> ""
+        }
     }
 
     private fun encodeLoadData(
@@ -1234,6 +1252,7 @@ class MovieFoxProvider : MainAPI() {
             quality.contains("1080") -> Qualities.P1080.value
             quality.contains("720") -> Qualities.P720.value
             quality.contains("480") -> Qualities.P480.value
+            quality.contains("360") -> Qualities.P360.value
             else -> Qualities.P1080.value
         }
     }
@@ -1242,7 +1261,7 @@ class MovieFoxProvider : MainAPI() {
         val anyToggleEnabled = lc.allow4k || lc.allow1080 || lc.allow720 || lc.allow480
         if (!anyToggleEnabled) return true
         val raw = qualityStr.orEmpty()
-        val hasExplicitTag = Regex("""\b(2160|1440|1080|720|480|4k|uhd|fhd|hd)\b""", RegexOption.IGNORE_CASE).containsMatchIn(raw)
+        val hasExplicitTag = Regex("""\b(2160|1440|1080|720|480|360|4k|uhd|fhd|hd)\b""", RegexOption.IGNORE_CASE).containsMatchIn(raw)
         if (!hasExplicitTag) return true
         return when {
             qualityValue >= Qualities.P1440.value -> lc.allow4k
@@ -1356,22 +1375,40 @@ class MovieFoxProvider : MainAPI() {
         }
     }
 
+    /**
+     * Video 3 jaisa clean server formatting:
+     * Example: "4KHDHub [Hub-Cloud(FSL2 Server)] 4K", "Allmovieland [Telugu] 1080p",
+     * "MovieBlast [Multi Audio] 720p", "MovieBox [Original] 720p", "Skymovies [Voe] 720p"
+     */
     private fun buildSourceLabel(siteTag: String, server: String, info: String): String {
+        val cleanSite = siteTag.trim()
         val cleanServer = server.replace(Regex("(?i)^null$"), "").trim()
-        val audioTag = extractAudioSummary(info, cleanServer, siteTag)
-        val cleanInfo = info.replace(Regex("""\s+"""), " ").trim().let { raw ->
-            if (audioTag.isNotBlank() && !raw.contains(audioTag, ignoreCase = true)) {
-                if (raw.isBlank()) audioTag else "$raw • $audioTag"
-            } else {
-                raw
-            }
+        val audioTag = extractAudioSummary(info, cleanServer, cleanSite)
+        val qualityTag = extractQualityTag(info, cleanServer)
+
+        val brackets = mutableListOf<String>()
+        if (cleanServer.isNotBlank() && !cleanServer.equals(cleanSite, ignoreCase = true)) {
+            brackets.add(cleanServer)
         }
-        return when {
-            cleanServer.isNotBlank() && cleanInfo.isNotBlank() -> "$siteTag • $cleanServer ($cleanInfo)"
-            cleanServer.isNotBlank() -> "$siteTag • $cleanServer"
-            cleanInfo.isNotBlank() -> "$siteTag ($cleanInfo)"
-            else -> siteTag
-        }.take(68)
+        if (audioTag.isNotBlank() && brackets.none { it.contains(audioTag, ignoreCase = true) }) {
+            brackets.add(audioTag)
+        }
+
+        val bracketPart = if (brackets.isNotEmpty()) " [${brackets.joinToString(" • ")}]" else ""
+        val extraInfo = info
+            .replace(qualityTag, "", ignoreCase = true)
+            .replace(audioTag, "", ignoreCase = true)
+            .replace(cleanServer, "", ignoreCase = true)
+            .replace(Regex("""[()•|/-]+"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+
+        val tail = listOfNotNull(
+            extraInfo.takeIf { it.isNotBlank() && bracketPart.isBlank() },
+            qualityTag.takeIf { it.isNotBlank() }
+        ).joinToString(" ")
+
+        return "$cleanSite$bracketPart${if (tail.isNotBlank()) " $tail" else ""}".trim().take(80)
     }
 
     private fun extractCandidateMediaAndEmbedUrls(text: String, baseUrl: String): List<Pair<String, String>> {
@@ -1383,7 +1420,7 @@ class MovieFoxProvider : MainAPI() {
             }
 
         val hostPattern = Regex(
-            """https?://[^\s"'<>\\)\]]*(?:filemoon|streamtape|voe|dood|mixdrop|upstream|vidhide|streamwish|luluvdo|pixeldrain|gofile|hubcloud|vcloud|nexdrive|mobilejsr|xcloud|fastdl|fsl|speedostream|gdflix|gdlink|gdtot|driveseed|driveleech|filepress|dotflix|hblinks|hubdrive|howblogs|linksmod|wootly|videostr|streameeeeee|megaplay|vidwish|vidtube|modiplay|vibeplayer|vivibebe|bibiemb|iqsmartgames|vidsrc|embedsu|autoembed|nxstreamhub|itsnitrox|vibuxer|zephyrix|zephyrflick|watchanimeworld|acek-cdn)[^\s"'<>\\)\]]*""",
+            """https?://[^\s"'<>\\)\]]*(?:filemoon|streamtape|voe|dood|mixdrop|upstream|vidhide|streamwish|luluvdo|pixeldrain|gofile|hubcloud|vcloud|nexdrive|mobilejsr|xcloud|fastdl|fsl|speedostream|gdflix|gdlink|gdtot|driveseed|driveleech|filepress|dotflix|hblinks|hubdrive|howblogs|linksmod|wootly|videostr|streameeeeee|megaplay|vidwish|vidtube|modiplay|vibeplayer|vivibebe|bibiemb|iqsmartgames|vidsrc|embedsu|autoembed|nxstreamhub|itsnitrox|vibuxer|zephyrix|zephyrflick|watchanimeworld|acek-cdn|streameash|live\s*mp4)[^\s"'<>\\)\]]*""",
             RegexOption.IGNORE_CASE
         )
         hostPattern.findAll(text).forEach { m ->
@@ -1460,7 +1497,7 @@ class MovieFoxProvider : MainAPI() {
         if (!m3u8.isNullOrBlank()) {
             emitStream(
                 lc,
-                buildSourceLabel(siteTag, "Iqsmartgames", audioTag),
+                buildSourceLabel(siteTag, "Iqsmartgames", "1080p $audioTag"),
                 m3u8,
                 m3u8.contains(".m3u8", true),
                 "1080p $audioTag",
@@ -1528,14 +1565,16 @@ class MovieFoxProvider : MainAPI() {
             val passVega = !vegaOnlyFilter ||
                 MovieFoxSettingsDialog.isVegaAllowedHost("${ex.name} ${ex.source} ${ex.url}")
             if (passVega && !isJunkCandidateUrl(ex.url) && lc.seenUrls.add(ex.url)) {
-                val labeled = buildSourceLabel(siteTag, ex.name.ifBlank { ex.source }, audioTag)
+                val rawHostName = ex.name.ifBlank { ex.source }
+                val qTag = extractQualityTag(rawHostName, ex.url)
+                val labeled = buildSourceLabel(siteTag, rawHostName, "$audioTag $qTag")
                 val isStream = isStreamOrHlsLink(ex.url, ex.type)
                 val outLink = ExtractorLink(
                     source = siteTag,
                     name = if (lc.streamOnly && isStream) "⚡ $labeled" else labeled,
                     url = ex.url,
                     referer = ex.referer.ifBlank { referer },
-                    quality = if (ex.quality > 0) ex.quality else getQuality(ex.name),
+                    quality = if (ex.quality > 0) ex.quality else getQuality(rawHostName),
                     headers = ex.headers,
                     extractorData = ex.extractorData,
                     type = ex.type
@@ -1608,7 +1647,7 @@ class MovieFoxProvider : MainAPI() {
         lc: LinkContext,
         emitSub: (SubtitleFile) -> Unit,
         emitLink: (ExtractorLink, Boolean) -> Unit,
-        maxItems: Int = 6,
+        maxItems: Int = 8,
         vegaOnlyFilter: Boolean = false
     ) {
         val gate = Semaphore(5)
@@ -1620,12 +1659,17 @@ class MovieFoxProvider : MainAPI() {
                             try {
                                 if (kind == "DIRECT") {
                                     if (!vegaOnlyFilter || MovieFoxSettingsDialog.isVegaAllowedHost(u)) {
+                                        val hostHint = when {
+                                            u.contains(".mp4", true) -> "Live MP4"
+                                            u.contains(".m3u8", true) -> "HLS"
+                                            else -> ""
+                                        }
                                         emitStream(
                                             lc,
-                                            buildSourceLabel(siteTag, "", audioTag),
+                                            buildSourceLabel(siteTag, hostHint, audioTag),
                                             u,
                                             isM3u8Stream(u, ""),
-                                            audioTag,
+                                            "$hostHint $audioTag",
                                             mapOf("Referer" to referer, "User-Agent" to effectiveUa),
                                             emitLink
                                         )
@@ -1753,9 +1797,9 @@ class MovieFoxProvider : MainAPI() {
         return try {
             val appCtx = CloudStreamApp.context
             val timeoutSec = currentTimeoutSec(8L)
-            val fastBudgetMs = 10_000L
+            val fastBudgetMs = 11_000L
             val deepBudgetMs = 18_000L
-            val maxConcurrency = (appCtx?.let { MovieFoxSettingsDialog.getParallelServers(it) } ?: 18).coerceIn(8, 36)
+            val maxConcurrency = (appCtx?.let { MovieFoxSettingsDialog.getParallelServers(it) } ?: 20).coerceIn(8, 36)
             val workerSemaphore = Semaphore(maxConcurrency)
 
             val lc = buildLinkContext(data, timeoutSec) ?: return false
@@ -1840,9 +1884,15 @@ class MovieFoxProvider : MainAPI() {
             timeoutSec = lc.timeoutSec,
             subtitleCallback = emitSub,
             callback = { ex ->
+                val rawName = ex.name.trim()
+                val formattedName = when {
+                    rawName.startsWith(displayName, ignoreCase = true) -> rawName
+                    rawName.isBlank() -> displayName
+                    else -> "$displayName [$rawName]"
+                }
                 val tagged = ExtractorLink(
                     source = displayName,
-                    name = if (ex.name.startsWith(displayName, true)) ex.name else "$displayName • ${ex.name}",
+                    name = formattedName.take(80),
                     url = ex.url,
                     referer = ex.referer,
                     quality = ex.quality,
@@ -2049,7 +2099,7 @@ class MovieFoxProvider : MainAPI() {
                     val streamUrl = if (rawSrc.startsWith("http")) rawSrc else "$playerBase$rawSrc"
                     emitStream(
                         lc = lc,
-                        serverName = buildSourceLabel("Anime World India", "Zephyrix", "Multi Audio"),
+                        serverName = buildSourceLabel("Anime World India", "Zephyrix", "Multi Audio 1080p"),
                         streamUrl = streamUrl,
                         isHls = true,
                         qualityStr = "1080p Multi Audio",
@@ -2178,10 +2228,21 @@ class MovieFoxProvider : MainAPI() {
         if (isHls && !isValidManifestResponse(streamUrl, customHeaders)) return
 
         val audioSummary = extractAudioSummary(qualityStr, serverName, lc.pageTitle)
-        val withAudio = if (audioSummary.isNotBlank() && !serverName.contains(audioSummary, ignoreCase = true)) {
-            "$serverName [$audioSummary]"
-        } else {
+        val qTag = extractQualityTag(qualityStr, serverName)
+        val baseLabel = if (serverName.contains("[") && serverName.contains("]")) {
             serverName
+        } else {
+            val cleanBase = serverName.trim()
+            if (audioSummary.isNotBlank() && !cleanBase.contains(audioSummary, ignoreCase = true)) {
+                "$cleanBase [$audioSummary]"
+            } else {
+                cleanBase
+            }
+        }
+        val withQuality = if (qTag.isNotBlank() && !baseLabel.contains(qTag, ignoreCase = true)) {
+            "$baseLabel $qTag"
+        } else {
+            baseLabel
         }
 
         val linkType = forceType ?: when {
@@ -2190,9 +2251,9 @@ class MovieFoxProvider : MainAPI() {
             else -> ExtractorLinkType.VIDEO
         }
 
-        val label = if (lc.streamOnly && isHls) "⚡ $withAudio" else withAudio
+        val label = if (lc.streamOnly && isHls) "⚡ $withQuality" else withQuality
         val link = newExtractorLink(
-            source = serverName,
+            source = serverName.substringBefore("[").trim().ifBlank { serverName },
             name = label,
             url = streamUrl,
             type = linkType
@@ -2268,8 +2329,9 @@ class MovieFoxProvider : MainAPI() {
 
             val mergedHeaders = baseHeaders + extraHeaders
             val isHls = isM3u8Stream(streamUrl, st.safeStr("type"))
-            val qualityStr = st.safeStr("quality", "HD")
-            val finalLabel = st.safeStr("label").ifBlank { st.safeStr("title") }.ifBlank { "${endpointName.uppercase()} ($qualityStr)" }
+            val qualityStr = st.safeStr("quality", "1080p")
+            val srvPart = st.safeStr("label").ifBlank { st.safeStr("title") }.ifBlank { st.safeStr("name") }
+            val finalLabel = buildSourceLabel(endpointName, srvPart, qualityStr)
 
             emitStream(lc, finalLabel, streamUrl, isHls, qualityStr, mergedHeaders, emitLink)
             emitted = true
@@ -2292,10 +2354,10 @@ class MovieFoxProvider : MainAPI() {
             val rawText = safeGetText(apiUrl, lc.baseHeaders, timeoutSec = 4L, retries = 1, sourceTag = srvKey) ?: continue
             if (rawText.isBlank()) continue
             if (rawText.trimStart().startsWith("#EXTM3U")) {
-                emitStream(lc, "MovieFox ${srvKey.uppercase()} HLS", apiUrl, true, null, lc.baseHeaders, emitLink)
+                emitStream(lc, buildSourceLabel("MovieFox", srvKey.uppercase(), "HLS 1080p"), apiUrl, true, "1080p", lc.baseHeaders, emitLink)
                 break
             }
-            if (parseAndEmitApiJson(srvKey, rawText, lc, lc.baseHeaders, emitSub, emitLink)) break
+            if (parseAndEmitApiJson("MovieFox", rawText, lc, lc.baseHeaders, emitSub, emitLink)) break
         }
     }
 
@@ -2327,10 +2389,10 @@ class MovieFoxProvider : MainAPI() {
             val body = safeGetText(ep, headers, timeoutSec = 5L, retries = 1, sourceTag = "cinetv_api")?.trim().orEmpty()
             if (body.isBlank()) continue
             if (body.startsWith("#EXTM3U")) {
-                emitStream(lc, "CineTV API HLS", ep, true, null, headers, emitLink)
+                emitStream(lc, buildSourceLabel("CineTV", "API HLS", "1080p"), ep, true, "1080p", headers, emitLink)
                 break
             }
-            if (body.startsWith("{") && parseAndEmitApiJson("CineTV API", body, lc, headers, emitSub, emitLink)) break
+            if (body.startsWith("{") && parseAndEmitApiJson("CineTV", body, lc, headers, emitSub, emitLink)) break
         }
     }
 
@@ -2358,7 +2420,7 @@ class MovieFoxProvider : MainAPI() {
             val body = safeGetText(wUrl, headers, timeoutSec = 3L, retries = 1, sourceTag = "cinetv_hls")?.trim().orEmpty()
             if (body.isBlank()) continue
             if (body.startsWith("#EXTM3U")) {
-                emitStream(lc, "CineTV HLS", wUrl, true, "1080p", headers, emitLink)
+                emitStream(lc, buildSourceLabel("CineTV", "HLS Worker", "1080p"), wUrl, true, "1080p", headers, emitLink)
                 break
             } else if (body.startsWith("{") && parseAndEmitApiJson("CineTV HLS", body, lc, headers, emitSub, emitLink)) {
                 break
@@ -2572,7 +2634,7 @@ class MovieFoxProvider : MainAPI() {
                     .forEach { stUrl ->
                         emitStream(
                             lc,
-                            buildSourceLabel("HindiDrama", label, "Hindi"),
+                            buildSourceLabel("HindiDrama", label, "Hindi 1080p"),
                             stUrl,
                             stUrl.contains(".m3u8", true),
                             "1080p Hindi",
@@ -2777,7 +2839,7 @@ class MovieFoxProvider : MainAPI() {
                                 }
                                 emitStream(
                                     lc = lc,
-                                    serverName = "Sflix [$kind ${maxRes}p]",
+                                    serverName = buildSourceLabel("Sflix", kind, "${maxRes}p"),
                                     streamUrl = sUrl,
                                     isHls = kind != "MP4",
                                     qualityStr = "${maxRes}p",
@@ -2864,7 +2926,7 @@ class MovieFoxProvider : MainAPI() {
                             val spHtml = safeGetText(cleanEmbed, mapOf("Referer" to detailUrl), timeoutSec = 4L, retries = 1, sourceTag = "prmovies").orEmpty()
                             val m3u8 = Regex("""file\s*:\s*["']([^"']+\.m3u8[^"']*)["']""").find(spHtml)?.groupValues?.get(1)
                             if (!m3u8.isNullOrBlank()) {
-                                emitStream(lc, "Prmovies • Speedostream", m3u8, true, "1080p", mapOf("Referer" to cleanEmbed), emitLink)
+                                emitStream(lc, buildSourceLabel("Prmovies", "Speedostream", "1080p"), m3u8, true, "1080p", mapOf("Referer" to cleanEmbed), emitLink)
                                 emittedForMirror = true
                             }
                         } else if (!isJunkCandidateUrl(cleanEmbed)) {
@@ -3060,7 +3122,7 @@ class MovieFoxProvider : MainAPI() {
                     }.let { if (it.isNotBlank()) normalizeUrl(it, p4Base) else "" }
                     if (linkUrl.isBlank() || !linkUrl.startsWith("http")) continue
                     val srvLabel = sObj.safeStr("label", "Play4u")
-                    emitStream(lc, buildSourceLabel("Play4u", srvLabel, ""), linkUrl, true, null, p4StreamHeaders, emitLink)
+                    emitStream(lc, buildSourceLabel("Play4u", srvLabel, "1080p"), linkUrl, true, "1080p", p4StreamHeaders, emitLink)
                 }
             } else {
                 val seasonsObj = extractWindowJsonObject(pageHtml, "__PA_SERIES__")?.optJSONObject("seasons") ?: return
@@ -3082,7 +3144,7 @@ class MovieFoxProvider : MainAPI() {
                         if (epObj.optInt("number", -1) != targetEpisode) continue
                         val linkUrl = play4uUnseal(epObj.safeStr("hls"), sealKey).let { if (it.isNotBlank()) normalizeUrl(it, p4Base) else "" }
                         if (linkUrl.startsWith("http")) {
-                            emitStream(lc, buildSourceLabel("Play4u", "HLS", "Ep $targetEpisode"), linkUrl, true, null, p4StreamHeaders, emitLink)
+                            emitStream(lc, buildSourceLabel("Play4u", "HLS", "Ep $targetEpisode 1080p"), linkUrl, true, "1080p", p4StreamHeaders, emitLink)
                         }
                     }
                 }
@@ -3130,7 +3192,8 @@ class MovieFoxProvider : MainAPI() {
 
             if (detailEntries.isEmpty()) {
                 for (dom in candidates) {
-                    val html = safeGetText("$dom/?s=$q", mapOf("Referer" to "$dom/"), timeoutSec = 5L, retries = 1, sourceTag = "hdhub4u").orEmpty()
+                    val searchEndpoint = if (dom.contains("pingora.fyi", true)) "$dom/search?q=$q" else "$dom/?s=$q"
+                    val html = safeGetText(searchEndpoint, mapOf("Referer" to "$dom/"), timeoutSec = 5L, retries = 1, sourceTag = "hdhub4u").orEmpty()
                     if (html.isBlank()) continue
                     val hit = Jsoup.parse(html, dom).select("a[href]").firstOrNull { a ->
                         val t = a.attr("title").ifBlank { a.text() }.trim()
@@ -3255,7 +3318,15 @@ class MovieFoxProvider : MainAPI() {
                             if (sUrl.isBlank()) continue
                             if (firstId == null) firstId = st.safeStr("id").takeIf { it.isNotBlank() }
                             val qLabel = "${resStr.toIntOrNull() ?: resStr}p"
-                            emitStream(lc, "MovieBox $label $qLabel", sUrl, sUrl.contains(".m3u8", true), "$qLabel $label", playHeaders, emitLink)
+                            emitStream(
+                                lc,
+                                buildSourceLabel("MovieBox", label, qLabel),
+                                sUrl,
+                                sUrl.contains(".m3u8", true),
+                                "$qLabel $label",
+                                playHeaders,
+                                emitLink
+                            )
                         }
                     }
                     if (firstId != null && (dub.optBoolean("original") || seenSubs.isEmpty())) {
@@ -3522,7 +3593,7 @@ class MovieFoxProvider : MainAPI() {
                         val plRaw = safeGetText("$dom$path/playlist.php?id=${safeEncode(id)}&t=${safeEncode(t)}", headers, timeoutSec = 5L, retries = 1, sourceTag = "netmirror").orEmpty()
                         extractCandidateMediaAndEmbedUrls(plRaw, dom).take(6).forEach { (u, kind) ->
                             if (kind == "DIRECT") {
-                                emitStream(lc, "NetMirror", u, isM3u8Stream(u, ""), null, headers, emitLink)
+                                emitStream(lc, buildSourceLabel("NetMirror", "Stream", "1080p"), u, isM3u8Stream(u, ""), "1080p", headers, emitLink)
                                 foundAny = true
                             }
                         }
