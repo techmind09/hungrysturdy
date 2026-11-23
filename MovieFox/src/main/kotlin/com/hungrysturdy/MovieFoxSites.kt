@@ -17,84 +17,6 @@ data class MfSiteEntry(
     val isHindi: Boolean = true
 )
 
-object MfRegistries {
-    const val FIREBASE_RTDB_URL =
-        "https://cloudstreampluginhelper-default-rtdb.firebaseio.com/.json"
-
-    const val KAPERWAN_URLS_JSON =
-        "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json"
-
-    const val PHISHER_DOMAINS_JSON =
-        "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json"
-
-    const val TMDB_API_BASE = "https://api.themoviedb.org/3"
-    const val TMDB_WEB_BASE = "https://www.themoviedb.org"
-    const val TMDB_IMAGE_W500 = "https://image.tmdb.org/t/p/w500"
-    const val CINEMETA_BASE = "https://v3-cinemeta.strem.io/meta"
-    const val AIO_METADATA_BASE =
-        "https://aiometadata.elfhosted.com/stremio/9197a4a9-2f5b-4911-845e-8704c520bdf7/meta"
-
-    const val SKY_UNIVERSE_REPO =
-        "https://raw.githubusercontent.com/akashdh11/sky-universe/refs/heads/main/mega_repo.json"
-    const val CNC_UNIVERSE_REPO =
-        "https://raw.githubusercontent.com/NivinCNC/CNCVerse-Repository/main/repo.json"
-
-    const val DEFAULT_STREMIO_MANIFEST =
-        "https://apps.soluserv.es/stremio_catalog_plus/c.8e2ce47b1df7502fd7c8f45140d5eb89691d641a/manifest.json"
-}
-
-object MfApiEndpoints {
-    const val MOVY_STREAM_API = "https://api.wecollege.net"
-    const val SPORT_API_BFF = "https://h5-sport-api.aoneroom.com/wefeed-h5api-bff"
-    const val SPORT_WEB_URL = "https://www.sportslive.wine/"
-    const val HDHUB4U_TYPESENSE = "https://search.pingora.fyi/collections/post/documents/search"
-    const val FILEBEE_API = "https://filebee.xyz/api"
-    const val DOTFLIX_STORE_EXTRACT = "https://dotflix.store/api/extract-download"
-    const val DOTFLIX_FIT_EXTRACT = "https://dotflix.fit/api/extract-download"
-    const val GOFILE_API = "https://api.gofile.io"
-    const val SIDEXFEE_BYPASS = "https://web.sidexfee.com"
-    const val CINETV_HLS_WORKER = "https://silent-frost-f2dbv.nxstreamhub.workers.dev/hls"
-
-    val MOVIEBOX_API_HOSTS = listOf(
-        "https://h5-api.aoneroom.com",
-        "https://api6.aoneroom.com",
-        "https://api5.aoneroom.com",
-        "https://api4.aoneroom.com",
-        "https://api4sg.aoneroom.com",
-        "https://api3.aoneroom.com"
-    )
-
-    val DRIVE_MIRRORS = listOf(
-        "https://nexdrive.beer",
-        "https://nexdrive.fit",
-        "https://mobilejsr.best",
-        "https://mobilejsr.rest",
-        "https://one.vegadrive.me",
-        "https://one.vegadrive.app",
-        "https://vcloud.beer",
-        "https://vcloud.fit",
-        "https://hubcloud.ist",
-        "https://fastdl.zip",
-        "https://hubcdn.wiki",
-        "https://filebee.xyz"
-    )
-
-    val ALLOWED_STREAM_AND_FILE_HOSTS = listOf(
-        "pixeldrain", "fsl2", "fsl", "gdrive", "gdflix", "gdlink", "gdtot",
-        "hubcloud", "vcloud", "mcloud", "nexdrive", "mobilejsr", "mdrive.cloud", "m-drive",
-        "vegadrive", "fastdl", "fastdlserver", "hubcdn", "filebee", "filepress", "fpgo",
-        "dotflix", "gofile", "gpdl", ".r2.dev", ".r2.cloudflarestorage.com",
-        "buzzserver", "10gbps", "instantcloud", "streamtape", "stape", "strtape",
-        "voe.sx", "nxstreamhub", "itsnitrox", "vibuxer", "wootly", "videostr",
-        "streameeeeee", "megaplay", "vidwish", "vidtube", "modiplay", "vibeplayer",
-        "vivibebe", "bibiemb", "iqsmartgames", "vidara.to", "bysetayico.com",
-        "vidout.pages.dev", "vidsync.pro", "vidrift.net", "bingr.one", "filmu.in",
-        "vidbolt.xyz", "nxsha.space", "hdstream4u.com", "hubstream.art", "playmogo.com",
-        "otakuvid.online", "otakuhg.site", "minochinos.com", "zephyrix", "zephyrflick",
-        "88player.top", "acek-cdn.com", "workers.dev", "googleusercontent.com", "drive.google.com"
-    )
-}
-
 object MfSites {
 
     val ALL: List<MfSiteEntry> = listOf(
@@ -168,20 +90,18 @@ object MfSites {
         MfSiteEntry(
             key = "vegamovies",
             title = "VegaMovies",
-            baseUrl = "https://vegamovies.lease",
-            probeUrl = "https://vegamovies.lease/",
+            baseUrl = "https://new1.vegamovies.lease",
+            probeUrl = "https://new1.vegamovies.lease/",
             mirrors = listOf(
-                "https://vegamovies.lease",
                 "https://new1.vegamovies.lease",
-                "https://vegamovies.wales",
+                "https://vegamovies.lease",
                 "https://rogmovies.autos",
                 "https://rogmovies.im",
                 "https://rogmovies.one",
-                "https://rogmovies.asia",
-                "https://rogmovies.vip"
+                "https://rogmovies.asia"
             ),
             apiEndpoints = listOf("{base}/ts-search.php"),
-            aliases = listOf("vegamovies.lease", "new1.vegamovies.lease", "vegamovies.wales"),
+            aliases = listOf("new1.vegamovies.lease", "vegamovies.lease"),
             firebaseKeys = listOf("vegamovies", "justplay_vegamovies"),
             registryKeys = listOf("vegamovies"),
             category = "Hindi",
@@ -191,7 +111,7 @@ object MfSites {
             key = "rogmovies",
             title = "RogMovies",
             baseUrl = "https://rogmovies.autos",
-            probeUrl = "https://rogmovies.vip/",
+            probeUrl = "https://rogmovies.autos/",
             mirrors = listOf(
                 "https://rogmovies.autos",
                 "https://rogmovies.im",
@@ -209,7 +129,7 @@ object MfSites {
         MfSiteEntry(
             key = "bollyflix",
             title = "Bollyflix",
-            baseUrl = "https://bollyflix.frl",
+            baseUrl = "https://new1.bollyflix.tours",
             probeUrl = "https://new1.bollyflix.tours/",
             mirrors = listOf("https://new1.bollyflix.tours", "https://bollyflix.frl"),
             apiEndpoints = listOf("{base}/search/{query}/page/{page}/", MfApiEndpoints.SIDEXFEE_BYPASS),
@@ -237,7 +157,7 @@ object MfSites {
         MfSiteEntry(
             key = "hdhub4u",
             title = "HDHub4u",
-            baseUrl = "https://new13.hdhub4u.cl",
+            baseUrl = "https://new15.hdhub4u.cl",
             probeUrl = "https://new15.hdhub4u.cl/?utm=mn1",
             mirrors = listOf("https://new15.hdhub4u.cl", "https://new13.hdhub4u.cl"),
             apiEndpoints = listOf(
@@ -275,7 +195,7 @@ object MfSites {
             title = "Anime World India",
             baseUrl = "https://watchanimeworld.top",
             probeUrl = "https://watchanimeworld.top/",
-            mirrors = listOf("https://watchanimeworld.top"),
+            mirrors = listOf("https://watchanimeworld.top", "https://watchanimeworld.one"),
             apiEndpoints = listOf(
                 "{base}/page/{page}/?s={query}",
                 "{base}/wp-admin/admin-ajax.php?action=action_select_season",
@@ -290,7 +210,13 @@ object MfSites {
             title = "MovieBox / NetNaija API",
             baseUrl = "https://h5-api.aoneroom.com",
             probeUrl = "https://h5-api.aoneroom.com/wefeed-mobile-bff/tab/ranking-list?tabId=0&page=1&perPage=1",
-            mirrors = MfApiEndpoints.MOVIEBOX_API_HOSTS,
+            mirrors = listOf(
+                "https://h5-api.aoneroom.com",
+                "https://api6.aoneroom.com",
+                "https://api5.aoneroom.com",
+                "https://api4.aoneroom.com",
+                "https://api4sg.aoneroom.com"
+            ),
             apiEndpoints = listOf(
                 "https://apig.inmoviebox.com/wefeed-mobile-bff/tab/ranking-list",
                 "{host}/wefeed-mobile-bff/tab/ranking-list",
@@ -319,6 +245,7 @@ object MfSites {
             probeUrl = "https://netnaija.film/",
             mirrors = listOf(
                 "https://netnaija.film",
+                "https://netnaija.com.ng",
                 "https://www.thenetnaija.net",
                 "https://123moviesfree.club",
                 "https://movie-box.co",
@@ -398,11 +325,11 @@ object MfSites {
         MfSiteEntry(
             key = "netmirror",
             title = "NetMirror",
-            baseUrl = "https://netmirror.gold",
-            probeUrl = "https://netmirror.gold/",
+            baseUrl = "https://net52.cc",
+            probeUrl = "https://net52.cc/",
             mirrors = listOf(
-                "https://netmirror.gold",
                 "https://net52.cc",
+                "https://netmirror.gold",
                 "https://net52.cc/mobile",
                 "https://net52.cc/mobile/hs",
                 "https://net52.cc/mobile/pv"
@@ -448,12 +375,12 @@ object MfSites {
         MfSiteEntry(
             key = "movies4u",
             title = "Movies4u",
-            baseUrl = "https://new6.movies4u.garden",
+            baseUrl = "https://new8.movies4u.garden",
             probeUrl = "https://new8.movies4u.garden/",
             mirrors = listOf(
                 "https://new8.movies4u.garden",
-                "https://new6.movies4u.garden",
-                "https://movies4u.vet"
+                "https://movies4u.vet",
+                "https://new6.movies4u.garden"
             ),
             apiEndpoints = listOf("{base}/lookup.php"),
             firebaseKeys = listOf("movies4u", "justplay_movies4u"),
@@ -524,7 +451,7 @@ object MfSites {
         MfSiteEntry(
             key = "moviesdrive",
             title = "MoviesDrive",
-            baseUrl = "https://new3.moviesdrive.cyou",
+            baseUrl = "https://new4.moviesdrive.cyou",
             probeUrl = "https://new4.moviesdrive.cyou/",
             mirrors = listOf("https://new4.moviesdrive.cyou", "https://new3.moviesdrive.cyou"),
             apiEndpoints = listOf("{base}/search.php"),
@@ -674,3 +601,4 @@ object MfSites {
         return MfApiEndpoints.ALLOWED_STREAM_AND_FILE_HOSTS.any { low.contains(it) }
     }
 }
+
