@@ -1,22 +1,17 @@
 package com.hungrysturdy
 
-import android.content.Context
+import com.lagradost.cloudstream3.AcraApplication
 import com.lagradost.cloudstream3.plugins.BasePlugin
 import com.lagradost.cloudstream3.plugins.CloudstreamPlugin
 
 @CloudstreamPlugin
 class Plugin : BasePlugin() {
 
-    override fun load(context: Context) {
-        MovieFoxSettingsDialog.bindContext(context)
+    override fun load() {
+        AcraApplication.context?.let { MovieFoxSettingsDialog.bindContext(it) }
 
-        // Providers
+        // Main MovieFox Provider (includes Prmovies, HindiDrama & Sflix servers)
         registerMainAPI(MovieFoxProvider())
-        registerMainAPI(DramaVerseProvider())
-        registerMainAPI(PrmoviesProvider())
-        registerMainAPI(KatDramaProvider())
-        registerMainAPI(HindiDramaProvider())
-        registerMainAPI(SflixProvider())
 
         // Base & Google Drive Extractors
         registerExtractorAPI(BaseJWPExtractor())
@@ -70,8 +65,7 @@ class Plugin : BasePlugin() {
         registerExtractorAPI(SwVidMolyExtractor())
         registerExtractorAPI(VidMolyToExtractor())
 
-        // KatServerLogic Extractors
-        registerExtractorAPI(Filemoon())
+        // HubCloud / GDFlix / Buzz / HBPlay / GoFlix Extractors
         registerExtractorAPI(KatFastDlServer())
         registerExtractorAPI(KatHubCloudExtractor())
         registerExtractorAPI(HubCloudDrive())
@@ -91,10 +85,6 @@ class Plugin : BasePlugin() {
         registerExtractorAPI(KatHBPlayExtractor())
         registerExtractorAPI(KatFuckingFastExtractor())
         registerExtractorAPI(KatGoFlixExtractor())
-
-        // Extension Settings UI Button (in CloudStream / SkyStream plugin settings)
-        openSettings = { ctx ->
-            MovieFoxSettingsDialog.show(ctx)
-        }
     }
 }
+
