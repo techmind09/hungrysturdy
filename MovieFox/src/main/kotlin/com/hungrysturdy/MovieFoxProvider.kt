@@ -1,6 +1,9 @@
 package com.hungrysturdy
 
+import android.app.Activity
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
@@ -46,6 +49,7 @@ class MovieFoxProvider : MainAPI() {
     private val tmdbApiKey = "b030404650f279792a8d3287232358e3"
     private val tmdbBaseUrl = "https://api.themoviedb.org/3"
     private val tmdbImageBase = "https://image.tmdb.org/t/p/w500"
+    private val pluginIconUrl = "https://raw.githubusercontent.com/techmind09/hungrysturdy/refs/heads/main/246481509.png"
 
     // 1. Prmovies Mirrors
     private val prmoviesMirrors = listOf(
@@ -81,7 +85,8 @@ class MovieFoxProvider : MainAPI() {
         TvType.Movie,
         TvType.TvSeries,
         TvType.Anime,
-        TvType.AsianDrama
+        TvType.AsianDrama,
+        TvType.Others
     )
 
     override val mainPage = mainPageOf(
@@ -112,6 +117,35 @@ class MovieFoxProvider : MainAPI() {
 
     private fun ctxOrNull(): Context? =
         MovieFoxSettingsDialog.currentContext() ?: CloudStreamApp.context
+
+    private fun findForegroundActivity(): Activity? {
+        return runCatching {
+            val atClass = Class.forName("android.app.ActivityThread")
+            val thread = atClass.getMethod("currentActivityThread").invoke(null)
+            val field = atClass.getDeclaredField("mActivities").apply { isAccessible = true }
+            val activities = field.get(thread) as? Map<*, *>
+            activities?.values?.firstNotNullOfOrNull { record ->
+                val rClass = record?.javaClass
+                val paused = rClass?.getDeclaredField("paused")?.apply { isAccessible = true }
+                    ?.getBoolean(record) ?: true
+                if (!paused) {
+                    rClass?.getDeclaredField("activity")?.apply { isAccessible = true }
+                        ?.get(record) as? Activity
+                } else {
+                    null
+                }
+            }
+        }.getOrNull()
+    }
+
+    private fun openUltraSettingsDialog() {
+        Handler(Looper.getMainLooper()).post {
+            val targetCtx = findForegroundActivity() ?: ctxOrNull()
+            if (targetCtx != null) {
+                MovieFoxSettingsDialog.show(targetCtx)
+            }
+        }
+    }
 
     private fun logError(source: String, url: String, err: Throwable?, extra: String = "") {
         if (err is CancellationException) return
@@ -313,6 +347,17 @@ class MovieFoxProvider : MainAPI() {
             items = items.shuffled()
         }
 
+        if (page == 1 && request.data.contains("/trending", ignoreCase = true)) {
+            val settingsCard = newMovieSearchResponse(
+                name = "⚙️ MovieFox Ultra Settings",
+                url = "moviefox://settings",
+                type = TvType.Others
+            ) {
+                this.posterUrl = pluginIconUrl
+            }
+            items = listOf(settingsCard) + items
+        }
+
         val home = if (items.isNotEmpty()) listOf(HomePageList(request.name, items)) else emptyList()
         return newHomePageResponse(home, hasNext = items.isNotEmpty())
     }
@@ -365,6 +410,18 @@ class MovieFoxProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
+        if (query.trim().equals("settings", ignoreCase = true)) {
+            return listOf(
+                newMovieSearchResponse(
+                    name = "⚙️ MovieFox Ultra Settings",
+                    url = "moviefox://settings",
+                    type = TvType.Others
+                ) {
+                    this.posterUrl = pluginIconUrl
+                }
+            )
+        }
+
         val timeoutSec = currentTimeoutSec()
         val encoded = safeEncode(query)
         val html = safeGetText("$mainUrl/search?q=$encoded", timeoutSec = timeoutSec, sourceTag = "moviefox").orEmpty()
@@ -421,6 +478,14 @@ class MovieFoxProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse {
+        if (url.startsWith("moviefox://settings", ignoreCase = true)) {
+            openUltraSettingsDialog()
+            return newMovieLoadResponse("MovieFox Ultra Settings", url, TvType.Others, url) {
+                this.posterUrl = pluginIconUrl
+                this.plot = "Configure MovieFox servers (Prmovies, HindiDrama, Sflix), extractors, quality filters, and live health diagnostics."
+            }
+        }
+
         val timeoutSec = currentTimeoutSec()
         val responseText = safeGetText(url, timeoutSec = timeoutSec, sourceTag = "moviefox").orEmpty()
         val type = when {
@@ -981,6 +1046,11 @@ class MovieFoxProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        if (data.startsWith("moviefox://settings", ignoreCase = true)) {
+            openUltraSettingsDialog()
+            return true
+        }
+
         return try {
             val ctx = ctxOrNull()
             var rawPageUrl = data
