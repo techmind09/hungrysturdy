@@ -56,7 +56,7 @@ import java.util.zip.ZipInputStream
 object MovieFoxSettingsDialog {
 
     const val LOG_TAG = "MovieFoxDiag"
-    private const val PREFS_NAME = "moviefox_ultra_max_v26"
+    private const val PREFS_NAME = "moviefox_ultra_max_v27"
     private const val KEY_SRV_PREFIX = "mf_srv_"
     private const val KEY_EXT_PREFIX = "mf_ext_"
     private const val KEY_SRV_ORDER = "mf_srv_order_csv"
@@ -182,14 +182,14 @@ object MovieFoxSettingsDialog {
     )
 
     val BASE_SERVERS = listOf(
-        ServerItem("prmovies", "Prmovies", "HI/M3U8", "https://prmovies.coupons/", "#F59E0B", false, true, "Movies", "⚡ MF"),
-        ServerItem("dramaverse", "DramaVerse", "K-DRAMA", "https://mydverse.com/", "#A855F7", false, true, "AsianDrama", "⚡ MF"),
-        ServerItem("hindidrama", "HindiDrama", "K-DRA", "https://hindidrama.net/", "#EC4899", false, true, "AsianDrama", "⚡ MF"),
-        ServerItem("katdrama", "KatDrama", "ASIAN", "https://katdrama.org/", "#38BDF8", false, true, "AsianDrama", "⚡ MF"),
         ServerItem("sflix", "Sflix", "HLS/MP4", "https://sflix.film/", "#34D399", false, false, "Series", "⚡ MF"),
         ServerItem("play4u", "Play4u", "HI/M3U8", "https://play4u.org/", "#FB923C", false, true, "Movies", "⚡ MF"),
-        ServerItem("animeworld", "AnimeWorld", "ANIME", "https://watchanimeworld.top/", "#818CF8", false, true, "AsianDrama", "⚡ MF"),
+        ServerItem("prmovies", "Prmovies", "HI/M3U8", "https://prmovies.coupons/", "#F59E0B", false, true, "Movies", "⚡ MF"),
+        ServerItem("hindidrama", "HindiDrama", "K-DRA", "https://hindidrama.net/", "#EC4899", false, true, "AsianDrama", "⚡ MF"),
         ServerItem("themoviesflix", "TheMoviesFlix", "4K/1080p", "https://one.1moviesflix.lol/", "#22D3EE", false, true, "Movies", "⚡ MF"),
+        ServerItem("dramaverse", "DramaVerse", "K-DRAMA", "https://mydverse.com/", "#A855F7", false, true, "AsianDrama", "⚡ MF"),
+        ServerItem("katdrama", "KatDrama", "ASIAN", "https://katdrama.org/", "#38BDF8", false, true, "AsianDrama", "⚡ MF"),
+        ServerItem("animeworld", "AnimeWorld", "ANIME", "https://watchanimeworld.top/", "#818CF8", false, true, "AsianDrama", "⚡ MF"),
         ServerItem("vegamovies", "VegaMovies", "DUAL/HI", "https://vegamovies.ps/", "#FACC15", false, true, "Movies", "⚡ MF")
     )
 
@@ -255,8 +255,8 @@ object MovieFoxSettingsDialog {
         try {
             val conn = (URL(srv.probeUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 7000
-                readTimeout = 7000
+                connectTimeout = 5000
+                readTimeout = 5000
                 instanceFollowRedirects = true
                 setRequestProperty("User-Agent", CF_BYPASS_UA)
                 getCookieForDomain(appContext, srv.probeUrl)?.let { setRequestProperty("Cookie", it) }
@@ -433,9 +433,6 @@ object MovieFoxSettingsDialog {
         return map[host] ?: map.entries.firstOrNull { host.endsWith(it.key) || it.key.endsWith(host) }?.value
     }
 
-    // =========================================================================
-    // Advance CF WebView Solver + Auto Click Helper
-    // =========================================================================
     @SuppressLint("SetJavaScriptEnabled")
     fun openCfBypassWindow(
         rawCtx: Context,
@@ -583,7 +580,7 @@ object MovieFoxSettingsDialog {
                     if (tryCaptureCookie(forceSave = true)) {
                         closeWindow(saved = true)
                     } else {
-                        statusTv.text = "Clicked! Complete challenge & tap Save Cookie"
+                        statusTv.text = "Clicked! Complete challenge & tap Save"
                     }
                 }, 900L)
             }
@@ -668,11 +665,11 @@ object MovieFoxSettingsDialog {
     fun isDownloadOnly(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_DOWNLOAD_ONLY, false)
     fun setDownloadOnly(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_DOWNLOAD_ONLY, enabled).apply()
 
-    fun getConcurrency(ctx: Context): Int = prefs(ctx).getInt(KEY_CONCURRENCY, 15)
+    fun getConcurrency(ctx: Context): Int = prefs(ctx).getInt(KEY_CONCURRENCY, 24)
     fun setConcurrency(ctx: Context, value: Int) = prefs(ctx).edit().putInt(KEY_CONCURRENCY, value.coerceIn(2, 50)).apply()
 
-    fun getTimeoutSeconds(ctx: Context): Int = prefs(ctx).getInt(KEY_TIMEOUT_SEC, 12)
-    fun setTimeoutSeconds(ctx: Context, sec: Int) = prefs(ctx).edit().putInt(KEY_TIMEOUT_SEC, sec.coerceIn(4, 30)).apply()
+    fun getTimeoutSeconds(ctx: Context): Int = prefs(ctx).getInt(KEY_TIMEOUT_SEC, 7)
+    fun setTimeoutSeconds(ctx: Context, sec: Int) = prefs(ctx).edit().putInt(KEY_TIMEOUT_SEC, sec.coerceIn(3, 30)).apply()
 
     fun isShuffleHomeCategories(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_SHUFFLE_HOME, false)
     fun setShuffleHomeCategories(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_SHUFFLE_HOME, enabled).apply()
@@ -778,7 +775,7 @@ object MovieFoxSettingsDialog {
         prefs(ctx).edit().putString(KEY_CS3_REPOS, arr.toString()).apply()
     }
 
-    private fun readHttpBytes(urlStr: String, timeoutMs: Int = 8000): ByteArray? = try {
+    private fun readHttpBytes(urlStr: String, timeoutMs: Int = 6000): ByteArray? = try {
         val conn = (URL(toRawGithubUrl(urlStr)).openConnection() as HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = timeoutMs
@@ -1451,7 +1448,7 @@ object MovieFoxSettingsDialog {
         makeStepperCard(streamPane, "Parallel Workers", "Concurrent server fetch threads", currentConcurrency, 2, 4, 30, "x") {
             currentConcurrency = it; setConcurrency(ctx, it); refreshStats()
         }
-        makeStepperCard(streamPane, "Request Timeout", "Per-server connection timeout", currentTimeout, 2, 4, 30, "s") {
+        makeStepperCard(streamPane, "Request Timeout", "Per-server connection timeout", currentTimeout, 2, 3, 30, "s") {
             currentTimeout = it; setTimeoutSeconds(ctx, it)
         }
 
