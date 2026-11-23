@@ -1,7 +1,6 @@
 package com.hungrysturdy
 
 import android.content.Context
-import android.util.Base64
 import android.util.Log
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
@@ -21,12 +20,7 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URI
 import java.net.URLEncoder
-import java.security.MessageDigest
-import java.security.SecureRandom
-import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
 
 class MovieFoxProvider : MainAPI() {
 
@@ -75,7 +69,6 @@ class MovieFoxProvider : MainAPI() {
         "https://123moviesfree.club"
     )
     private val sflixPlayerUrl = "https://mzfi.me"
-    private val sflixSecretB64 = "NzZpUmwwN3MweFNOOWpxbUVXQXQ3OUVCSlp1bElRSXNWNjRGWnIyTw=="
     private val sflixCookies =
         "sflix_i18n_lang=en; _ga=GA1.1.622965780.1794742147; " +
             "sflix_token=%22eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjE5NjY4NTU1NTcyNzgwNjIyNzYsImF0cCI6MywiZXh0IjoiMTc5NDc0MjE0NyIsImV4cCI6MTgwMjUxODE0NywiaWF0IjoxNzk0NzQxODQ3fQ.8aOIckQOSKyISQdl85SAJvuMlhXfWodHmcPOIvlg0pM%22"
@@ -118,7 +111,7 @@ class MovieFoxProvider : MainAPI() {
     )
 
     private fun ctxOrNull(): Context? =
-        MovieFoxSettingsDialog.currentContext() ?: AcraApplication.context
+        MovieFoxSettingsDialog.currentContext() ?: CloudStreamApp.context
 
     private fun logError(source: String, url: String, err: Throwable?, extra: String = "") {
         if (err is CancellationException) return
@@ -684,7 +677,7 @@ class MovieFoxProvider : MainAPI() {
     }
 
     // =========================================================================
-    // SERVER 1: PRMOVIES (from your PrmoviesProvider.kt)
+    // SERVER 1: PRMOVIES
     // =========================================================================
     private suspend fun fetchFromPrmovies(
         lc: LinkContext,
@@ -730,7 +723,6 @@ class MovieFoxProvider : MainAPI() {
             }
 
             val targetDoc = Jsoup.parse(targetHtml, targetUrl)
-            // Speedostream & Vidsrc iframes from PrmoviesProvider
             for (iframe in targetDoc.select("#player2 iframe[src], #content-embed iframe[src], div.movieplay iframe[src]")) {
                 val src = iframe.attr("src").trim()
                 if (src.isBlank()) continue
@@ -765,7 +757,7 @@ class MovieFoxProvider : MainAPI() {
     }
 
     // =========================================================================
-    // SERVER 2: HINDIDRAMA (from your HindiDramaProvider.kt)
+    // SERVER 2: HINDIDRAMA
     // =========================================================================
     private suspend fun fetchFromHindiDrama(
         lc: LinkContext,
@@ -852,8 +844,60 @@ class MovieFoxProvider : MainAPI() {
     }
 
     // =========================================================================
-    // SERVER 3: SFLIX (from your SflixProvider.kt)
+    // SERVER 3: SFLIX
     // =========================================================================
+    private suspend fun emitSflixArray(
+        arr: JSONArray?,
+        kind: String,
+        lc: LinkContext,
+        emitLink: (ExtractorLink) -> Unit
+    ): Boolean {
+        if (arr == null) return false
+        var foundAny = false
+        for (i in 0 until arr.length()) {
+            val item = arr.optJSONObject(i) ?: continue
+            val streamUrl = item.safeStr("url")
+            if (streamUrl.isBlank() || !lc.seenUrls.add(streamUrl)) continue
+
+            val signCookie = item.safeStr("signCookie")
+            val signHeaderKey = item.safeStr("signHeaderKey", "X-MB-Token")
+            val resolutions = item.safeStr("resolutions")
+            val maxRes = resolutions.split(",").mapNotNull { it.trim().toIntOrNull() }.maxOrNull() ?: 720
+
+            val linkType = when {
+                kind == "DASH" || streamUrl.contains(".mpd", true) -> ExtractorLinkType.DASH
+                kind == "HLS" || streamUrl.contains(".m3u8", true) -> ExtractorLinkType.M3U8
+                else -> ExtractorLinkType.VIDEO
+            }
+
+            val streamHeaders = mutableMapOf(
+                "Origin" to sflixPlayerUrl,
+                "Referer" to "$sflixPlayerUrl/",
+                "User-Agent" to effectiveUa,
+                "Accept" to "*/*"
+            )
+            if (signCookie.isNotBlank()) {
+                streamHeaders[signHeaderKey] = signCookie
+                streamHeaders["Cookie"] = signCookie
+            }
+
+            foundAny = true
+            emitLink(
+                newExtractorLink(
+                    source = "Sflix",
+                    name = "Sflix [$kind ${maxRes}p]",
+                    url = streamUrl,
+                    type = linkType
+                ) {
+                    this.referer = "$sflixPlayerUrl/"
+                    this.headers = streamHeaders
+                    this.quality = maxRes
+                }
+            )
+        }
+        return foundAny
+    }
+
     private suspend fun fetchFromSflix(
         lc: LinkContext,
         emitSub: (SubtitleFile) -> Unit,
@@ -920,58 +964,11 @@ class MovieFoxProvider : MainAPI() {
             if (jsonText.isBlank()) continue
 
             val dataObj = runCatching { JSONObject(jsonText).optJSONObject("data") }.getOrNull() ?: continue
-            var foundAny = false
+            val d1 = emitSflixArray(dataObj.optJSONArray("dash"), "DASH", lc, emitLink)
+            val d2 = emitSflixArray(dataObj.optJSONArray("hls"), "HLS", lc, emitLink)
+            val d3 = emitSflixArray(dataObj.optJSONArray("streams"), "MP4", lc, emitLink)
 
-            fun emitSflixArray(arr: JSONArray?, kind: String) {
-                if (arr == null) return
-                for (i in 0 until arr.length()) {
-                    val item = arr.optJSONObject(i) ?: continue
-                    val streamUrl = item.safeStr("url")
-                    if (streamUrl.isBlank() || !lc.seenUrls.add(streamUrl)) continue
-
-                    val signCookie = item.safeStr("signCookie")
-                    val signHeaderKey = item.safeStr("signHeaderKey", "X-MB-Token")
-                    val resolutions = item.safeStr("resolutions")
-                    val maxRes = resolutions.split(",").mapNotNull { it.trim().toIntOrNull() }.maxOrNull() ?: 720
-
-                    val linkType = when {
-                        kind == "DASH" || streamUrl.contains(".mpd", true) -> ExtractorLinkType.DASH
-                        kind == "HLS" || streamUrl.contains(".m3u8", true) -> ExtractorLinkType.M3U8
-                        else -> ExtractorLinkType.VIDEO
-                    }
-
-                    val streamHeaders = mutableMapOf(
-                        "Origin" to sflixPlayerUrl,
-                        "Referer" to "$sflixPlayerUrl/",
-                        "User-Agent" to effectiveUa,
-                        "Accept" to "*/*"
-                    )
-                    if (signCookie.isNotBlank()) {
-                        streamHeaders[signHeaderKey] = signCookie
-                        streamHeaders["Cookie"] = signCookie
-                    }
-
-                    foundAny = true
-                    emitLink(
-                        newExtractorLink(
-                            source = "Sflix",
-                            name = "Sflix [$kind ${maxRes}p]",
-                            url = streamUrl,
-                            type = linkType
-                        ) {
-                            this.referer = "$sflixPlayerUrl/"
-                            this.headers = streamHeaders
-                            this.quality = maxRes
-                        }
-                    )
-                }
-            }
-
-            emitSflixArray(dataObj.optJSONArray("dash"), "DASH")
-            emitSflixArray(dataObj.optJSONArray("hls"), "HLS")
-            emitSflixArray(dataObj.optJSONArray("streams"), "MP4")
-
-            if (foundAny) break
+            if (d1 || d2 || d3) break
         }
     }
 
