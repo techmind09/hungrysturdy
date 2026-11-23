@@ -198,6 +198,7 @@ object MovieFoxSettingsDialog {
         var serverCount: Int = 0
     )
 
+    private var appContext: Context? = null
     private var cachedPrefs: SharedPreferences? = null
     private var cachedManifests: MutableList<NuvioManifestConfig>? = null
     private var cachedCs3Repos: MutableList<Cs3RepoConfig>? = null
@@ -209,7 +210,12 @@ object MovieFoxSettingsDialog {
 
     var externalJsonPickerLauncher: ((onJsonLoaded: (String) -> Unit) -> Unit)? = null
 
+    fun bindContext(ctx: Context?) {
+        if (ctx != null) appContext = ctx.applicationContext
+    }
+
     fun handleActivityResultUri(ctx: Context, uri: Uri?) {
+        bindContext(ctx)
         val cb = pendingFileCallback
         pendingFileCallback = null
         if (uri == null || cb == null) return
@@ -302,8 +308,6 @@ object MovieFoxSettingsDialog {
         HomeCategoryItem("cdrama", "Chinese & Turkish Dramas", true, "Series")
     )
 
-    private val METADATA_SOURCES = listOf("TMDB", "Cinemeta", "Stremio")
-
     private val PRESET_CATALOGS = listOf(
         "Soluserv Catalog Plus" to DEFAULT_STREMIO_MANIFEST,
         "Streaming Catalogs Plus" to "https://7a82163c306e-stremio-netflix-catalog-addon.baby-beamup.club/manifest.json",
@@ -377,7 +381,7 @@ object MovieFoxSettingsDialog {
             updatedAt = ts
         )
         if (!isHealthy) {
-            CloudStreamApp.context?.let { setServerEnabled(it, key, false) }
+            appContext?.let { c -> setServerEnabled(c, key, false) }
         }
     }
 
@@ -478,7 +482,7 @@ object MovieFoxSettingsDialog {
             )
             serverHealthMap[srv.key.lowercase()] = info
             if (!ok) {
-                CloudStreamApp.context?.let { setServerEnabled(it, srv.key, false) }
+                appContext?.let { c -> setServerEnabled(c, srv.key, false) }
             }
             info
         } catch (e: Exception) {
@@ -494,7 +498,7 @@ object MovieFoxSettingsDialog {
                 updatedAt = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
             )
             serverHealthMap[srv.key.lowercase()] = info
-            CloudStreamApp.context?.let { setServerEnabled(it, srv.key, false) }
+            appContext?.let { c -> setServerEnabled(c, srv.key, false) }
             info
         }
     }
@@ -532,8 +536,9 @@ object MovieFoxSettingsDialog {
         cornerRadius = radius
     }
 
-    private fun prefs(ctx: Context): SharedPreferences =
-        cachedPrefs ?: ctx.applicationContext
+    private fun prefs(ctx: Context): SharedPreferences {
+        bindContext(ctx)
+        return cachedPrefs ?: ctx.applicationContext
             .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .also {
                 cachedPrefs = it
@@ -543,6 +548,7 @@ object MovieFoxSettingsDialog {
                     cachedCs3Servers.addAll(loadCs3ServersInternal(it))
                 }
             }
+    }
 
     fun getSelectedTheme(ctx: Context): ThemePalette {
         val id = prefs(ctx).getString(KEY_THEME, "purple") ?: "purple"
@@ -583,7 +589,7 @@ object MovieFoxSettingsDialog {
     }
 
     fun getCookieForDomain(ctx: Context?, urlOrDomain: String): String? {
-        val c = ctx ?: return null
+        val c = ctx ?: appContext ?: return null
         return prefs(c).getString(cfCookiePrefKey(urlOrDomain), null)?.takeIf { it.isNotBlank() }
     }
 
@@ -1394,6 +1400,7 @@ object MovieFoxSettingsDialog {
 
     fun show(ctx: Context) {
         if (!isContextAlive(ctx)) return
+        bindContext(ctx)
         prefs(ctx)
 
         val dialogScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -1408,7 +1415,7 @@ object MovieFoxSettingsDialog {
         var selectedServerCat = "All"
         var currentConcurrency = getConcurrency(ctx)
         var currentTimeout = getTimeoutSeconds(ctx)
-        var selectedMeta = getMetadataSource(ctx)
+        var selectedMeta = "TMDB"
         var hindiOnly = isHindiOnly(ctx)
         var downloadOnly = isDownloadOnly(ctx)
         var shuffleHome = isShuffleHomeCategories(ctx)
@@ -1519,7 +1526,6 @@ object MovieFoxSettingsDialog {
         }
         refreshStats()
 
-        // Collection tab deleted from UI
         val tabBar = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             background = cardBg("#0F131C", "#212A3D", 18f)
