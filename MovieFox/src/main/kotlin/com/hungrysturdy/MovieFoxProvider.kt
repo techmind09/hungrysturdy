@@ -1,28 +1,20 @@
 package com.hungrysturdy
 
-// Cloudstream Core, Utils, & Logging
+import com.fasterxml.jackson.annotation.JsonProperty
+import com.hungrysturdy.Extractors.invokeAllAnimeSources
+import com.hungrysturdy.Extractors.invokeAllSources
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.utils.*
-
-// Cloudstream Static Helpers (AppUtils & LoadResponse)
 import com.lagradost.cloudstream3.LoadResponse.Companion.addAniListId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addMalId
+import com.lagradost.cloudstream3.utils.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.AppUtils.tryParseJson
-
-// Coroutines
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-
-// JSON Parsing
-import com.fasterxml.jackson.annotation.JsonProperty
-
-import com.hungrysturdy.Extractors.invokeAllSources
-import com.hungrysturdy.Extractors.invokeAllAnimeSources
 
 open class MovieFoxProvider : MainAPI() {
     override var mainUrl = "https://cinemeta-catalogs.strem.io"
@@ -99,12 +91,24 @@ open class MovieFoxProvider : MainAPI() {
         "$mainUrl/top/catalog/series/top/skip=###&genre=Documentary" to "Docu-Series",
     )
 
-    private fun getPosterUrl(
-        url: String? = null,
-    ): String? {
-        if (url == null) return null
+    private fun getPosterUrl(url: String? = null): String? {
+        if (url.isNullOrBlank()) return null
         if (url.contains("metahub.space") || url.contains("kitsu.")) return image_proxy + url
         return url
+    }
+
+    private fun String.toSansSerifBold(): String {
+        val sb = StringBuilder(length)
+        for (ch in this) {
+            val mapped = when (ch) {
+                in 'A'..'Z' -> Character.toChars(0x1D5D4 + (ch - 'A')).concatToString()
+                in 'a'..'z' -> Character.toChars(0x1D5EE + (ch - 'a')).concatToString()
+                in '0'..'9' -> Character.toChars(0x1D7EC + (ch - '0')).concatToString()
+                else -> ch.toString()
+            }
+            sb.append(mapped)
+        }
+        return sb.toString()
     }
 
     override suspend fun getMainPage(
@@ -114,57 +118,78 @@ open class MovieFoxProvider : MainAPI() {
         if (page == 1) skipMap.clear()
         val skip = skipMap[request.name] ?: 0
         val newRequestData = request.data.replace("###", skip.toString())
-        val json = app.get("$newRequestData.json").text
-        val movies = tryParseJson<Home>(json) ?: return newHomePageResponse(
-            list = HomePageList(
-                name = request.name,
-                list = emptyList(),
-            ),
+
+        val json = runCatching { app.get("$newRequestData.json").text }.getOrNull()
+        val movies = json?.let { tryParseJson<Home>(it) } ?: return newHomePageResponse(
+            list = HomePageList(name = request.name, list = emptyList()),
             hasNext = false
         )
+
         val movieCount = movies.metas.size
         skipMap[request.name] = skip + movieCount
+
         val home = movies.metas.mapNotNull { movie ->
-            val type = when {
-                movie.type == "movie" -> TvType.Movie
-                movie.type == "anime" -> TvType.Anime
+            val type = when (movie.type) {
+                "movie" -> TvType.Movie
+                "anime" -> TvType.Anime
                 else -> TvType.TvSeries
             }
-            val title = movie.aliases?.firstOrNull() ?: movie.name ?: ""
-            newMovieSearchResponse(title, PassData(movie.id, movie.type).toJson(), type) {
-                this.posterUrl = getPosterUrl(movie.poster)
-                this.score = Score.from10(movie.imdbRating)
+            val title = movie.aliases?.firstOrNull()?.takeIf { it.isNotBlank() }
+                ?: movie.name?.takeIf { it.isNotBlank() }
+                ?: return@mapNotNull null
+
+            val dataJson = PassData(movie.id, movie.type).toJson()
+            if (type == TvType.Movie) {
+                newMovieSearchResponse(title, dataJson, type) {
+                    this.posterUrl = getPosterUrl(movie.poster)
+                    this.score = Score.from10(movie.imdbRating)
+                }
+            } else {
+                newTvSeriesSearchResponse(title, dataJson, type) {
+                    this.posterUrl = getPosterUrl(movie.poster)
+                    this.score = Score.from10(movie.imdbRating)
+                }
             }
         }
+
         return newHomePageResponse(
-            list = HomePageList(
-                name = request.name,
-                list = home,
-            ),
+            list = HomePageList(name = request.name, list = home),
             hasNext = movies.hasMore && home.isNotEmpty()
         )
     }
 
     override suspend fun search(query: String): List<SearchResponse> = coroutineScope {
+        if (query.isBlank()) return@coroutineScope emptyList()
+
         suspend fun fetchResults(url: String): List<SearchResponse> {
             return runCatching {
                 val json = app.get(url).text
-                tryParseJson<SearchResult>(json)?.metas?.map {
-                    val title = it.aliases?.firstOrNull() ?: it.name ?: ""
+                tryParseJson<SearchResult>(json)?.metas?.mapNotNull {
+                    val title = it.aliases?.firstOrNull()?.takeIf { a -> a.isNotBlank() }
+                        ?: it.name?.takeIf { n -> n.isNotBlank() }
+                        ?: return@mapNotNull null
                     val poster = if (it.id.startsWith("tt")) {
                         "https://images.metahub.space/poster/medium/${it.id}/img"
                     } else {
                         it.poster
                     }
-                    val tvType = when {
-                        it.type == "movie" -> TvType.Movie
-                        it.type == "anime" -> TvType.Anime
+                    val tvType = when (it.type) {
+                        "movie" -> TvType.Movie
+                        "anime" -> TvType.Anime
                         else -> TvType.TvSeries
                     }
+                    val dataJson = PassData(it.id, it.type).toJson()
 
-                    newMovieSearchResponse(title, PassData(it.id, it.type).toJson(), tvType).apply {
-                        this.posterUrl = getPosterUrl(poster)
-                        this.score = Score.from10(it.imdbRating)
+                    if (tvType == TvType.Movie) {
+                        newMovieSearchResponse(title, dataJson, tvType).apply {
+                            this.posterUrl = getPosterUrl(poster)
+                            this.score = Score.from10(it.imdbRating)
+                        }
+                    } else {
+                        newTvSeriesSearchResponse(title, dataJson, tvType).apply {
+                            this.posterUrl = getPosterUrl(poster)
+                            this.score = Score.from10(it.imdbRating)
+                        }
                     }
                 } ?: emptyList()
             }.getOrDefault(emptyList())
@@ -177,10 +202,7 @@ open class MovieFoxProvider : MainAPI() {
             "$kitsu_url/catalog/anime/kitsu-anime-trending/search=$query.json"
         )
 
-        val resultsLists = endpoints.map {
-            async { fetchResults(it) }
-        }.awaitAll()
-
+        val resultsLists = endpoints.map { async { fetchResults(it) } }.awaitAll()
         val maxSize = resultsLists.maxOfOrNull { it.size } ?: 0
 
         buildList {
@@ -193,118 +215,129 @@ open class MovieFoxProvider : MainAPI() {
     }
 
     override suspend fun load(url: String): LoadResponse? {
-        val movie = parseJson<PassData>(url)
+        val movie = tryParseJson<PassData>(url) ?: return null
         val tvtype = movie.type
         var id = movie.id
-        val type = if (movie.type == "movie") TvType.Movie else TvType.TvSeries
-        val meta_url =
-            if (id.contains("kitsu") || id.contains("mal")) kitsu_url
-            else cinemeta_url
-        val isKitsu = meta_url == kitsu_url
+        val type = if (tvtype == "movie") TvType.Movie else TvType.TvSeries
+        val metaUrl = if (id.contains("kitsu") || id.contains("mal")) kitsu_url else cinemeta_url
+        val isKitsu = metaUrl == kitsu_url
         val kitsuId = if (isKitsu) id.substringAfter("kitsu:") else null
-        id = if (isKitsu) id.replace(":", "%3A") else id
-        val json = app.get("$meta_url/meta/$tvtype/$id.json").text
-        val movieData = tryParseJson<ResponseData>(json)?.meta
-        if (isKitsu && id.contains("mal")) {
-            id = movieData?.id ?: id
+        val encodedId = if (isKitsu) id.replace(":", "%3A") else id
+
+        val json = runCatching { app.get("$metaUrl/meta/$tvtype/$encodedId.json").text }.getOrNull() ?: return null
+        val movieData = tryParseJson<ResponseData>(json)?.meta ?: return null
+
+        if (isKitsu && id.contains("mal") && !movieData.id.isNullOrBlank()) {
+            id = movieData.id
         }
 
         val externalIds = if (isKitsu) getExternalIds(kitsuId, "kitsu") else null
         val malId = externalIds?.myanimelist
         val anilistId = externalIds?.anilist
 
-        val title = movieData?.name.toString()
-        val engTitle = movieData?.aliases?.firstOrNull() ?: title
-        val posterUrl = getPosterUrl(movieData?.poster)
-        val logo = getPosterUrl(movieData?.logo)
-        val imdbRating = movieData?.imdbRating?.toDoubleOrNull()
-        val year = movieData?.year
-        val releaseInfo = movieData?.releaseInfo
-        var tmdbId = movieData?.moviedb_id
-        id = if (!isKitsu) movieData?.imdb_id.toString() else id
+        val title = movieData.name.orEmpty().ifBlank { "Unknown" }
+        val engTitle = movieData.aliases?.firstOrNull()?.takeIf { it.isNotBlank() } ?: title
+        val posterUrl = getPosterUrl(movieData.poster)
+        val logo = getPosterUrl(movieData.logo)
+        val imdbRating = movieData.imdbRating?.toDoubleOrNull()
+        val year = movieData.year
+        val releaseInfo = movieData.releaseInfo
 
-        id = if (isKitsu) externalIds?.imdb.toString() else id
-        tmdbId = if (tmdbId == null || isKitsu) externalIds?.themoviedb else null
-
-        val description = movieData?.awards?.let { "[${it.toSansSerifBold()}] ${movieData.description}" } ?: movieData?.description
-        val actors = if (isKitsu) {
-            null
+        val resolvedImdbId = if (isKitsu) {
+            externalIds?.imdb?.takeIf { it.isNotBlank() } ?: id
         } else {
-            getTvdbData(tvtype, id)?.cast
+            movieData.imdb_id?.takeIf { it.isNotBlank() } ?: id
         }
 
-        val country = movieData?.country ?: ""
-        val genre = movieData?.genre ?: movieData?.genres ?: emptyList()
-        val background = getPosterUrl(movieData?.background)
-        val isCartoon = genre.any { it.contains("Animation", true) }
-        var isAnime = (country.contains("Japan", true) ||
-            country.contains("China", true)) && isCartoon
-        isAnime = if (isKitsu) true else isAnime
-        val isBollywood = country.contains("India", true)
-        val isAsian = (country.contains("Korea", true) ||
-            country.contains("China", true)) && !isAnime
+        val tmdbId = if (isKitsu) {
+            externalIds?.themoviedb ?: movieData.moviedb_id
+        } else {
+            movieData.moviedb_id ?: externalIds?.themoviedb
+        }
 
-        if (tvtype == "movie") {
+        val description = movieData.awards?.takeIf { it.isNotBlank() }
+            ?.let { "[${it.toSansSerifBold()}] ${movieData.description.orEmpty()}" }
+            ?: movieData.description
+
+        val actors: List<ActorData>? = movieData.app_extras?.cast
+            ?.mapNotNull { c ->
+                val actorName = c.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                ActorData(
+                    actor = Actor(actorName, getPosterUrl(c.photo)),
+                    roleString = c.character
+                )
+            }
+            ?.takeIf { it.isNotEmpty() }
+            ?: movieData.cast?.map { ActorData(Actor(it)) }?.takeIf { it.isNotEmpty() }
+
+        val country = movieData.country.orEmpty()
+        val genre = movieData.genre ?: movieData.genres ?: emptyList()
+        val background = getPosterUrl(movieData.background)
+        val isCartoon = genre.any { it.contains("Animation", true) }
+        val isAnime = isKitsu || ((country.contains("Japan", true) || country.contains("China", true)) && isCartoon)
+        val isBollywood = country.contains("India", true)
+        val isAsian = (country.contains("Korea", true) || country.contains("China", true)) && !isAnime
+
+        return if (tvtype == "movie") {
             val data = LoadLinksData(
-                title,
-                id,
-                tmdbId,
-                tvtype,
-                year ?: releaseInfo,
-                null,
-                null,
-                null,
-                isAnime,
-                isBollywood,
-                isAsian,
-                isCartoon,
-                null,
-                null,
-                null,
-                isKitsu,
-                anilistId,
-                malId,
-                kitsuId,
+                title = title,
+                id = resolvedImdbId,
+                tmdbId = tmdbId,
+                tvtype = tvtype,
+                year = year ?: releaseInfo,
+                isAnime = isAnime,
+                isBollywood = isBollywood,
+                isAsian = isAsian,
+                isCartoon = isCartoon,
+                imdb_id = resolvedImdbId,
+                isKitsu = isKitsu,
+                anilistId = anilistId,
+                malId = malId,
+                kitsuId = kitsuId,
             ).toJson()
-            return newMovieLoadResponse(engTitle, url, if (isAnime) TvType.AnimeMovie else type, data) {
+
+            newMovieLoadResponse(engTitle, url, if (isAnime) TvType.AnimeMovie else type, data) {
                 this.posterUrl = posterUrl
                 this.plot = description
                 this.tags = genre
                 this.score = Score.from10(imdbRating)
-                this.year = year?.toIntOrNull() ?: releaseInfo?.toIntOrNull() ?: year?.substringBefore("-")?.toIntOrNull()
+                this.year = year?.toIntOrNull()
+                    ?: releaseInfo?.toIntOrNull()
+                    ?: year?.substringBefore("-")?.toIntOrNull()
                 this.backgroundPosterUrl = background
                 this.logoUrl = logo
                 this.contentRating = if (isKitsu) "Kitsu" else "IMDB"
                 this.actors = actors
                 addAniListId(anilistId)
                 addMalId(malId)
-                addImdbId(id)
+                if (resolvedImdbId.startsWith("tt")) addImdbId(resolvedImdbId)
             }
         } else {
-            val episodes = movieData?.videos
+            val episodes = movieData.videos
                 ?.filter { it.season != 0 }
                 ?.map { ep ->
+                    val epImdbId = ep.imdb_id?.takeIf { it.isNotBlank() } ?: resolvedImdbId
                     newEpisode(
                         LoadLinksData(
-                            title,
-                            id,
-                            tmdbId,
-                            tvtype,
-                            year ?: releaseInfo,
-                            ep.season,
-                            ep.episode,
-                            ep.firstAired ?: ep.released,
-                            isAnime,
-                            isBollywood,
-                            isAsian,
-                            isCartoon,
-                            ep.imdb_id ?: id,
-                            ep.imdbSeason ?: externalIds?.thetvdbSeason ?: ep.season,
-                            ep.imdbEpisode ?: ep.episode,
-                            isKitsu,
-                            anilistId,
-                            malId,
-                            kitsuId
+                            title = title,
+                            id = resolvedImdbId,
+                            tmdbId = tmdbId,
+                            tvtype = tvtype,
+                            year = year ?: releaseInfo,
+                            season = ep.season,
+                            episode = ep.episode,
+                            firstAired = ep.firstAired ?: ep.released,
+                            isAnime = isAnime,
+                            isBollywood = isBollywood,
+                            isAsian = isAsian,
+                            isCartoon = isCartoon,
+                            imdb_id = epImdbId,
+                            imdbSeason = ep.imdbSeason ?: externalIds?.thetvdbSeason ?: ep.season,
+                            imdbEpisode = ep.imdbEpisode ?: ep.episode,
+                            isKitsu = isKitsu,
+                            anilistId = anilistId,
+                            malId = malId,
+                            kitsuId = kitsuId
                         ).toJson()
                     ) {
                         this.name = ep.name ?: ep.title
@@ -317,22 +350,41 @@ open class MovieFoxProvider : MainAPI() {
                     }
                 } ?: emptyList()
 
-            return newAnimeLoadResponse(engTitle, url, if (isAnime) TvType.Anime else TvType.TvSeries) {
-                addEpisodes(DubStatus.Subbed, episodes)
-                this.posterUrl = posterUrl
-                this.backgroundPosterUrl = background
-                this.year = year?.substringBefore("–")?.toIntOrNull()
-                    ?: releaseInfo?.substringBefore("–")?.toIntOrNull()
-                    ?: year?.substringBefore("-")?.toIntOrNull()
-                this.plot = description
-                this.tags = genre
-                this.logoUrl = logo
-                this.score = Score.from10(imdbRating)
-                this.contentRating = if (isKitsu) "Kitsu" else "IMDB"
-                this.actors = actors
-                addAniListId(anilistId)
-                addMalId(malId)
-                addImdbId(id)
+            if (isAnime) {
+                newAnimeLoadResponse(engTitle, url, TvType.Anime) {
+                    addEpisodes(DubStatus.Subbed, episodes)
+                    this.posterUrl = posterUrl
+                    this.backgroundPosterUrl = background
+                    this.year = year?.substringBefore("–")?.toIntOrNull()
+                        ?: releaseInfo?.substringBefore("–")?.toIntOrNull()
+                        ?: year?.substringBefore("-")?.toIntOrNull()
+                    this.plot = description
+                    this.tags = genre
+                    this.logoUrl = logo
+                    this.score = Score.from10(imdbRating)
+                    this.contentRating = if (isKitsu) "Kitsu" else "IMDB"
+                    this.actors = actors
+                    addAniListId(anilistId)
+                    addMalId(malId)
+                    if (resolvedImdbId.startsWith("tt")) addImdbId(resolvedImdbId)
+                }
+            } else {
+                newTvSeriesLoadResponse(engTitle, url, TvType.TvSeries, episodes) {
+                    this.posterUrl = posterUrl
+                    this.backgroundPosterUrl = background
+                    this.year = year?.substringBefore("–")?.toIntOrNull()
+                        ?: releaseInfo?.substringBefore("–")?.toIntOrNull()
+                        ?: year?.substringBefore("-")?.toIntOrNull()
+                    this.plot = description
+                    this.tags = genre
+                    this.logoUrl = logo
+                    this.score = Score.from10(imdbRating)
+                    this.contentRating = "IMDB"
+                    this.actors = actors
+                    addAniListId(anilistId)
+                    addMalId(malId)
+                    if (resolvedImdbId.startsWith("tt")) addImdbId(resolvedImdbId)
+                }
             }
         }
     }
@@ -345,43 +397,40 @@ open class MovieFoxProvider : MainAPI() {
     ): Boolean {
         Log.d("MovieFox", data)
 
-        val res = parseJson<LoadLinksData>(data)
+        val res = tryParseJson<LoadLinksData>(data) ?: return false
         val year = getYear(res)
         val seasonYear = getSeasonYear(res)
 
-        return when {
-            res.isKitsu -> {
-                runKitsuInvokers(res, year, seasonYear, subtitleCallback, callback)
-                true
-            }
-            else -> {
-                invokeAllSources(
-                    AllLoadLinksData(
-                        res.title,
-                        res.id,
-                        res.tmdbId,
-                        res.anilistId,
-                        res.malId,
-                        res.kitsuId,
-                        year,
-                        seasonYear,
-                        res.season,
-                        res.episode,
-                        res.isAnime,
-                        res.isBollywood,
-                        res.isAsian,
-                        res.isCartoon,
-                        null,
-                        null,
-                        null,
-                        null,
-                        null,
-                    ),
-                    subtitleCallback,
-                    callback
-                )
-                true
-            }
+        return if (res.isKitsu) {
+            runKitsuInvokers(res, year, seasonYear, subtitleCallback, callback)
+            true
+        } else {
+            invokeAllSources(
+                AllLoadLinksData(
+                    res.title,
+                    res.id,
+                    res.tmdbId,
+                    res.anilistId,
+                    res.malId,
+                    res.kitsuId,
+                    year,
+                    seasonYear,
+                    res.season,
+                    res.episode,
+                    res.isAnime,
+                    res.isBollywood,
+                    res.isAsian,
+                    res.isCartoon,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                ),
+                subtitleCallback,
+                callback
+            )
+            true
         }
     }
 
@@ -501,11 +550,11 @@ open class MovieFoxProvider : MainAPI() {
     )
 
     suspend fun getExternalIds(id: String?, type: String): ExternalIds? {
-        if (id == null) return null
+        if (id.isNullOrBlank()) return null
 
         val url = "$haglund_url/ids?source=$type&id=$id"
         Log.d("MovieFox", "url: $url")
-        val json = app.get(url).text
+        val json = runCatching { app.get(url).text }.getOrNull() ?: return null
         Log.d("MovieFox", "json: $json")
         return tryParseJson<ExternalIds>(json)
     }
@@ -531,26 +580,29 @@ open class MovieFoxProvider : MainAPI() {
         var imdbYear: Int? = null
         var tmdbId: Int? = null
 
-        try {
-            val json = app.get("$cinemeta_url/meta/${res.tvtype}/${res.imdb_id}.json").text
-            val movieData = tryParseJson<ResponseData>(json)
+        val imdbLookup = res.imdb_id?.takeIf { it.isNotBlank() && it != "null" }
+        if (imdbLookup != null) {
+            runCatching {
+                val json = app.get("$cinemeta_url/meta/${res.tvtype}/$imdbLookup.json").text
+                val movieData = tryParseJson<ResponseData>(json)
 
-            movieData?.meta?.let { meta ->
-                imdbTitle = meta.name
-                imdbYear = meta.year?.substringBefore("-")?.toIntOrNull()
-                    ?: meta.year?.substringBefore("–")?.toIntOrNull()
-                    ?: meta.year?.toIntOrNull()
-                tmdbId = meta.moviedb_id
+                movieData?.meta?.let { meta ->
+                    imdbTitle = meta.name
+                    imdbYear = meta.year?.substringBefore("-")?.toIntOrNull()
+                        ?: meta.year?.substringBefore("–")?.toIntOrNull()
+                        ?: meta.year?.toIntOrNull()
+                    tmdbId = meta.moviedb_id
+                }
+            }.onFailure { e ->
+                Log.d("MovieFox", "Cinemeta API failed: ${e.localizedMessage}")
             }
-        } catch (e: Exception) {
-            println("Cinemeta API failed: ${e.localizedMessage}")
         }
 
         invokeAllAnimeSources(
             AllLoadLinksData(
                 res.title,
-                res.imdb_id,
-                tmdbId,
+                imdbLookup,
+                tmdbId ?: res.tmdbId,
                 res.anilistId,
                 res.malId,
                 res.kitsuId,
@@ -573,3 +625,4 @@ open class MovieFoxProvider : MainAPI() {
         )
     }
 }
+
