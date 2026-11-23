@@ -14,28 +14,42 @@ open class GDFlixExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val pageUrl = resolveUrl(url, mainUrl)
+        val links = collectLinks(url, referer, subtitleCallback)
+        for (link in links) {
+            callback.invoke(link)
+        }
+    }
+
+    internal suspend fun collectLinks(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit
+    ): List<ExtractorLink> {
+        val results = mutableListOf<ExtractorLink>()
+        val seenUrls = linkedSetOf<String>()
+
+        val pageUrl: String = resolveUrl(url, mainUrl)
         val response = app.get(pageUrl, referer = referer ?: mainUrl)
-        val basePageUrl = response.url.ifBlank { pageUrl }
+        val basePageUrl: String = response.url.ifBlank { pageUrl }
         val doc = response.document
 
-        val fileTitle = doc.selectFirst("ul.list-group li")
+        val fileTitle: String = doc.selectFirst("ul.list-group li")
             ?.text()
             ?.substringAfter(":", "")
             ?.trim()
             ?.takeIf { it.isNotBlank() }
             ?: doc.title().substringAfter("|", "").trim().ifBlank { name }
 
-        val baseQuality = detectQualityFromText(fileTitle)
+        val baseQuality: Int = detectQualityFromText(fileTitle)
 
         val buttons = doc.select(".card-body a.btn[href], .card-body a[href]")
             .mapNotNull { el ->
-                val rawHref = el.attr("href").trim()
+                val rawHref: String = el.attr("href").trim()
                 if (rawHref.isBlank() || rawHref.startsWith("#") || rawHref.startsWith("javascript:")) {
                     return@mapNotNull null
                 }
-                val resolved = resolveUrl(rawHref, basePageUrl)
-                val label = el.text().replace(Regex("""\s+"""), " ").trim().ifBlank { "Mirror" }
+                val resolved: String = resolveUrl(rawHref, basePageUrl)
+                val label: String = el.text().replace(Regex("""\s+"""), " ").trim().ifBlank { "Mirror" }
                 label to resolved
             }
             .distinctBy { it.second }
@@ -55,58 +69,74 @@ open class GDFlixExtractor : ExtractorApi() {
                     targetUrl.contains(".mkv", ignoreCase = true) ||
                     targetUrl.contains(".mp4", ignoreCase = true) ||
                     targetUrl.contains(".m3u8", ignoreCase = true) -> {
-                    val streamType = if (targetUrl.contains(".m3u8", ignoreCase = true)) {
-                        ExtractorLinkType.M3U8
-                    } else {
-                        ExtractorLinkType.VIDEO
-                    }
-                    callback.invoke(
-                        newExtractorLink(
-                            source = name,
-                            name = "$name - $label",
-                            url = targetUrl,
-                            type = streamType
-                        ) {
-                            this.referer = basePageUrl
-                            this.quality = baseQuality
+                    if (seenUrls.add(targetUrl)) {
+                        val streamType = if (targetUrl.contains(".m3u8", ignoreCase = true)) {
+                            ExtractorLinkType.M3U8
+                        } else {
+                            ExtractorLinkType.VIDEO
                         }
-                    )
+                        results.add(
+                            newExtractorLink(
+                                source = name,
+                                name = "$name - $label",
+                                url = targetUrl,
+                                type = streamType
+                            ) {
+                                this.referer = basePageUrl
+                                this.quality = baseQuality
+                            }
+                        )
+                    }
                 }
 
                 targetUrl.contains("/cloud/", ignoreCase = true) ||
                     label.contains("FAST CLOUD", ignoreCase = true) ||
                     label.contains("ZIPDISK", ignoreCase = true) -> {
-                    extractFromCloudPage(targetUrl, basePageUrl, baseQuality, subtitleCallback, callback)
+                    val cloudLinks = extractFromCloudPage(targetUrl, basePageUrl, baseQuality, subtitleCallback)
+                    for (cl in cloudLinks) {
+                        if (seenUrls.add(cl.url)) {
+                            results.add(cl)
+                        }
+                    }
                 }
 
                 else -> {
-                    loadExtractor(targetUrl, basePageUrl, subtitleCallback, callback)
+                    if (seenUrls.add(targetUrl)) {
+                        loadExtractor(targetUrl, basePageUrl, subtitleCallback) { extLink ->
+                            results.add(extLink)
+                        }
+                    }
                 }
             }
         }
+
+        return results
     }
 
     private suspend fun extractFromCloudPage(
         cloudUrl: String,
         refererUrl: String,
         fallbackQuality: Int,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
+        subtitleCallback: (SubtitleFile) -> Unit
+    ): List<ExtractorLink> {
+        val out = mutableListOf<ExtractorLink>()
         val cloudDoc = try {
             app.get(cloudUrl, referer = refererUrl).document
         } catch (_: Exception) {
-            return
+            return out
         }
 
         val cloudLinks = cloudDoc.select("a[href], source[src], video[src]")
             .mapNotNull { el ->
-                val raw = if (el.tagName() == "a") el.attr("href") else el.attr("src")
-                val cleaned = raw.trim()
-                if (cleaned.isBlank() || cleaned.startsWith("#") || cleaned.startsWith("javascript:")) {
+                val raw: String = if (el.tagName().equals("a", ignoreCase = true)) {
+                    el.attr("href").trim()
+                } else {
+                    el.attr("src").trim()
+                }
+                if (raw.isBlank() || raw.startsWith("#") || raw.startsWith("javascript:")) {
                     null
                 } else {
-                    resolveUrl(cleaned, cloudUrl)
+                    resolveUrl(raw, cloudUrl)
                 }
             }
             .distinct()
@@ -116,7 +146,7 @@ open class GDFlixExtractor : ExtractorApi() {
                 link.contains(".mkv", ignoreCase = true) ||
                 link.contains(".m3u8", ignoreCase = true)
             ) {
-                callback.invoke(
+                out.add(
                     newExtractorLink(
                         source = name,
                         name = "$name - Fast Cloud",
@@ -134,18 +164,23 @@ open class GDFlixExtractor : ExtractorApi() {
                     }
                 )
             } else if (!link.contains("gdflix", ignoreCase = true)) {
-                loadExtractor(link, cloudUrl, subtitleCallback, callback)
+                loadExtractor(link, cloudUrl, subtitleCallback) { extLink ->
+                    out.add(extLink)
+                }
             }
         }
+
+        return out
     }
 
     private fun resolveUrl(rawUrl: String, baseUrl: String): String {
-        val trimmed = rawUrl.trim()
+        val trimmed: String = rawUrl.trim()
         return when {
-            trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true) -> trimmed
+            trimmed.startsWith("http://", ignoreCase = true) ||
+                trimmed.startsWith("https://", ignoreCase = true) -> trimmed
             trimmed.startsWith("//") -> "https:$trimmed"
             else -> {
-                val origin = Regex("""^(https?://[^/]+)""").find(baseUrl)?.groupValues?.getOrNull(1)
+                val origin: String = Regex("""^(https?://[^/]+)""").find(baseUrl)?.groupValues?.getOrNull(1)
                     ?: mainUrl
                 "$origin/${trimmed.trimStart('/')}"
             }
@@ -160,3 +195,4 @@ open class GDFlixExtractor : ExtractorApi() {
         else -> Qualities.Unknown.value
     }
 }
+
