@@ -1,1246 +1,1427 @@
-package com.hungrysturdy.ui
+package com.hungrysturdy
 
-import android.app.Dialog
+import android.app.Activity
+import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.os.Bundle
 import android.text.Editable
+import android.text.TextUtils
 import android.text.TextWatcher
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.Window
-import android.widget.Button
-import android.widget.EditText
-import android.widget.FrameLayout
-import android.widget.HorizontalScrollView
-import android.widget.LinearLayout
-import android.widget.RadioButton
-import android.widget.RadioGroup
-import android.widget.ScrollView
-import android.widget.Switch
-import android.widget.TextView
-import android.widget.Toast
-import androidx.fragment.app.DialogFragment
-import androidx.fragment.app.FragmentActivity
-import com.lagradost.cloudstream3.app
+import android.webkit.CookieManager
+import android.widget.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayInputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.zip.ZipInputStream
 
-class HungryBirdsSettingsDialog : DialogFragment() {
+object MovieFoxSettingsDialog {
 
-    data class ServerMeta(
+    const val LOG_TAG = "MovieFoxDiag"
+    private const val PREFS_NAME = "hungrysturdy_ultra_max_v22"
+    private const val KEY_SRV_PREFIX = "hs_srv_"
+    private const val KEY_EXT_PREFIX = "hs_ext_"
+    private const val KEY_SRV_ORDER = "hs_srv_order_csv"
+    private const val KEY_CS3_REPOS = "hs_cs3_repos_json"
+    private const val KEY_CS3_SERVERS = "hs_cs3_servers_json"
+    private const val KEY_CF_COOKIES = "hs_cf_cookies_json"
+    private const val KEY_USE_WEBVIEW_CF = "hs_use_webview_cf"
+    private const val KEY_SFLIX_HOST = "hs_sflix_host"
+    private const val KEY_THEME = "hs_ui_theme"
+    private const val KEY_PLAYER = "hs_preferred_player"
+    private const val KEY_QUALITY = "hs_preferred_quality"
+    private const val KEY_Q_4K = "hs_q_4k_1440p"
+    private const val KEY_Q_1080 = "hs_q_1080p"
+    private const val KEY_Q_720 = "hs_q_720p"
+    private const val KEY_Q_480 = "hs_q_480p"
+    private const val KEY_HINDI_ONLY = "hs_hindi_providers_only"
+    private const val KEY_LOW_BUFFER = "hs_low_buffer_mode"
+    private const val KEY_DOWNLOAD_ONLY = "hs_download_only_mode"
+    private const val KEY_CONCURRENCY = "hs_concurrency"
+    private const val KEY_TIMEOUT_SEC = "hs_timeout_sec"
+    private const val KEY_SHUFFLE_HOME = "hs_shuffle_home_categories"
+
+    const val HUNGRYSTURDY_REPO_URL =
+        "https://raw.githubusercontent.com/techmind09/hungrysturdy/refs/heads/main/builds/plugins.json"
+
+    const val CF_BYPASS_UA =
+        "Mozilla/5.0 (Linux; Android 15; Infinix X6851) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36"
+
+    val PLAYER_OPTIONS = listOf(
+        "Default (ExoPlayer)",
+        "MX Player",
+        "MX Player Pro",
+        "VLC Player"
+    )
+
+    val SFLIX_HOSTS = listOf(
+        "https://sflix.film",
+        "https://h5-api.aoneroom.com",
+        "https://movie-box.co",
+        "https://123moviesfree.club"
+    )
+
+    data class ThemePalette(
         val id: String,
-        val title: String,
-        val badge: String,
+        val name: String,
+        val primaryHex: String,
+        val gradStart: String,
+        val gradMid: String,
+        val gradEnd: String
+    )
+
+    val UI_THEMES = listOf(
+        ThemePalette("purple", "Neon Purple", "#7C3AED", "#0B192C", "#1E153D", "#08272E"),
+        ThemePalette("blue", "Cyber Blue", "#2563EB", "#09182D", "#0E294B", "#082538"),
+        ThemePalette("emerald", "Emerald", "#059669", "#071F1B", "#0C2D24", "#08242B"),
+        ThemePalette("crimson", "Crimson", "#E11D48", "#230B14", "#33101F", "#1B0E24"),
+        ThemePalette("amber", "Gold Amber", "#D97706", "#211608", "#2E1C0A", "#1A1423")
+    )
+
+    data class ServerItem(
+        val key: String,
+        val name: String,
         val tag: String,
-        val url: String,
-        val category: String
+        val probeUrl: String,
+        val accentHex: String,
+        val isCustom: Boolean = false,
+        val isHindi: Boolean = true,
+        val category: String = "Movies",
+        val runtimeBadge: String = "⚡ SKY"
     )
 
-    data class ExtractorMeta(
+    data class ExtractorItem(
+        val key: String,
+        val name: String,
+        val hosts: String,
+        val tag: String
+    )
+
+    data class ServerHealthInfo(
+        val key: String,
+        val status: String,
+        val isHealthy: Boolean,
+        val httpCode: Int = 0,
+        val latencyMs: Long = -1L,
+        val detail: String = "",
+        val problemStage: String = "",
+        val updatedAt: String = ""
+    )
+
+    data class Cs3RepoConfig(
         val id: String,
-        val title: String,
-        val mirrors: String,
-        val mode: String
+        val name: String,
+        val repoUrl: String,
+        var enabled: Boolean = true,
+        var serverCount: Int = 0
     )
 
-    private val dialogScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private var currentTab = "Providers"
-    private var selectedCategory = "All"
-    private var searchQuery = ""
-    private var testJob: Job? = null
+    @Volatile
+    private var appContext: Context? = null
+    @Volatile
+    private var cachedPrefs: SharedPreferences? = null
+    @Volatile
+    private var cachedCs3Repos: MutableList<Cs3RepoConfig>? = null
+    private val cachedCs3Servers = CopyOnWriteArrayList<ServerItem>()
+    private val errorLogRing = CopyOnWriteArrayList<String>()
+    private val serverHealthMap = ConcurrentHashMap<String, ServerHealthInfo>()
+    @Volatile
+    private var cs3Loaded = false
 
-    private val defaultServers = listOf(
-        ServerMeta("dramaverse", "DramaVerse", "SKY", "K-DRAMA", "https://mydverse.com/", "Hindi"),
-        ServerMeta("prmovies", "Prmovies", "SKY", "HI/M3U8", "https://prmovies.coupons/", "Movies"),
-        ServerMeta("katdrama", "KatDrama", "SKY", "ASIAN", "https://katdrama.org/", "Hindi"),
-        ServerMeta("hindidrama", "HindiDrama", "SKY", "K-DRA", "https://hindidrama.net/", "Hindi"),
-        ServerMeta("sflix", "Sflix", "SKY", "HLS/MP4", "https://sflix.film/", "Series")
+    fun bindContext(ctx: Context?) {
+        if (ctx != null) appContext = ctx.applicationContext
+    }
+
+    val VEGA_ALLOWED_HOSTS = listOf(
+        "pixeldrain.dev", "pixeldrain.com", "pixeldrain", "fsl2", "fsl",
+        "drive.google.com", "docs.google.com", "googleusercontent.com", "gdrive",
+        "gdflix", "gdtot", "hubcloud", "gamerxyt", "nexdrive", "vcloud",
+        "vegadrive", "fastdl", "filebee", "filepress", "fpgo", "gofile",
+        "gpdl", ".r2.dev", ".r2.cloudflarestorage.com", "buzzserver",
+        "fuckingfast.net", "hbplay.pages.dev", "goflix.sbs", "10gbps", "xcloud"
     )
 
-    private val extractorList = listOf(
-        ExtractorMeta("basejwp", "BaseJWP Extractor", "JWP / Unpacker / B64", "HLS / MP4"),
-        ExtractorMeta("gdrive", "GDrive Extractor", "drive.google.com • usercontent", "Direct DL"),
-        ExtractorMeta("streamtape", "StreamTape Mirrors", "streamtape.com/to/net/xyz • shavetape", "MP4"),
-        ExtractorMeta("voe", "Voe Mirrors", "voe.sx • voe.to • voe.co", "HLS / MP4"),
-        ExtractorMeta("pixeldrain", "Pixeldrain", "pixeldrain.com • pixeldrain.dev", "API Direct"),
-        ExtractorMeta("hubcloud", "KatHubCloud & GamerXYT", "hubcloud.pw/dad/club/one • gamerxyt", "10Gbps / FSL"),
-        ExtractorMeta("gdflix", "KatGDFlix Mirrors", "gdflix.* • gdlink.* • new15.gdflix", "Direct / R2"),
-        ExtractorMeta("buzz_hb_go", "BuzzServer / HBPlay / GoFlix", "fuckingfast.net • hbplay • goflix.sbs", "Mirror")
+    val EXTRACTORS = listOf(
+        ExtractorItem("basejwp", "BaseJWP Extractor", "JWP / Unpacker / B64 / m3u8 / mp4", "HLS/MP4"),
+        ExtractorItem("gdrive", "GDrive Extractor", "drive.google.com • usercontent.google.com", "GDRIVE"),
+        ExtractorItem("streamtape", "StreamTape Mirrors", "streamtape.com/to/net/xyz • shavetape • strcloud", "MP4"),
+        ExtractorItem("voe", "Voe Mirrors", "voe.sx • voe.to • voe.co", "HLS/MP4"),
+        ExtractorItem("pixeldrain", "Pixeldrain", "pixeldrain.com • pixeldrain.dev", "FAST"),
+        ExtractorItem("hubcloud", "KatHubCloud & GamerXYT", "hubcloud.pw/dad/club/one • gamerxyt.com", "10Gbps"),
+        ExtractorItem("gdflix", "KatGDFlix Mirrors", "gdflix.* • gdlink.* • new15.gdflix.*", "R2/DL"),
+        ExtractorItem("buzz_hb_go", "BuzzServer / HBPlay / GoFlix", "fuckingfast.net • hbplay.pages.dev • goflix.sbs", "MIRROR"),
+        ExtractorItem("jwp_hosts", "VidPrime / Nitrox / NxStream / Vibuxer", "vidprime.top • itsnitrox.tech • nxstreamhub • vibuxer", "WORKER"),
+        ExtractorItem("jwp_embeds", "Lulu / Vidara / Rabbit / MegaCloud / Wish / Moon", "luluvid • vidara • megacloud • streamwish • filemoon • voe", "EMBED")
     )
 
-    private val healthStatuses = mutableMapOf<String, String>()
-    private lateinit var contentContainer: LinearLayout
-    private lateinit var rootLayout: LinearLayout
-    private lateinit var saveBtn: Button
-    private lateinit var resetBtn: Button
-
-    private data class Palette(
-        val bgScreen: Int,
-        val bgCard: Int,
-        val bgElevated: Int,
-        val accent: Int,
-        val accentSoft: Int,
-        val border: Int,
-        val textPrimary: Int,
-        val textSecondary: Int,
-        val liveGreen: Int,
-        val dangerRed: Int,
-        val infoBlue: Int
+    val BASE_SERVERS = listOf(
+        ServerItem("dramaverse", "DramaVerse", "K-DRAMA", "https://mydverse.com/", "#A855F7", false, true, "AsianDrama", "⚡ SKY"),
+        ServerItem("prmovies", "Prmovies", "HI/M3U8", "https://prmovies.coupons/", "#F59E0B", false, true, "Movies", "⚡ SKY"),
+        ServerItem("katdrama", "KatDrama", "ASIAN", "https://katdrama.org/", "#38BDF8", false, true, "AsianDrama", "⚡ SKY"),
+        ServerItem("hindidrama", "HindiDrama", "K-DRA", "https://hindidrama.net/", "#EC4899", false, true, "AsianDrama", "⚡ SKY"),
+        ServerItem("sflix", "Sflix", "HLS/MP4", "https://sflix.film/", "#34D399", false, false, "Series", "⚡ SKY")
     )
 
-    private fun currentPalette(ctx: Context): Palette {
-        val accent = when (HungryBirdsPrefs.getTheme(ctx)) {
-            HungryBirdsPrefs.THEME_BLUE -> Color.parseColor("#2563EB")
-            HungryBirdsPrefs.THEME_EMERALD -> Color.parseColor("#059669")
-            HungryBirdsPrefs.THEME_CRIMSON -> Color.parseColor("#DC2626")
-            else -> Color.parseColor("#7C3AED")
+    private val AVATAR_PALETTE = listOf(
+        "#38BDF8", "#A855F7", "#F43F5E", "#34D399",
+        "#FB923C", "#818CF8", "#22D3EE", "#EC4899", "#FACC15"
+    )
+
+    val SERVERS: List<ServerItem>
+        get() {
+            appContext?.let { ctx ->
+                if (!cs3Loaded) prefs(ctx)
+            }
+            return BASE_SERVERS + cachedCs3Servers.toList()
         }
-        val accentSoft = when (HungryBirdsPrefs.getTheme(ctx)) {
-            HungryBirdsPrefs.THEME_BLUE -> Color.parseColor("#172554")
-            HungryBirdsPrefs.THEME_EMERALD -> Color.parseColor("#064E3B")
-            HungryBirdsPrefs.THEME_CRIMSON -> Color.parseColor("#450A0A")
-            else -> Color.parseColor("#2E1065")
+
+    fun copyToClipboard(ctx: Context?, label: String, text: String) {
+        if (ctx == null || text.isBlank()) return
+        runCatching {
+            val cb = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            cb?.setPrimaryClip(ClipData.newPlainText(label, text))
+            safeToast(ctx, "Copied: $label")
         }
-        return Palette(
-            bgScreen = Color.parseColor("#09090F"),
-            bgCard = Color.parseColor("#12131F"),
-            bgElevated = Color.parseColor("#1A1C2D"),
-            accent = accent,
-            accentSoft = accentSoft,
-            border = Color.parseColor("#2A2D45"),
-            textPrimary = Color.parseColor("#F8FAFC"),
-            textSecondary = Color.parseColor("#94A3B8"),
-            liveGreen = Color.parseColor("#10B981"),
-            dangerRed = Color.parseColor("#EF4444"),
-            infoBlue = Color.parseColor("#3B82F6")
+    }
+
+    fun reportServerStatus(
+        key: String,
+        status: String,
+        isHealthy: Boolean,
+        httpCode: Int = 0,
+        latencyMs: Long = -1L,
+        detail: String = "",
+        problemStage: String = ""
+    ) {
+        val ts = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        serverHealthMap[key.lowercase()] = ServerHealthInfo(
+            key = key.lowercase(),
+            status = status,
+            isHealthy = isHealthy,
+            httpCode = httpCode,
+            latencyMs = latencyMs,
+            detail = detail,
+            problemStage = problemStage.ifBlank { if (isHealthy) "OK" else "ERROR" },
+            updatedAt = ts
         )
     }
 
-    private fun dp(ctx: Context, value: Int): Int =
-        (value * ctx.resources.displayMetrics.density).toInt()
+    fun getServerHealth(key: String): ServerHealthInfo? = serverHealthMap[key.lowercase()]
 
-    private fun cardDrawable(
-        bgColor: Int,
-        strokeColor: Int,
-        radiusPx: Float,
-        strokeWidthPx: Int = 2
+    fun isServerWorking(key: String): Boolean = true
+
+    fun logSiteError(source: String, url: String, error: Throwable?, extra: String = "") {
+        val ts = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+        val errMsg = error?.let { "${it.javaClass.simpleName}: ${it.message.orEmpty()}" }.orEmpty()
+        val line = "[$ts] [$source] ${if (extra.isNotBlank()) "$extra | " else ""}$url -> $errMsg".trim()
+        Log.e(LOG_TAG, line, error)
+        errorLogRing.add(line)
+        while (errorLogRing.size > 150) errorLogRing.removeAt(0)
+        reportServerStatus(source, "ERROR", false, 0, -1L, extra.ifBlank { errMsg }, "LOADLINKS")
+    }
+
+    fun getDiagnosticLogs(): List<String> = errorLogRing.toList()
+    fun clearDiagnosticLogs() = errorLogRing.clear()
+
+    private suspend fun probeServerLive(srv: ServerItem): ServerHealthInfo = withContext(Dispatchers.IO) {
+        val start = System.currentTimeMillis()
+        try {
+            val conn = (URL(srv.probeUrl).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 8000
+                readTimeout = 8000
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", CF_BYPASS_UA)
+                getCookieForDomain(appContext, srv.probeUrl)?.let { setRequestProperty("Cookie", it) }
+            }
+            val code = conn.responseCode
+            val ms = System.currentTimeMillis() - start
+            runCatching { conn.inputStream?.close() }
+            runCatching { conn.errorStream?.close() }
+            conn.disconnect()
+            val ok = code in 200..399 || code == 405
+            val info = ServerHealthInfo(
+                key = srv.key,
+                status = if (ok) "LIVE" else "HTTP $code",
+                isHealthy = ok,
+                httpCode = code,
+                latencyMs = ms,
+                detail = srv.probeUrl,
+                problemStage = if (ok) "OK" else "HTTP",
+                updatedAt = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+            )
+            serverHealthMap[srv.key.lowercase()] = info
+            info
+        } catch (e: Exception) {
+            val ms = System.currentTimeMillis() - start
+            val info = ServerHealthInfo(
+                key = srv.key,
+                status = "DOWN",
+                isHealthy = false,
+                httpCode = 0,
+                latencyMs = ms,
+                detail = "${e.message ?: "Timeout/Network"} • ${srv.probeUrl}",
+                problemStage = "NETWORK",
+                updatedAt = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+            )
+            serverHealthMap[srv.key.lowercase()] = info
+            info
+        }
+    }
+
+    private fun isContextAlive(ctx: Context?): Boolean {
+        if (ctx == null) return false
+        if (ctx is Activity && (ctx.isFinishing || ctx.isDestroyed)) return false
+        return true
+    }
+
+    private fun safeColor(hex: String, fallback: String = "#94A3B8"): Int =
+        runCatching { Color.parseColor(hex) }.getOrElse { Color.parseColor(fallback) }
+
+    private fun safeToast(ctx: Context?, msg: String) {
+        if (!isContextAlive(ctx)) return
+        runCatching { Toast.makeText(ctx, msg, Toast.LENGTH_SHORT).show() }
+    }
+
+    private fun dp(ctx: Context, px: Int): Int =
+        (px * ctx.resources.displayMetrics.density).toInt()
+
+    private fun cardBg(
+        bgHex: String = "#141822",
+        strokeHex: String = "#252E42",
+        radius: Float = 22f,
+        strokeWidth: Int = 2
     ): GradientDrawable = GradientDrawable().apply {
-        shape = GradientDrawable.RECTANGLE
-        cornerRadius = radiusPx
-        setColor(bgColor)
-        setStroke(strokeWidthPx, strokeColor)
+        setColor(safeColor(bgHex, "#141822"))
+        cornerRadius = radius
+        setStroke(strokeWidth, safeColor(strokeHex, "#252E42"))
     }
 
-    override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
-        val ctx = requireContext()
-        val dialog = Dialog(ctx, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
-        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
-
-        val p = currentPalette(ctx)
-        rootLayout = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(p.bgScreen)
-            setPadding(dp(ctx, 12), dp(ctx, 16), dp(ctx, 12), dp(ctx, 12))
-        }
-
-        val outerCard = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            background = cardDrawable(p.bgCard, p.accent, dp(ctx, 18).toFloat(), dp(ctx, 2))
-            setPadding(dp(ctx, 12), dp(ctx, 14), dp(ctx, 12), dp(ctx, 12))
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-        }
-
-        outerCard.addView(buildHeaderBanner(ctx, p))
-        outerCard.addView(buildTabStrip(ctx, p))
-
-        val scrollView = ScrollView(ctx).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-            overScrollMode = View.OVER_SCROLL_NEVER
-            setPadding(0, dp(ctx, 8), 0, dp(ctx, 8))
-        }
-
-        contentContainer = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        }
-        scrollView.addView(contentContainer)
-        outerCard.addView(scrollView)
-        outerCard.addView(buildFooterBar(ctx, p))
-
-        rootLayout.addView(outerCard)
-        dialog.setContentView(rootLayout)
-        renderCurrentTab(ctx)
-        return dialog
+    private fun pillBg(bgHex: String, radius: Float = 16f): GradientDrawable = GradientDrawable().apply {
+        setColor(safeColor(bgHex, "#1C2230"))
+        cornerRadius = radius
     }
 
-    private fun buildHeaderBanner(ctx: Context, p: Palette): View {
-        val banner = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            background = cardDrawable(p.accentSoft, p.accent, dp(ctx, 14).toFloat(), dp(ctx, 1))
-            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
-        }
-
-        val topRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-
-        val titleTv = TextView(ctx).apply {
-            text = "HUNGRY BIRDS ULTRA"
-            setTextColor(p.textPrimary)
-            setTypeface(typeface, Typeface.BOLD)
-            textSize = 16f
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-
-        val turboBadge = TextView(ctx).apply {
-            text = "⚡ TURBO FAST"
-            setTextColor(Color.parseColor("#A7F3D0"))
-            setTypeface(typeface, Typeface.BOLD)
-            textSize = 10f
-            setPadding(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4))
-            background = cardDrawable(Color.parseColor("#064E3B"), p.liveGreen, dp(ctx, 8).toFloat(), 1)
-        }
-
-        val infoBtn = TextView(ctx).apply {
-            text = "ⓘ"
-            setTextColor(Color.parseColor("#DDD6FE"))
-            textSize = 15f
-            gravity = Gravity.CENTER
-            val lp = LinearLayout.LayoutParams(dp(ctx, 28), dp(ctx, 28))
-            lp.leftMargin = dp(ctx, 8)
-            layoutParams = lp
-            background = cardDrawable(p.bgElevated, p.accent, dp(ctx, 8).toFloat(), 1)
-            setOnClickListener {
-                Toast.makeText(
-                    ctx,
-                    "HungrySturdy v2026 • DramaVerse, Prmovies, KatDrama, HindiDrama, Sflix",
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-        }
-
-        topRow.addView(titleTv)
-        topRow.addView(turboBadge)
-        topRow.addView(infoBtn)
-        banner.addView(topRow)
-
-        val statsRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = dp(ctx, 10)
-            layoutParams = lp
-        }
-
-        val activeCount = defaultServers.count { HungryBirdsPrefs.isProviderEnabled(ctx, it.id) }
-        statsRow.addView(statBox(ctx, p, "$activeCount/${defaultServers.size}", "SERVERS", Color.parseColor("#38BDF8"), true))
-        statsRow.addView(statBox(ctx, p, "5 • SKY", "PROVIDERS", Color.parseColor("#F472B6"), false))
-        statsRow.addView(statBox(ctx, p, "15x • 4K", "SPEED", Color.parseColor("#FBBF24"), false))
-        banner.addView(statsRow)
-
-        return banner
-    }
-
-    private fun statBox(
-        ctx: Context,
-        p: Palette,
-        value: String,
-        label: String,
-        valueColor: Int,
-        withMarginEnd: Boolean
-    ): View = LinearLayout(ctx).apply {
-        orientation = LinearLayout.VERTICAL
-        background = cardDrawable(p.bgScreen, p.border, dp(ctx, 10).toFloat(), 1)
-        setPadding(dp(ctx, 10), dp(ctx, 8), dp(ctx, 10), dp(ctx, 8))
-        val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        if (withMarginEnd) lp.rightMargin = dp(ctx, 8)
-        layoutParams = lp
-
-        addView(TextView(ctx).apply {
-            text = value
-            setTextColor(valueColor)
-            setTypeface(typeface, Typeface.BOLD)
-            textSize = 13f
-        })
-        addView(TextView(ctx).apply {
-            text = label
-            setTextColor(p.textSecondary)
-            textSize = 9f
-        })
-    }
-
-    private fun buildTabStrip(ctx: Context, p: Palette): View {
-        val hScroll = HorizontalScrollView(ctx).apply {
-            isHorizontalScrollBarEnabled = false
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = dp(ctx, 10)
-            layoutParams = lp
-        }
-
-        val tabRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-
-        val tabs = listOf("Providers", "Extractors", "Streaming", "Collection", "Health & Logs")
-        tabs.forEach { tabName ->
-            val isSelected = currentTab == tabName
-            val btn = TextView(ctx).apply {
-                text = tabName
-                textSize = 12f
-                setTypeface(typeface, if (isSelected) Typeface.BOLD else Typeface.NORMAL)
-                setTextColor(if (isSelected) Color.WHITE else p.textSecondary)
-                setPadding(dp(ctx, 14), dp(ctx, 8), dp(ctx, 14), dp(ctx, 8))
-                background = if (isSelected) {
-                    cardDrawable(p.accent, p.accent, dp(ctx, 10).toFloat(), 1)
-                } else {
-                    cardDrawable(p.bgElevated, p.border, dp(ctx, 10).toFloat(), 1)
-                }
-                val lp = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                lp.rightMargin = dp(ctx, 6)
-                layoutParams = lp
-                setOnClickListener {
-                    currentTab = tabName
-                    dismissAllowingStateLoss()
-                    HungryBirdsSettingsDialog().apply {
-                        this.currentTab = tabName
-                        this.selectedCategory = this@HungryBirdsSettingsDialog.selectedCategory
-                        this.searchQuery = this@HungryBirdsSettingsDialog.searchQuery
-                        this.healthStatuses.putAll(this@HungryBirdsSettingsDialog.healthStatuses)
-                    }.show((ctx as? FragmentActivity)?.supportFragmentManager ?: return@setOnClickListener, "HungryBirdsSettings")
+    private fun prefs(ctx: Context): SharedPreferences {
+        bindContext(ctx)
+        return cachedPrefs ?: ctx.applicationContext
+            .getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .also {
+                cachedPrefs = it
+                if (!cs3Loaded) {
+                    cs3Loaded = true
+                    cachedCs3Servers.clear()
+                    cachedCs3Servers.addAll(loadCs3ServersInternal(it))
                 }
             }
-            tabRow.addView(btn)
-        }
-
-        hScroll.addView(tabRow)
-        return hScroll
     }
 
-    private fun renderCurrentTab(ctx: Context) {
-        contentContainer.removeAllViews()
-        val p = currentPalette(ctx)
-        when (currentTab) {
-            "Providers" -> renderProvidersTab(ctx, p)
-            "Extractors" -> renderExtractorsTab(ctx, p)
-            "Streaming" -> renderStreamingTab(ctx, p)
-            "Collection" -> renderCollectionTab(ctx, p)
-            "Health & Logs" -> renderHealthLogsTab(ctx, p)
+    fun getSelectedTheme(ctx: Context): ThemePalette {
+        val id = prefs(ctx).getString(KEY_THEME, "purple") ?: "purple"
+        return UI_THEMES.firstOrNull { it.id == id } ?: UI_THEMES.first()
+    }
+    fun setSelectedTheme(ctx: Context, id: String) = prefs(ctx).edit().putString(KEY_THEME, id).apply()
+
+    fun isUseWebViewCf(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_USE_WEBVIEW_CF, true)
+    fun setUseWebViewCf(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_USE_WEBVIEW_CF, enabled).apply()
+
+    fun saveCookieForDomain(ctx: Context, domainOrUrl: String, cookie: String) {
+        val host = runCatching {
+            val raw = if (domainOrUrl.startsWith("http")) domainOrUrl else "https://$domainOrUrl"
+            URL(raw).host.lowercase().removePrefix("www.")
+        }.getOrDefault(domainOrUrl.lowercase())
+        val map = getSavedCookiesMap(ctx).toMutableMap()
+        if (cookie.isBlank()) map.remove(host) else map[host] = cookie
+        prefs(ctx).edit().putString(KEY_CF_COOKIES, JSONObject(map as Map<*, *>).toString()).apply()
+    }
+
+    fun getSavedCookiesMap(ctx: Context?): Map<String, String> {
+        val c = ctx ?: appContext ?: return emptyMap()
+        val raw = prefs(c).getString(KEY_CF_COOKIES, "{}") ?: "{}"
+        val out = linkedMapOf<String, String>()
+        runCatching {
+            val obj = JSONObject(raw)
+            obj.keys().forEach { k ->
+                val v = obj.optString(k)
+                if (v.isNotBlank()) out[k] = v
+            }
+        }
+        return out
+    }
+
+    fun syncCookiesFromWebView(ctx: Context): Int {
+        var count = 0
+        runCatching {
+            val cm = CookieManager.getInstance()
+            SERVERS.forEach { srv ->
+                val cookie = cm.getCookie(srv.probeUrl)
+                if (!cookie.isNullOrBlank()) {
+                    saveCookieForDomain(ctx, srv.probeUrl, cookie)
+                    count++
+                }
+            }
+        }
+        return count
+    }
+
+    fun clearAllCfCookies(ctx: Context) {
+        prefs(ctx).edit().remove(KEY_CF_COOKIES).apply()
+        runCatching {
+            CookieManager.getInstance().removeAllCookies(null)
+            CookieManager.getInstance().flush()
         }
     }
 
-    private fun renderProvidersTab(ctx: Context, p: Palette) {
-        val controlsRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = dp(ctx, 4)
-            layoutParams = lp
-        }
+    fun getCookieForDomain(ctx: Context?, urlOrDomain: String): String? {
+        val map = getSavedCookiesMap(ctx)
+        if (map.isEmpty()) return null
+        val host = runCatching {
+            val raw = if (urlOrDomain.startsWith("http")) urlOrDomain else "https://$urlOrDomain"
+            URL(raw).host.lowercase().removePrefix("www.")
+        }.getOrDefault(urlOrDomain.lowercase())
+        return map[host] ?: map.entries.firstOrNull { host.endsWith(it.key) || it.key.endsWith(host) }?.value
+    }
 
-        val searchBox = EditText(ctx).apply {
-            hint = "Search providers..."
-            setText(searchQuery)
-            setHintTextColor(p.textSecondary)
-            setTextColor(p.textPrimary)
-            textSize = 13f
-            singleLine = true
-            background = cardDrawable(p.bgElevated, p.border, dp(ctx, 10).toFloat(), 1)
-            setPadding(dp(ctx, 12), dp(ctx, 8), dp(ctx, 12), dp(ctx, 8))
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            addTextChangedListener(object : TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                    searchQuery = s?.toString().orEmpty()
-                    renderCurrentTab(ctx)
+    fun getSflixHost(ctx: Context): String =
+        prefs(ctx).getString(KEY_SFLIX_HOST, SFLIX_HOSTS.first()) ?: SFLIX_HOSTS.first()
+    fun setSflixHost(ctx: Context, host: String) =
+        prefs(ctx).edit().putString(KEY_SFLIX_HOST, host).apply()
+
+    fun getSelectedApiHost(ctx: Context): String = getSflixHost(ctx)
+
+    fun getPreferredPlayer(ctx: Context): String =
+        prefs(ctx).getString(KEY_PLAYER, PLAYER_OPTIONS.first()) ?: PLAYER_OPTIONS.first()
+    fun setPreferredPlayer(ctx: Context, player: String) = prefs(ctx).edit().putString(KEY_PLAYER, player).apply()
+
+    fun isExtractorEnabled(ctx: Context, key: String): Boolean =
+        prefs(ctx).getBoolean("$KEY_EXT_PREFIX${key.lowercase()}", true)
+    fun setExtractorEnabled(ctx: Context, key: String, enabled: Boolean) =
+        prefs(ctx).edit().putBoolean("$KEY_EXT_PREFIX${key.lowercase()}", enabled).apply()
+
+    fun isVegaAllowedHost(linkNameOrUrl: String): Boolean {
+        val lower = linkNameOrUrl.lowercase()
+        return VEGA_ALLOWED_HOSTS.any { lower.contains(it) }
+    }
+
+    fun isHindiOnly(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_HINDI_ONLY, false)
+    fun setHindiOnly(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_HINDI_ONLY, enabled).apply()
+
+    fun isQuality4kEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_Q_4K, true)
+    fun setQuality4kEnabled(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_Q_4K, enabled).apply()
+
+    fun isQuality1080Enabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_Q_1080, true)
+    fun setQuality1080Enabled(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_Q_1080, enabled).apply()
+
+    fun isQuality720Enabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_Q_720, true)
+    fun setQuality720Enabled(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_Q_720, enabled).apply()
+
+    fun isQuality480Enabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_Q_480, true)
+    fun setQuality480Enabled(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_Q_480, enabled).apply()
+
+    fun getPreferredQuality(ctx: Context): String = when {
+        isQuality4kEnabled(ctx) -> "4K"
+        isQuality1080Enabled(ctx) -> "1080p"
+        isQuality720Enabled(ctx) -> "720p"
+        isQuality480Enabled(ctx) -> "480p"
+        else -> "AUTO"
+    }
+
+    fun setPreferredQuality(ctx: Context, quality: String) = prefs(ctx).edit().putString(KEY_QUALITY, quality).apply()
+
+    fun isLowBufferMode(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_LOW_BUFFER, true)
+    fun setLowBufferMode(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_LOW_BUFFER, enabled).apply()
+
+    fun isDownloadOnly(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_DOWNLOAD_ONLY, false)
+    fun setDownloadOnly(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_DOWNLOAD_ONLY, enabled).apply()
+
+    fun isStreamOnly(ctx: Context): Boolean = isLowBufferMode(ctx)
+    fun getParallelServers(ctx: Context): Int = getConcurrency(ctx)
+
+    fun getConcurrency(ctx: Context): Int = prefs(ctx).getInt(KEY_CONCURRENCY, 15)
+    fun setConcurrency(ctx: Context, value: Int) = prefs(ctx).edit().putInt(KEY_CONCURRENCY, value.coerceIn(2, 50)).apply()
+
+    fun getTimeoutSeconds(ctx: Context): Int = prefs(ctx).getInt(KEY_TIMEOUT_SEC, 12)
+    fun setTimeoutSeconds(ctx: Context, sec: Int) = prefs(ctx).edit().putInt(KEY_TIMEOUT_SEC, sec.coerceIn(4, 30)).apply()
+
+    fun isShuffleHomeCategories(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_SHUFFLE_HOME, false)
+    fun setShuffleHomeCategories(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_SHUFFLE_HOME, enabled).apply()
+
+    fun isServerEnabled(ctx: Context, key: String): Boolean {
+        val enabled = prefs(ctx).getBoolean("$KEY_SRV_PREFIX${key.lowercase()}", true)
+        if (!enabled) return false
+        if (isHindiOnly(ctx)) {
+            val item = SERVERS.firstOrNull { it.key.equals(key, true) }
+            if (item != null && !item.isCustom && !item.isHindi) return false
+        }
+        return true
+    }
+
+    fun setServerEnabled(ctx: Context, key: String, enabled: Boolean) {
+        prefs(ctx).edit().putBoolean("$KEY_SRV_PREFIX${key.lowercase()}", enabled).apply()
+    }
+
+    fun getServerOrder(ctx: Context): List<String> {
+        prefs(ctx)
+        val allKeys = SERVERS.map { it.key }
+        val saved = prefs(ctx).getString(KEY_SRV_ORDER, null)?.split(",")?.filter { it.isNotBlank() } ?: return allKeys
+        val valid = saved.filter { it in allKeys }
+        return valid + (allKeys - valid.toSet())
+    }
+
+    fun saveServerOrder(ctx: Context, orderedKeys: List<String>) {
+        prefs(ctx).edit().putString(KEY_SRV_ORDER, orderedKeys.joinToString(",")).apply()
+    }
+
+    fun getOrderedEnabledKeys(ctx: Context): List<String> =
+        getServerOrder(ctx).filter { isServerEnabled(ctx, it) && isServerWorking(it) }
+
+    private fun toRawGithubUrl(raw: String): String {
+        val trimmed = raw.trim()
+        val fixed = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed else "https://$trimmed"
+        return when {
+            fixed.contains("github.com/") && fixed.contains("/blob/") ->
+                fixed.replace("https://github.com/", "https://raw.githubusercontent.com/").replace("/blob/", "/")
+            fixed.contains("github.com/") && fixed.contains("/raw/") ->
+                fixed.replace("https://github.com/", "https://raw.githubusercontent.com/").replace("/raw/", "/")
+            else -> fixed
+        }
+    }
+
+    private fun loadCs3ServersInternal(p: SharedPreferences): List<ServerItem> {
+        val out = mutableListOf<ServerItem>()
+        val raw = p.getString(KEY_CS3_SERVERS, "[]") ?: "[]"
+        runCatching {
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val key = obj.optString("key").trim()
+                val name = obj.optString("name").trim()
+                val probeUrl = obj.optString("probeUrl").trim()
+                if (key.isNotBlank() && name.isNotBlank() && probeUrl.isNotBlank()) {
+                    out.add(
+                        ServerItem(
+                            key = key,
+                            name = name,
+                            tag = obj.optString("tag", "CS3").ifBlank { "CS3" },
+                            probeUrl = probeUrl,
+                            accentHex = obj.optString("accentHex", "#38BDF8"),
+                            isCustom = true,
+                            isHindi = true,
+                            category = "Movies",
+                            runtimeBadge = "⚡ SKY"
+                        )
+                    )
                 }
-                override fun afterTextChanged(s: Editable?) {}
-            })
-        }
-
-        val allOnBtn = Button(ctx).apply {
-            text = "ALL ON"
-            textSize = 11f
-            setTextColor(Color.WHITE)
-            background = cardDrawable(p.accent, p.accent, dp(ctx, 10).toFloat(), 1)
-            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 38))
-            lp.leftMargin = dp(ctx, 6)
-            layoutParams = lp
-            setOnClickListener {
-                HungryBirdsPrefs.setAllProvidersEnabled(ctx, defaultServers.map { it.id }, true)
-                renderCurrentTab(ctx)
             }
         }
+        return out.distinctBy { "${it.name.lowercase()}|${it.probeUrl.lowercase()}" }
+    }
 
-        val allOffBtn = Button(ctx).apply {
-            text = "ALL OFF"
-            textSize = 11f
-            setTextColor(p.textPrimary)
-            background = cardDrawable(p.bgElevated, p.border, dp(ctx, 10).toFloat(), 1)
-            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 38))
-            lp.leftMargin = dp(ctx, 6)
-            layoutParams = lp
-            setOnClickListener {
-                HungryBirdsPrefs.setAllProvidersEnabled(ctx, defaultServers.map { it.id }, false)
-                renderCurrentTab(ctx)
-            }
+    private fun saveCs3Servers(ctx: Context, list: List<ServerItem>) {
+        val deduped = list.distinctBy { "${it.name.lowercase()}|${it.probeUrl.lowercase()}" }
+        cachedCs3Servers.clear()
+        cachedCs3Servers.addAll(deduped)
+        val arr = JSONArray()
+        deduped.forEach { srv ->
+            arr.put(JSONObject().put("key", srv.key).put("name", srv.name).put("tag", srv.tag).put("probeUrl", srv.probeUrl).put("accentHex", srv.accentHex))
         }
+        prefs(ctx).edit().putString(KEY_CS3_SERVERS, arr.toString()).apply()
+    }
 
-        controlsRow.addView(searchBox)
-        controlsRow.addView(allOnBtn)
-        controlsRow.addView(allOffBtn)
-        contentContainer.addView(controlsRow)
+    fun getCs3Repos(ctx: Context): MutableList<Cs3RepoConfig> {
+        prefs(ctx)
+        cachedCs3Repos?.let { return it }
+        val list = mutableListOf(
+            Cs3RepoConfig("hungrysturdy_repo", "HungrySturdy Plugin Repo", HUNGRYSTURDY_REPO_URL, true, 0)
+        )
+        cachedCs3Repos = list
+        return list
+    }
 
-        val chipRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = dp(ctx, 8)
-            lp.bottomMargin = dp(ctx, 8)
-            layoutParams = lp
+    fun saveCs3Repos(ctx: Context, list: List<Cs3RepoConfig>) {
+        cachedCs3Repos = list.toMutableList()
+        val arr = JSONArray()
+        list.forEach { r ->
+            arr.put(JSONObject().put("id", r.id).put("name", r.name).put("repoUrl", r.repoUrl).put("enabled", r.enabled).put("serverCount", r.serverCount))
         }
+        prefs(ctx).edit().putString(KEY_CS3_REPOS, arr.toString()).apply()
+    }
 
-        listOf("All", "Movies", "Series", "Hindi").forEach { cat ->
-            val active = selectedCategory == cat
-            val chip = TextView(ctx).apply {
-                text = cat
-                textSize = 11f
-                setTypeface(typeface, if (active) Typeface.BOLD else Typeface.NORMAL)
-                setTextColor(if (active) Color.WHITE else p.textSecondary)
-                background = if (active) {
-                    cardDrawable(p.accent, p.accent, dp(ctx, 9).toFloat(), 1)
-                } else {
-                    cardDrawable(p.bgElevated, p.border, dp(ctx, 9).toFloat(), 1)
-                }
-                setPadding(dp(ctx, 12), dp(ctx, 6), dp(ctx, 12), dp(ctx, 6))
-                val lp = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                lp.rightMargin = dp(ctx, 6)
-                layoutParams = lp
-                setOnClickListener {
-                    selectedCategory = cat
-                    renderCurrentTab(ctx)
-                }
-            }
-            chipRow.addView(chip)
+    fun getEnabledCs3Servers(ctx: Context): List<ServerItem> {
+        prefs(ctx)
+        return cachedCs3Servers.filter { isServerEnabled(ctx, it.key) && isServerWorking(it.key) }
+    }
+
+    private fun readHttpBytes(urlStr: String, timeoutMs: Int = 8000): ByteArray? = try {
+        val conn = (URL(toRawGithubUrl(urlStr)).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = timeoutMs
+            readTimeout = timeoutMs
+            instanceFollowRedirects = true
+            setRequestProperty("User-Agent", CF_BYPASS_UA)
         }
-        contentContainer.addView(chipRow)
+        val bytes = if (conn.responseCode in 200..299) conn.inputStream.use { it.readBytes() } else null
+        runCatching { conn.errorStream?.close() }
+        conn.disconnect()
+        bytes
+    } catch (_: Exception) {
+        null
+    }
 
-        val orderedIds = HungryBirdsPrefs.getProviderOrder(ctx, defaultServers.map { it.id })
-        val byId = defaultServers.associateBy { it.id }
-        val filtered = orderedIds.mapNotNull { byId[it] }.filter { item ->
-            val catMatch = selectedCategory == "All" || item.category.equals(selectedCategory, true)
-            val qMatch = searchQuery.isBlank() ||
-                item.title.contains(searchQuery, true) ||
-                item.url.contains(searchQuery, true)
-            catMatch && qMatch
-        }
-
-        filtered.forEach { server ->
-            val enabled = HungryBirdsPrefs.isProviderEnabled(ctx, server.id)
-            val card = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                background = cardDrawable(p.bgElevated, p.border, dp(ctx, 12).toFloat(), 1)
-                setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-                val lp = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                lp.bottomMargin = dp(ctx, 8)
-                layoutParams = lp
-            }
-
-            val avatar = TextView(ctx).apply {
-                text = server.title.take(1).uppercase()
-                setTextColor(Color.WHITE)
-                setTypeface(typeface, Typeface.BOLD)
-                textSize = 14f
-                gravity = Gravity.CENTER
-                background = cardDrawable(p.accentSoft, p.accent, dp(ctx, 8).toFloat(), 1)
-                val lp = LinearLayout.LayoutParams(dp(ctx, 34), dp(ctx, 34))
-                lp.rightMargin = dp(ctx, 10)
-                layoutParams = lp
-            }
-
-            val metaCol = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            }
-
-            val topLine = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            topLine.addView(TextView(ctx).apply {
-                text = server.title
-                setTextColor(p.textPrimary)
-                setTypeface(typeface, Typeface.BOLD)
-                textSize = 14f
-            })
-            topLine.addView(TextView(ctx).apply {
-                text = " ${server.badge} "
-                setTextColor(Color.parseColor("#FDE68A"))
-                textSize = 9f
-                setTypeface(typeface, Typeface.BOLD)
-                val lp = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                lp.leftMargin = dp(ctx, 6)
-                layoutParams = lp
-                background = cardDrawable(Color.parseColor("#451A03"), Color.parseColor("#D97706"), dp(ctx, 5).toFloat(), 1)
-            })
-            topLine.addView(TextView(ctx).apply {
-                text = " ${server.tag} "
-                setTextColor(Color.parseColor("#BAE6FD"))
-                textSize = 9f
-                setTypeface(typeface, Typeface.BOLD)
-                val lp = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                lp.leftMargin = dp(ctx, 4)
-                layoutParams = lp
-                background = cardDrawable(Color.parseColor("#082F49"), Color.parseColor("#0284C7"), dp(ctx, 5).toFloat(), 1)
-            })
-
-            metaCol.addView(topLine)
-            metaCol.addView(TextView(ctx).apply {
-                text = server.url
-                setTextColor(p.textSecondary)
-                textSize = 11f
-                maxLines = 1
-            })
-
-            val moveUpBtn = TextView(ctx).apply {
-                text = "↑"
-                setTextColor(p.textSecondary)
-                textSize = 14f
-                setPadding(dp(ctx, 6), dp(ctx, 4), dp(ctx, 6), dp(ctx, 4))
-                setOnClickListener {
-                    val idx = orderedIds.indexOf(server.id)
-                    if (idx > 0) {
-                        val mutable = orderedIds.toMutableList()
-                        val tmp = mutable[idx - 1]
-                        mutable[idx - 1] = mutable[idx]
-                        mutable[idx] = tmp
-                        HungryBirdsPrefs.setProviderOrder(ctx, mutable)
-                        renderCurrentTab(ctx)
+    private fun parseJsonServerEntries(body: String, idTag: String, defaultUrl: String, out: MutableList<ServerItem>) {
+        runCatching {
+            val entries = mutableListOf<JSONObject>()
+            if (body.startsWith("[")) {
+                val arr = JSONArray(body)
+                for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { entries.add(it) }
+            } else if (body.startsWith("{")) {
+                val root = JSONObject(body)
+                listOf("plugins", "items", "providers", "servers", "sources").forEach { key ->
+                    root.optJSONArray(key)?.let { arr ->
+                        for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { entries.add(it) }
                     }
                 }
             }
-
-            val toggle = Switch(ctx).apply {
-                isChecked = enabled
-                setOnCheckedChangeListener { _, isChecked ->
-                    HungryBirdsPrefs.setProviderEnabled(ctx, server.id, isChecked)
-                }
+            entries.forEachIndexed { idx, pObj ->
+                val finalName = pObj.optString("name").trim().ifBlank { pObj.optString("internalName").trim() }
+                if (finalName.isBlank()) return@forEachIndexed
+                val url = pObj.optString("url").ifBlank { pObj.optString("mainUrl") }.ifBlank { pObj.optString("pluginUrl") }.ifBlank { defaultUrl }.trim()
+                val slug = finalName.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
+                out.add(ServerItem("cs3_${idTag}_${slug.ifBlank { "srv$idx" }}", finalName, "CS3", toRawGithubUrl(url), AVATAR_PALETTE[idx % AVATAR_PALETTE.size], true, true, "Movies", "⚡ SKY"))
             }
-
-            card.addView(avatar)
-            card.addView(metaCol)
-            card.addView(moveUpBtn)
-            card.addView(toggle)
-            contentContainer.addView(card)
         }
     }
 
-    private fun renderExtractorsTab(ctx: Context, p: Palette) {
-        contentContainer.addView(TextView(ctx).apply {
-            text = "⚡ Active Extractors & Mirror Pools"
-            setTextColor(p.textPrimary)
-            setTypeface(typeface, Typeface.BOLD)
-            textSize = 14f
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.bottomMargin = dp(ctx, 8)
-            layoutParams = lp
-        })
+    private suspend fun fetchServersFromCs3Repo(repo: Cs3RepoConfig): List<ServerItem> = withContext(Dispatchers.IO) {
+        val out = mutableListOf<ServerItem>()
+        val rawUrl = toRawGithubUrl(repo.repoUrl)
+        val bytes = readHttpBytes(rawUrl) ?: return@withContext emptyList()
+        if (bytes.isEmpty()) return@withContext emptyList()
+        val idTag = repo.id.takeLast(6)
 
-        extractorList.forEach { ext ->
-            val card = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                background = cardDrawable(p.bgElevated, p.border, dp(ctx, 12).toFloat(), 1)
-                setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-                val lp = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                lp.bottomMargin = dp(ctx, 8)
-                layoutParams = lp
-            }
-
-            val col = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            col.addView(TextView(ctx).apply {
-                text = "${ext.title}  [${ext.mode}]"
-                setTextColor(p.textPrimary)
-                setTypeface(typeface, Typeface.BOLD)
-                textSize = 13f
-            })
-            col.addView(TextView(ctx).apply {
-                text = ext.mirrors
-                setTextColor(p.textSecondary)
-                textSize = 11f
-            })
-
-            val sw = Switch(ctx).apply {
-                isChecked = HungryBirdsPrefs.isExtractorEnabled(ctx, ext.id)
-                setOnCheckedChangeListener { _, checked ->
-                    HungryBirdsPrefs.setExtractorEnabled(ctx, ext.id, checked)
+        if (rawUrl.substringBefore("?").endsWith(".cs3", true)) {
+            runCatching {
+                ZipInputStream(ByteArrayInputStream(bytes)).use { zis ->
+                    var entry = zis.nextEntry
+                    while (entry != null) {
+                        if (!entry.isDirectory && entry.name.endsWith(".json", true)) {
+                            parseJsonServerEntries(zis.bufferedReader().readText().trim(), idTag, rawUrl, out)
+                        }
+                        entry = zis.nextEntry
+                    }
                 }
             }
+            return@withContext out.distinctBy { "${it.name.lowercase()}|${it.probeUrl.lowercase()}" }
+        }
 
-            card.addView(col)
-            card.addView(sw)
-            contentContainer.addView(card)
+        val body = runCatching { String(bytes, Charsets.UTF_8).trim() }.getOrDefault("")
+        if (body.isNotBlank()) parseJsonServerEntries(body, idTag, rawUrl, out)
+        out.distinctBy { "${it.name.lowercase()}|${it.probeUrl.lowercase()}" }
+    }
+
+    private class ServerListAdapter(
+        private val ctx: Context,
+        private val onToggleChanged: () -> Unit,
+        private val onMoveUp: (ServerItem) -> Unit,
+        private val onMoveDown: (ServerItem) -> Unit
+    ) : BaseAdapter() {
+
+        private var items: List<ServerItem> = emptyList()
+
+        fun submitList(newList: List<ServerItem>) {
+            items = newList
+            notifyDataSetChanged()
+        }
+
+        private class VH(
+            val root: LinearLayout,
+            val avatarTv: TextView,
+            val nameTv: TextView,
+            val platformTv: TextView,
+            val tagTv: TextView,
+            val statusTv: TextView,
+            val urlTv: TextView,
+            val upBtn: TextView,
+            val downBtn: TextView,
+            val sw: Switch
+        )
+
+        override fun getCount(): Int = items.size
+        override fun getItem(position: Int): ServerItem = items[position]
+        override fun getItemId(position: Int): Long = position.toLong()
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup?): View {
+            val holder: VH
+            val rowView: View
+
+            if (convertView == null) {
+                val card = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    background = cardBg("#121621", "#232C40", 20f)
+                    setPadding(dp(ctx, 10), dp(ctx, 10), dp(ctx, 10), dp(ctx, 10))
+                }
+                val avatarTv = TextView(ctx).apply {
+                    textSize = 13f; gravity = Gravity.CENTER; setTypeface(typeface, Typeface.BOLD)
+                    layoutParams = LinearLayout.LayoutParams(dp(ctx, 34), dp(ctx, 34)).apply { marginEnd = dp(ctx, 10) }
+                }
+                val col = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                }
+                val topLine = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                }
+                val nameTv = TextView(ctx).apply {
+                    textSize = 13.5f; isSingleLine = true; ellipsize = TextUtils.TruncateAt.END
+                    setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+                }
+                val platformTv = TextView(ctx).apply {
+                    textSize = 8.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
+                    setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2))
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                        .apply { marginStart = dp(ctx, 5) }
+                }
+                val tagTv = TextView(ctx).apply {
+                    textSize = 8.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
+                    setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2))
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                        .apply { marginStart = dp(ctx, 5) }
+                }
+                val statusTv = TextView(ctx).apply {
+                    textSize = 8f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
+                    setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2))
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                        .apply { marginStart = dp(ctx, 5) }
+                }
+                topLine.addView(nameTv); topLine.addView(platformTv); topLine.addView(tagTv); topLine.addView(statusTv)
+
+                val urlTv = TextView(ctx).apply {
+                    textSize = 10f; isSingleLine = true; ellipsize = TextUtils.TruncateAt.END
+                    setTextColor(safeColor("#7C869C")); setPadding(0, dp(ctx, 2), dp(ctx, 4), 0)
+                }
+                col.addView(topLine); col.addView(urlTv)
+
+                val upBtn = TextView(ctx).apply {
+                    text = "↑"; textSize = 13f; setTypeface(typeface, Typeface.BOLD)
+                    setPadding(dp(ctx, 6), dp(ctx, 4), dp(ctx, 6), dp(ctx, 4))
+                }
+                val downBtn = TextView(ctx).apply {
+                    text = "↓"; textSize = 13f; setTypeface(typeface, Typeface.BOLD)
+                    setPadding(dp(ctx, 6), dp(ctx, 4), dp(ctx, 6), dp(ctx, 4))
+                }
+                val sw = Switch(ctx)
+
+                card.addView(avatarTv); card.addView(col); card.addView(upBtn); card.addView(downBtn); card.addView(sw)
+                holder = VH(card, avatarTv, nameTv, platformTv, tagTv, statusTv, urlTv, upBtn, downBtn, sw)
+                card.tag = holder
+                rowView = card
+            } else {
+                rowView = convertView
+                holder = convertView.tag as VH
+            }
+
+            val srv = items[position]
+            holder.avatarTv.text = srv.name.take(1).uppercase()
+            holder.avatarTv.setTextColor(safeColor(srv.accentHex, "#38BDF8"))
+            holder.avatarTv.background = pillBg("#192236", 12f)
+            holder.nameTv.text = srv.name
+            holder.platformTv.text = srv.runtimeBadge
+            holder.platformTv.setTextColor(safeColor("#38BDF8"))
+            holder.platformTv.background = pillBg("#0B2239", 8f)
+            holder.tagTv.text = srv.tag
+            holder.tagTv.setTextColor(safeColor(srv.accentHex, "#38BDF8"))
+            holder.tagTv.background = pillBg("#192236", 8f)
+
+            val health = getServerHealth(srv.key)
+            if (health != null) {
+                holder.statusTv.visibility = View.VISIBLE
+                holder.statusTv.text = if (health.latencyMs > 0) "${health.status} • ${health.latencyMs}ms" else health.status
+                val (fg, bg) = if (health.isHealthy) "#34D399" to "#0D2B22" else "#F87171" to "#2D1216"
+                holder.statusTv.setTextColor(safeColor(fg))
+                holder.statusTv.background = pillBg(bg, 8f)
+            } else {
+                holder.statusTv.visibility = View.GONE
+            }
+
+            holder.urlTv.text = srv.probeUrl
+            holder.upBtn.setTextColor(safeColor(if (position > 0) "#38BDF8" else "#334155"))
+            holder.downBtn.setTextColor(safeColor(if (position < items.lastIndex) "#38BDF8" else "#334155"))
+            holder.upBtn.setOnClickListener { if (position > 0) onMoveUp(srv) }
+            holder.downBtn.setOnClickListener { if (position < items.lastIndex) onMoveDown(srv) }
+
+            holder.sw.setOnCheckedChangeListener(null)
+            holder.sw.isChecked = prefs(ctx).getBoolean("$KEY_SRV_PREFIX${srv.key.lowercase()}", true)
+            holder.sw.setOnCheckedChangeListener { _, checked ->
+                setServerEnabled(ctx, srv.key, checked)
+                onToggleChanged()
+            }
+            holder.root.setOnClickListener { holder.sw.isChecked = !holder.sw.isChecked }
+            return rowView
         }
     }
 
-    private fun renderStreamingTab(ctx: Context, p: Palette) {
-        val cfCard = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            background = cardDrawable(Color.parseColor("#091E1A"), p.liveGreen, dp(ctx, 14).toFloat(), 1)
-            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.bottomMargin = dp(ctx, 10)
-            layoutParams = lp
+    private fun buildServerHealthCard(ctx: Context, srv: ServerItem, h: ServerHealthInfo?): LinearLayout {
+        val isHealthy = h?.isHealthy == true
+        val statusText = h?.status ?: "READY"
+        val borderHex = when {
+            h == null -> "#232C40"
+            isHealthy -> "#22C55E"
+            else -> "#EF4444"
+        }
+        val badgeBg = when {
+            h == null -> "#192236"
+            isHealthy -> "#0D2B22"
+            else -> "#2D1216"
+        }
+        val badgeFg = when {
+            h == null -> "#94A3B8"
+            isHealthy -> "#34D399"
+            else -> "#F87171"
         }
 
-        val cfTop = LinearLayout(ctx).apply {
+        return LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-        }
-        cfTop.addView(TextView(ctx).apply {
-            text = "🛡️ Cloudflare Bypass (WebView)"
-            setTextColor(p.textPrimary)
-            setTypeface(typeface, Typeface.BOLD)
-            textSize = 14f
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        })
-        cfTop.addView(Switch(ctx).apply {
-            isChecked = HungryBirdsPrefs.isWebViewCfEnabled(ctx)
-            setOnCheckedChangeListener { _, checked ->
-                HungryBirdsPrefs.setWebViewCfEnabled(ctx, checked)
-            }
-        })
-        cfCard.addView(cfTop)
-
-        cfCard.addView(TextView(ctx).apply {
-            text = "Solve challenge once in-app — cookies reused automatically across providers."
-            setTextColor(p.textSecondary)
-            textSize = 11f
-            val lp = LinearLayout.LayoutParams(
+            background = cardBg("#121621", borderHex, 16f, 2)
+            setPadding(dp(ctx, 10), dp(ctx, 8), dp(ctx, 10), dp(ctx, 8))
+            layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = dp(ctx, 4)
-            lp.bottomMargin = dp(ctx, 10)
-            layoutParams = lp
-        })
+            ).apply { bottomMargin = dp(ctx, 6) }
 
-        val cfBtnRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-        cfBtnRow.addView(Button(ctx).apply {
-            text = "OPEN CF WEBVIEW"
-            textSize = 11f
-            setTextColor(Color.WHITE)
-            background = cardDrawable(p.infoBlue, p.infoBlue, dp(ctx, 9).toFloat(), 1)
-            val lp = LinearLayout.LayoutParams(0, dp(ctx, 40), 1f)
-            lp.rightMargin = dp(ctx, 6)
-            layoutParams = lp
-            setOnClickListener {
-                Toast.makeText(ctx, "WebView CF challenge solver triggered", Toast.LENGTH_SHORT).show()
-            }
-        })
-        cfBtnRow.addView(Button(ctx).apply {
-            text = "CLEAR COOKIES"
-            textSize = 11f
-            setTextColor(Color.WHITE)
-            background = cardDrawable(Color.parseColor("#7F1D1D"), p.dangerRed, dp(ctx, 9).toFloat(), 1)
-            val lp = LinearLayout.LayoutParams(0, dp(ctx, 40), 1f)
-            lp.leftMargin = dp(ctx, 6)
-            layoutParams = lp
-            setOnClickListener {
-                HungryBirdsPrefs.appendLog(ctx, "CF", "Cleared saved challenge cookies")
-                Toast.makeText(ctx, "Cookies cleared", Toast.LENGTH_SHORT).show()
-            }
-        })
-        cfCard.addView(cfBtnRow)
-        contentContainer.addView(cfCard)
-
-        val themeCard = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            background = cardDrawable(p.bgElevated, p.border, dp(ctx, 14).toFloat(), 1)
-            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.bottomMargin = dp(ctx, 10)
-            layoutParams = lp
-        }
-        themeCard.addView(TextView(ctx).apply {
-            text = "🎨 UI Colour Theme"
-            setTextColor(p.textPrimary)
-            setTypeface(typeface, Typeface.BOLD)
-            textSize = 14f
-        })
-
-        val themeRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = dp(ctx, 8)
-            layoutParams = lp
-        }
-
-        val themes = listOf(
-            "Neon Purple" to HungryBirdsPrefs.THEME_PURPLE,
-            "Cyber Blue" to HungryBirdsPrefs.THEME_BLUE,
-            "Emerald" to HungryBirdsPrefs.THEME_EMERALD,
-            "Crimson" to HungryBirdsPrefs.THEME_CRIMSON
-        )
-        themes.forEach { (label, key) ->
-            val selected = HungryBirdsPrefs.getTheme(ctx) == key
-            themeRow.addView(TextView(ctx).apply {
-                text = label
-                textSize = 11f
-                setTypeface(typeface, if (selected) Typeface.BOLD else Typeface.NORMAL)
-                setTextColor(if (selected) Color.WHITE else p.textSecondary)
-                background = if (selected) {
-                    cardDrawable(p.accent, p.accent, dp(ctx, 9).toFloat(), 1)
-                } else {
-                    cardDrawable(p.bgScreen, p.border, dp(ctx, 9).toFloat(), 1)
-                }
-                setPadding(dp(ctx, 10), dp(ctx, 7), dp(ctx, 10), dp(ctx, 7))
-                val lp = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                lp.rightMargin = dp(ctx, 6)
-                layoutParams = lp
-                setOnClickListener {
-                    HungryBirdsPrefs.setTheme(ctx, key)
-                    renderCurrentTab(ctx)
+            addView(View(ctx).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(ctx, 9), dp(ctx, 9)).apply { marginEnd = dp(ctx, 8) }
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(safeColor(if (h == null) "#475569" else borderHex))
                 }
             })
-        }
-        themeCard.addView(themeRow)
-        contentContainer.addView(themeCard)
-
-        val hostCard = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            background = cardDrawable(p.bgElevated, p.border, dp(ctx, 14).toFloat(), 1)
-            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
-        }
-        hostCard.addView(TextView(ctx).apply {
-            text = "🌐 Sflix / Stream Mirror Host"
-            setTextColor(p.textPrimary)
-            setTypeface(typeface, Typeface.BOLD)
-            textSize = 14f
-        })
-
-        val hosts = listOf(
-            "https://sflix.film",
-            "https://h5-api.aoneroom.com",
-            "https://movie-box.co",
-            "https://123moviesfree.club"
-        )
-        val rg = RadioGroup(ctx).apply {
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = dp(ctx, 6)
-            layoutParams = lp
-        }
-        val activeHost = HungryBirdsPrefs.getMovieBoxHost(ctx)
-        hosts.forEach { h ->
-            rg.addView(RadioButton(ctx).apply {
-                text = h
-                setTextColor(p.textPrimary)
-                textSize = 12f
-                isChecked = activeHost.equals(h, true)
-                setOnCheckedChangeListener { _, checked ->
-                    if (checked) HungryBirdsPrefs.setMovieBoxHost(ctx, h)
-                }
-            })
-        }
-        hostCard.addView(rg)
-        contentContainer.addView(hostCard)
-    }
-
-    private fun renderCollectionTab(ctx: Context, p: Palette) {
-        val card = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            background = cardDrawable(p.bgElevated, p.border, dp(ctx, 14).toFloat(), 1)
-            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
-        }
-
-        card.addView(TextView(ctx).apply {
-            text = "⭐ Personal Collection & Internal JSON File"
-            setTextColor(Color.parseColor("#FBBF24"))
-            setTypeface(typeface, Typeface.BOLD)
-            textSize = 14f
-        })
-
-        val jsonPreview = TextView(ctx).apply {
-            text = HungryBirdsPrefs.getCollectionJson(ctx)
-            setTextColor(p.textSecondary)
-            textSize = 11f
-            maxLines = 5
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = dp(ctx, 6)
-            lp.bottomMargin = dp(ctx, 10)
-            layoutParams = lp
-        }
-        card.addView(jsonPreview)
-
-        val btnRow1 = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.bottomMargin = dp(ctx, 10)
-            layoutParams = lp
-        }
-        btnRow1.addView(Button(ctx).apply {
-            text = "📁 COPY JSON"
-            textSize = 11f
-            setTextColor(Color.WHITE)
-            background = cardDrawable(Color.parseColor("#047857"), p.liveGreen, dp(ctx, 9).toFloat(), 1)
-            val lp = LinearLayout.LayoutParams(0, dp(ctx, 40), 1f)
-            lp.rightMargin = dp(ctx, 6)
-            layoutParams = lp
-            setOnClickListener {
-                copyToClipboard(ctx, HungryBirdsPrefs.getCollectionJson(ctx))
-                Toast.makeText(ctx, "Collection JSON copied", Toast.LENGTH_SHORT).show()
-            }
-        })
-        btnRow1.addView(Button(ctx).apply {
-            text = "📋 PASTE JSON"
-            textSize = 11f
-            setTextColor(Color.WHITE)
-            background = cardDrawable(p.accent, p.accent, dp(ctx, 9).toFloat(), 1)
-            val lp = LinearLayout.LayoutParams(0, dp(ctx, 40), 1f)
-            lp.leftMargin = dp(ctx, 6)
-            layoutParams = lp
-            setOnClickListener {
-                val pasted = readFromClipboard(ctx)
-                if (!pasted.isNullOrBlank()) {
-                    HungryBirdsPrefs.setCollectionJson(ctx, pasted)
-                    jsonPreview.text = pasted
-                    Toast.makeText(ctx, "JSON imported", Toast.LENGTH_SHORT).show()
-                }
-            }
-        })
-        card.addView(btnRow1)
-
-        val titleInput = EditText(ctx).apply {
-            hint = "Add single Movie or Series title..."
-            setHintTextColor(p.textSecondary)
-            setTextColor(p.textPrimary)
-            textSize = 13f
-            singleLine = true
-            background = cardDrawable(p.bgScreen, p.border, dp(ctx, 10).toFloat(), 1)
-            setPadding(dp(ctx, 12), dp(ctx, 8), dp(ctx, 12), dp(ctx, 8))
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.bottomMargin = dp(ctx, 10)
-            layoutParams = lp
-        }
-        card.addView(titleInput)
-
-        val btnRow2 = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-        }
-        btnRow2.addView(Button(ctx).apply {
-            text = "+ ADD MOVIE"
-            textSize = 11f
-            setTextColor(Color.WHITE)
-            background = cardDrawable(p.accent, p.accent, dp(ctx, 9).toFloat(), 1)
-            val lp = LinearLayout.LayoutParams(0, dp(ctx, 40), 1f)
-            lp.rightMargin = dp(ctx, 6)
-            layoutParams = lp
-            setOnClickListener {
-                val txt = titleInput.text.toString()
-                if (txt.isNotBlank()) {
-                    HungryBirdsPrefs.addCollectionTitle(ctx, txt, false)
-                    jsonPreview.text = HungryBirdsPrefs.getCollectionJson(ctx)
-                    titleInput.text.clear()
-                }
-            }
-        })
-        btnRow2.addView(Button(ctx).apply {
-            text = "+ ADD SERIES"
-            textSize = 11f
-            setTextColor(Color.WHITE)
-            background = cardDrawable(Color.parseColor("#0284C7"), p.infoBlue, dp(ctx, 9).toFloat(), 1)
-            val lp = LinearLayout.LayoutParams(0, dp(ctx, 40), 1f)
-            lp.leftMargin = dp(ctx, 6)
-            layoutParams = lp
-            setOnClickListener {
-                val txt = titleInput.text.toString()
-                if (txt.isNotBlank()) {
-                    HungryBirdsPrefs.addCollectionTitle(ctx, txt, true)
-                    jsonPreview.text = HungryBirdsPrefs.getCollectionJson(ctx)
-                    titleInput.text.clear()
-                }
-            }
-        })
-        card.addView(btnRow2)
-        contentContainer.addView(card)
-    }
-
-    private fun renderHealthLogsTab(ctx: Context, p: Palette) {
-        val actionRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.bottomMargin = dp(ctx, 10)
-            layoutParams = lp
-        }
-
-        actionRow.addView(Button(ctx).apply {
-            text = "TEST ALL (${defaultServers.size})"
-            textSize = 11f
-            setTextColor(Color.WHITE)
-            background = cardDrawable(Color.parseColor("#047857"), p.liveGreen, dp(ctx, 9).toFloat(), 1)
-            val lp = LinearLayout.LayoutParams(0, dp(ctx, 40), 1f)
-            lp.rightMargin = dp(ctx, 6)
-            layoutParams = lp
-            setOnClickListener {
-                runHealthChecks(ctx)
-            }
-        })
-
-        actionRow.addView(Button(ctx).apply {
-            text = "COPY ALL"
-            textSize = 11f
-            setTextColor(Color.WHITE)
-            background = cardDrawable(Color.parseColor("#0284C7"), p.infoBlue, dp(ctx, 9).toFloat(), 1)
-            val lp = LinearLayout.LayoutParams(0, dp(ctx, 40), 1f)
-            lp.rightMargin = dp(ctx, 6)
-            layoutParams = lp
-            setOnClickListener {
-                val summary = defaultServers.joinToString("\n") { s ->
-                    "${s.title}: ${healthStatuses[s.id] ?: "READY"} (${s.url})"
-                }
-                copyToClipboard(ctx, summary)
-                Toast.makeText(ctx, "Server health copied", Toast.LENGTH_SHORT).show()
-            }
-        })
-
-        actionRow.addView(Button(ctx).apply {
-            text = "CLEAR"
-            textSize = 11f
-            setTextColor(p.textPrimary)
-            background = cardDrawable(p.bgElevated, p.border, dp(ctx, 9).toFloat(), 1)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 40))
-            setOnClickListener {
-                healthStatuses.clear()
-                HungryBirdsPrefs.clearLogs(ctx)
-                renderCurrentTab(ctx)
-            }
-        })
-        contentContainer.addView(actionRow)
-
-        defaultServers.forEach { server ->
-            val statusText = healthStatuses[server.id] ?: "READY"
-            val isLive = statusText.startsWith("LIVE")
-            val isDown = statusText.startsWith("DOWN") || statusText.startsWith("HTTP 4") || statusText.startsWith("HTTP 5")
-
-            val rowCard = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                background = cardDrawable(
-                    p.bgElevated,
-                    when {
-                        isLive -> p.liveGreen
-                        isDown -> p.dangerRed
-                        else -> p.border
-                    },
-                    dp(ctx, 12).toFloat(),
-                    1
-                )
-                setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-                val lp = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                lp.bottomMargin = dp(ctx, 8)
-                layoutParams = lp
-            }
-
-            val dot = View(ctx).apply {
-                background = cardDrawable(
-                    when {
-                        isLive -> p.liveGreen
-                        isDown -> p.dangerRed
-                        else -> p.textSecondary
-                    },
-                    Color.TRANSPARENT,
-                    dp(ctx, 6).toFloat(),
-                    0
-                )
-                val lp = LinearLayout.LayoutParams(dp(ctx, 10), dp(ctx, 10))
-                lp.rightMargin = dp(ctx, 10)
-                layoutParams = lp
-            }
 
             val infoCol = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             }
-
             val titleRow = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
             }
             titleRow.addView(TextView(ctx).apply {
-                text = server.title
-                setTextColor(p.textPrimary)
+                text = "${srv.name} ${srv.runtimeBadge}"
+                textSize = 12.5f
                 setTypeface(typeface, Typeface.BOLD)
-                textSize = 13f
-            })
-            titleRow.addView(TextView(ctx).apply {
-                text = " ${server.badge} "
-                setTextColor(Color.parseColor("#FDE68A"))
-                textSize = 9f
-                val lp = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                lp.leftMargin = dp(ctx, 6)
-                layoutParams = lp
-                background = cardDrawable(Color.parseColor("#451A03"), Color.parseColor("#D97706"), dp(ctx, 5).toFloat(), 1)
-            })
-            titleRow.addView(TextView(ctx).apply {
-                text = " $statusText "
                 setTextColor(Color.WHITE)
-                textSize = 9f
+            })
+            titleRow.addView(TextView(ctx).apply {
+                text = if (h != null && h.latencyMs > 0) "$statusText • ${h.latencyMs}ms" else statusText
+                textSize = 8.5f
                 setTypeface(typeface, Typeface.BOLD)
-                val lp = LinearLayout.LayoutParams(
+                setTextColor(safeColor(badgeFg))
+                background = pillBg(badgeBg, 8f)
+                setPadding(dp(ctx, 6), dp(ctx, 2), dp(ctx, 6), dp(ctx, 2))
+                layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
-                )
-                lp.leftMargin = dp(ctx, 6)
-                layoutParams = lp
-                background = cardDrawable(
-                    when {
-                        isLive -> Color.parseColor("#065F46")
-                        isDown -> Color.parseColor("#7F1D1D")
-                        else -> Color.parseColor("#1E293B")
-                    },
-                    Color.TRANSPARENT,
-                    dp(ctx, 5).toFloat(),
-                    0
-                )
+                ).apply { marginStart = dp(ctx, 6) }
             })
-
             infoCol.addView(titleRow)
             infoCol.addView(TextView(ctx).apply {
-                text = server.url
-                setTextColor(p.textSecondary)
-                textSize = 11f
-                maxLines = 1
+                text = h?.detail ?: srv.probeUrl
+                textSize = 9.5f
+                maxLines = 2
+                ellipsize = TextUtils.TruncateAt.END
+                setTextColor(safeColor("#94A3B8"))
+                setPadding(0, dp(ctx, 2), dp(ctx, 4), 0)
+            })
+            addView(infoCol)
+
+            addView(TextView(ctx).apply {
+                text = "CF"
+                textSize = 8.5f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(safeColor(if (getCookieForDomain(ctx, srv.probeUrl) != null) "#34D399" else "#94A3B8"))
+                background = pillBg("#13202E", 10f)
+                setPadding(dp(ctx, 7), dp(ctx, 5), dp(ctx, 7), dp(ctx, 5))
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = dp(ctx, 5) }
+                setOnClickListener {
+                    val c = getCookieForDomain(ctx, srv.probeUrl)
+                    safeToast(ctx, if (c != null) "CF cookie active for ${srv.name}" else "No saved CF cookie for ${srv.name}")
+                }
             })
 
-            val copyBtn = TextView(ctx).apply {
+            addView(TextView(ctx).apply {
                 text = "COPY"
-                setTextColor(Color.parseColor("#93C5FD"))
-                textSize = 10f
+                textSize = 8.5f
                 setTypeface(typeface, Typeface.BOLD)
-                setPadding(dp(ctx, 10), dp(ctx, 6), dp(ctx, 10), dp(ctx, 6))
-                background = cardDrawable(p.bgScreen, p.infoBlue, dp(ctx, 7).toFloat(), 1)
+                setTextColor(safeColor("#38BDF8"))
+                background = pillBg("#0D2338", 10f)
+                setPadding(dp(ctx, 8), dp(ctx, 5), dp(ctx, 8), dp(ctx, 5))
                 setOnClickListener {
-                    copyToClipboard(ctx, server.url)
-                    Toast.makeText(ctx, "${server.title} URL copied", Toast.LENGTH_SHORT).show()
+                    copyToClipboard(ctx, srv.name, "${srv.name}: $statusText -> ${h?.detail ?: srv.probeUrl}")
                 }
-            }
-
-            rowCard.addView(dot)
-            rowCard.addView(infoCol)
-            rowCard.addView(copyBtn)
-            contentContainer.addView(rowCard)
+            })
         }
-
-        val logs = HungryBirdsPrefs.getLogs(ctx)
-        contentContainer.addView(TextView(ctx).apply {
-            text = if (logs.isBlank()) {
-                "No error logs yet (ADB tag: HungryBirdsDiag)"
-            } else {
-                logs
-            }
-            setTextColor(if (logs.isBlank()) p.textSecondary else Color.parseColor("#FCA5A5"))
-            textSize = 11f
-            background = cardDrawable(p.bgScreen, p.border, dp(ctx, 10).toFloat(), 1)
-            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-            val lp = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            lp.topMargin = dp(ctx, 4)
-            layoutParams = lp
-        })
     }
 
-    private fun runHealthChecks(ctx: Context) {
-        testJob?.cancel()
-        testJob = dialogScope.launch {
-            defaultServers.forEach { server ->
-                healthStatuses[server.id] = "TESTING..."
-            }
-            renderCurrentTab(ctx)
+    fun show(ctx: Context) {
+        if (!isContextAlive(ctx)) return
+        bindContext(ctx)
+        prefs(ctx)
 
-            defaultServers.forEach { server ->
-                val result = withContext(Dispatchers.IO) {
-                    val start = System.currentTimeMillis()
-                    try {
-                        val resp = app.get(server.url, timeout = 8)
-                        val ms = System.currentTimeMillis() - start
-                        if (resp.code in 200..399) {
-                            "LIVE • ${ms}ms"
-                        } else {
-                            "HTTP ${resp.code} • ${ms}ms"
-                        }
-                    } catch (e: Exception) {
-                        HungryBirdsPrefs.appendLog(ctx, server.title, e.message ?: "Connection failed")
-                        "DOWN • timeout"
+        val dialogScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+        val cs3RepoList = getCs3Repos(ctx).toMutableList()
+        var activeTheme = getSelectedTheme(ctx)
+        var selectedPlayer = getPreferredPlayer(ctx)
+        var selectedSflixHost = getSflixHost(ctx)
+        var useWebViewCf = isUseWebViewCf(ctx)
+        var currentQuery = ""
+        var currentConcurrency = getConcurrency(ctx)
+        var currentTimeout = getTimeoutSeconds(ctx)
+        var hindiOnly = isHindiOnly(ctx)
+        var downloadOnly = isDownloadOnly(ctx)
+        var shuffleHome = isShuffleHomeCategories(ctx)
+        var q4k = isQuality4kEnabled(ctx)
+        var q1080 = isQuality1080Enabled(ctx)
+        var q720 = isQuality720Enabled(ctx)
+        var q480 = isQuality480Enabled(ctx)
+        var lowBuffer = isLowBufferMode(ctx)
+
+        val root = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardBg("#07090F", "#1E273B", 34f, 3)
+            setPadding(dp(ctx, 14), dp(ctx, 14), dp(ctx, 14), dp(ctx, 14))
+        }
+
+        val header = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
+        }
+        fun applyHeaderTheme() {
+            header.background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(safeColor(activeTheme.gradStart), safeColor(activeTheme.gradMid), safeColor(activeTheme.gradEnd))
+            ).apply {
+                cornerRadius = 24f
+                setStroke(2, safeColor(activeTheme.primaryHex))
+            }
+        }
+        applyHeaderTheme()
+
+        val titleRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        titleRow.addView(TextView(ctx).apply {
+            text = "HUNGRY BIRDS ULTRA"
+            textSize = 16.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        titleRow.addView(TextView(ctx).apply {
+            text = "⚡ TURBO FAST"
+            textSize = 9.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(safeColor("#6EE7B7"))
+            background = pillBg("#064E3B", 10f)
+            setPadding(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4))
+        })
+        header.addView(titleRow)
+
+        val statsRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                .apply { topMargin = dp(ctx, 10) }
+        }
+        fun statChip(label: String, colorHex: String, marginEndDp: Int): Pair<LinearLayout, TextView> {
+            val box = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                background = cardBg("#0A0E17", "#26324A", 14f, 2)
+                setPadding(dp(ctx, 9), dp(ctx, 6), dp(ctx, 9), dp(ctx, 6))
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    if (marginEndDp > 0) marginEnd = dp(ctx, marginEndDp)
+                }
+            }
+            val valTv = TextView(ctx).apply { text = "-"; textSize = 13f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor(colorHex)) }
+            val lblTv = TextView(ctx).apply { text = label; textSize = 8.5f; isSingleLine = true; setTextColor(safeColor("#94A3B8")) }
+            box.addView(valTv); box.addView(lblTv)
+            return box to valTv
+        }
+        val (srvChip, srvValTv) = statChip("SERVERS", "#38BDF8", 6)
+        val (extChip, extValTv) = statChip("EXTRACTORS", "#C084FC", 6)
+        val (spdChip, spdValTv) = statChip("SPEED", "#FBBF24", 0)
+        statsRow.addView(srvChip); statsRow.addView(extChip); statsRow.addView(spdChip)
+        header.addView(statsRow)
+        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 10) })
+
+        fun refreshStats() {
+            val srvOn = SERVERS.count { isServerEnabled(ctx, it.key) }
+            srvValTv.text = "$srvOn/${SERVERS.size}"
+            extValTv.text = "${EXTRACTORS.count { isExtractorEnabled(ctx, it.key) }}/${EXTRACTORS.size}"
+            spdValTv.text = "${currentConcurrency}x • ${getPreferredQuality(ctx)}"
+        }
+        refreshStats()
+
+        val tabBar = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = cardBg("#0F131C", "#212A3D", 18f)
+            setPadding(dp(ctx, 4), dp(ctx, 4), dp(ctx, 4), dp(ctx, 4))
+        }
+        val tabTitles = listOf("Providers", "Extractors", "Streaming", "CS3 Repos", "Health & Logs")
+        val tabButtons = tabTitles.map { title ->
+            Button(ctx).apply {
+                text = title; textSize = 11.5f; isAllCaps = false; isSingleLine = true
+                setTypeface(typeface, Typeface.BOLD)
+                setPadding(dp(ctx, 12), 0, dp(ctx, 12), 0)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 34))
+            }
+        }
+        tabButtons.forEach { tabBar.addView(it) }
+        root.addView(HorizontalScrollView(ctx).apply { isHorizontalScrollBarEnabled = false; addView(tabBar) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) })
+
+        val actionRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
+        }
+        val searchBox = EditText(ctx).apply {
+            hint = "🔍 Search servers..."
+            setHintTextColor(safeColor("#64748B")); setTextColor(Color.WHITE); textSize = 12f; isSingleLine = true
+            background = cardBg("#10141E", "#253046", 15f)
+            setPadding(dp(ctx, 10), dp(ctx, 7), dp(ctx, 10), dp(ctx, 7))
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 1f).apply { marginEnd = dp(ctx, 6) }
+        }
+        val allOnBtn = Button(ctx).apply {
+            text = "ALL ON"; textSize = 9.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE); background = pillBg(activeTheme.primaryHex, 14f)
+            setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 36)).apply { marginEnd = dp(ctx, 5) }
+        }
+        val allOffBtn = Button(ctx).apply {
+            text = "ALL OFF"; textSize = 9.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE); background = pillBg("#334155", 14f)
+            setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 36))
+        }
+        actionRow.addView(searchBox); actionRow.addView(allOnBtn); actionRow.addView(allOffBtn)
+        root.addView(actionRow)
+
+        val contentHeight = dp(ctx, 335)
+        lateinit var applyServerFilter: () -> Unit
+        lateinit var serverAdapter: ServerListAdapter
+        serverAdapter = ServerListAdapter(
+            ctx = ctx,
+            onToggleChanged = { refreshStats() },
+            onMoveUp = { srv ->
+                val order = getServerOrder(ctx).toMutableList()
+                val idx = order.indexOf(srv.key)
+                if (idx > 0) {
+                    order[idx] = order[idx - 1].also { order[idx - 1] = order[idx] }
+                    saveServerOrder(ctx, order)
+                    applyServerFilter()
+                }
+            },
+            onMoveDown = { srv ->
+                val order = getServerOrder(ctx).toMutableList()
+                val idx = order.indexOf(srv.key)
+                if (idx in 0 until order.lastIndex) {
+                    order[idx] = order[idx + 1].also { order[idx + 1] = order[idx] }
+                    saveServerOrder(ctx, order)
+                    applyServerFilter()
+                }
+            }
+        )
+
+        val serversListView = ListView(ctx).apply {
+            adapter = serverAdapter
+            divider = GradientDrawable().apply { setColor(Color.TRANSPARENT) }
+            dividerHeight = dp(ctx, 7)
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isVerticalScrollBarEnabled = false
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, contentHeight)
+        }
+
+        applyServerFilter = {
+            val orderMap = getServerOrder(ctx).withIndex().associate { it.value to it.index }
+            val sorted = SERVERS.sortedBy { orderMap[it.key] ?: Int.MAX_VALUE }
+            val filtered = if (currentQuery.isEmpty()) sorted else sorted.filter {
+                it.name.lowercase().contains(currentQuery) || it.tag.lowercase().contains(currentQuery)
+            }
+            serverAdapter.submitList(filtered)
+            refreshStats()
+        }
+        applyServerFilter()
+
+        allOnBtn.setOnClickListener {
+            val ed = prefs(ctx).edit()
+            SERVERS.forEach { ed.putBoolean("$KEY_SRV_PREFIX${it.key.lowercase()}", true) }
+            ed.apply(); applyServerFilter()
+        }
+        allOffBtn.setOnClickListener {
+            val ed = prefs(ctx).edit()
+            SERVERS.forEach { ed.putBoolean("$KEY_SRV_PREFIX${it.key.lowercase()}", false) }
+            ed.apply(); applyServerFilter()
+        }
+        searchBox.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {
+                currentQuery = s?.toString().orEmpty().trim().lowercase()
+                applyServerFilter()
+            }
+            override fun afterTextChanged(s: Editable?) {}
+        })
+
+        val scrollView = ScrollView(ctx).apply {
+            isVerticalScrollBarEnabled = false; visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, contentHeight + dp(ctx, 36))
+        }
+        val wrapper = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        val extractorPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        val streamPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        val cs3Pane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        val healthPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+
+        EXTRACTORS.forEach { ext ->
+            val card = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                background = cardBg("#121621", "#232C40", 18f)
+                setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
+            }
+            val col = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            col.addView(TextView(ctx).apply { text = "${ext.name} [${ext.tag}]"; textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
+            col.addView(TextView(ctx).apply { text = ext.hosts; textSize = 10f; setTextColor(safeColor("#94A3B8")) })
+            val sw = Switch(ctx).apply {
+                isChecked = isExtractorEnabled(ctx, ext.key)
+                setOnCheckedChangeListener { _, checked -> setExtractorEnabled(ctx, ext.key, checked); refreshStats() }
+            }
+            card.setOnClickListener { sw.isChecked = !sw.isChecked }
+            card.addView(col); card.addView(sw)
+            extractorPane.addView(card)
+        }
+
+        fun makeToggleCard(parent: LinearLayout, title: String, desc: String, initial: Boolean, onChange: (Boolean) -> Unit) {
+            val card = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                background = cardBg("#121621", "#232C40", 20f)
+                setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+            }
+            val col = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            col.addView(TextView(ctx).apply { text = title; textSize = 13.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
+            col.addView(TextView(ctx).apply { text = desc; textSize = 10.5f; setTextColor(safeColor("#8B93A7")) })
+            val sw = Switch(ctx).apply {
+                isChecked = initial
+                setOnCheckedChangeListener { _, checked -> onChange(checked) }
+            }
+            card.setOnClickListener { sw.isChecked = !sw.isChecked }
+            card.addView(col); card.addView(sw)
+            parent.addView(card)
+        }
+
+        makeToggleCard(streamPane, "4K + 1440p", "Ultra HD & QHD streams", q4k) { q4k = it; setQuality4kEnabled(ctx, it); refreshStats() }
+        makeToggleCard(streamPane, "1080p FHD", "Full HD streams", q1080) { q1080 = it; setQuality1080Enabled(ctx, it); refreshStats() }
+        makeToggleCard(streamPane, "720p HD & Web", "Standard HD & WebRip", q720) { q720 = it; setQuality720Enabled(ctx, it); refreshStats() }
+        makeToggleCard(streamPane, "480p & Below", "Data saver streams", q480) { q480 = it; setQuality480Enabled(ctx, it); refreshStats() }
+        makeToggleCard(streamPane, "Hindi Providers Only 🇮🇳", "Hide English-only providers", hindiOnly) { hindiOnly = it; setHindiOnly(ctx, it); applyServerFilter() }
+        makeToggleCard(streamPane, "Download Only Links", "Prefer direct MP4/MKV links", downloadOnly) { downloadOnly = it; setDownloadOnly(ctx, it) }
+        makeToggleCard(streamPane, "Zero-Buffer Mode", "Prioritize fast HLS/MP4 streams first", lowBuffer) { lowBuffer = it; setLowBufferMode(ctx, it) }
+        makeToggleCard(streamPane, "Shuffle Home", "Shuffle home categories", shuffleHome) { shuffleHome = it; setShuffleHomeCategories(ctx, it) }
+
+        val hostCard = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#232C40", 20f)
+            setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+        }
+        hostCard.addView(TextView(ctx).apply { text = "Sflix Mirror Host"; textSize = 13.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
+        val rg = RadioGroup(ctx)
+        SFLIX_HOSTS.forEach { h ->
+            rg.addView(RadioButton(ctx).apply {
+                text = h; textSize = 11.5f; setTextColor(safeColor("#CBD5E1"))
+                isChecked = selectedSflixHost.equals(h, true)
+                setOnCheckedChangeListener { _, checked -> if (checked) selectedSflixHost = h }
+            })
+        }
+        hostCard.addView(rg)
+        streamPane.addView(hostCard)
+
+        val cs3RepoHolder = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        cs3RepoList.forEach { repo ->
+            val card = LinearLayout(ctx).apply {
+                orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#232C40", 20f)
+                setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+            }
+            card.addView(TextView(ctx).apply { text = repo.name; textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
+            card.addView(TextView(ctx).apply { text = repo.repoUrl; textSize = 10f; setTextColor(safeColor("#94A3B8")) })
+            val fetchBtn = Button(ctx).apply {
+                text = "FETCH REPO SERVERS"; textSize = 10.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+                background = pillBg("#0284C7", 14f)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 36)).apply { topMargin = dp(ctx, 6) }
+                setOnClickListener {
+                    dialogScope.launch {
+                        val fetched = fetchServersFromCs3Repo(repo)
+                        saveCs3Servers(ctx, fetched)
+                        repo.serverCount = fetched.size
+                        saveCs3Repos(ctx, cs3RepoList)
+                        applyServerFilter()
+                        safeToast(ctx, "${fetched.size} servers loaded!")
                     }
                 }
-                healthStatuses[server.id] = result
-                renderCurrentTab(ctx)
             }
+            card.addView(fetchBtn)
+            cs3RepoHolder.addView(card)
         }
-    }
+        cs3Pane.addView(cs3RepoHolder)
 
-    private fun buildFooterBar(ctx: Context, p: Palette): View = LinearLayout(ctx).apply {
-        orientation = LinearLayout.HORIZONTAL
-        val lp = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        )
-        lp.topMargin = dp(ctx, 8)
-        layoutParams = lp
-
-        resetBtn = Button(ctx).apply {
-            text = "RESET"
-            textSize = 12f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(p.textPrimary)
-            background = cardDrawable(p.bgElevated, p.border, dp(ctx, 12).toFloat(), 1)
-            val rLp = LinearLayout.LayoutParams(0, dp(ctx, 46), 1f)
-            rLp.rightMargin = dp(ctx, 8)
-            layoutParams = rLp
+        val cfBox = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = cardBg("#0A1617", "#1E3A3A", 18f, 2)
+            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
+        }
+        val cfHeader = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+        }
+        cfHeader.addView(TextView(ctx).apply {
+            text = "🛡️ Cloudflare Bypass"
+            textSize = 13.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        cfHeader.addView(Button(ctx).apply {
+            text = "✓ Save"; textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            background = pillBg("#2563EB", 10f)
+            setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 30))
             setOnClickListener {
-                HungryBirdsPrefs.resetAll(ctx)
-                healthStatuses.clear()
-                Toast.makeText(ctx, "Reset to defaults", Toast.LENGTH_SHORT).show()
-                renderCurrentTab(ctx)
+                val synced = syncCookiesFromWebView(ctx)
+                safeToast(ctx, "Saved CF cookies ($synced domains)")
+            }
+        })
+        cfBox.addView(cfHeader)
+
+        cfBox.addView(TextView(ctx).apply {
+            text = "Solve the Cloudflare challenge once — cookies reused automatically."
+            textSize = 10f; setTextColor(safeColor("#94A3B8"))
+            setPadding(0, dp(ctx, 3), 0, dp(ctx, 6))
+        })
+
+        val wvRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
+        }
+        wvRow.addView(TextView(ctx).apply {
+            text = "Use WebView for CF challenges"
+            textSize = 12f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        wvRow.addView(Switch(ctx).apply {
+            isChecked = useWebViewCf
+            setOnCheckedChangeListener { _, checked -> useWebViewCf = checked; setUseWebViewCf(ctx, checked) }
+        })
+        cfBox.addView(wvRow)
+
+        val cfStatusBanner = TextView(ctx).apply {
+            textSize = 11f; setTypeface(typeface, Typeface.BOLD); gravity = Gravity.CENTER
+            setPadding(dp(ctx, 10), dp(ctx, 7), dp(ctx, 10), dp(ctx, 7))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
+        }
+        fun refreshCfBanner() {
+            val savedCount = getSavedCookiesMap(ctx).size
+            if (savedCount > 0) {
+                cfStatusBanner.text = "✓ CF Cookies Saved ($savedCount) - Refresh"
+                cfStatusBanner.setTextColor(safeColor("#6EE7B7"))
+                cfStatusBanner.background = cardBg("#08241C", "#10B981", 12f, 1)
+            } else {
+                cfStatusBanner.text = "CF Cookies Ready - Tap to Sync"
+                cfStatusBanner.setTextColor(safeColor("#93C5FD"))
+                cfStatusBanner.background = cardBg("#0B1B2E", "#2563EB", 12f, 1)
             }
         }
+        cfStatusBanner.setOnClickListener {
+            syncCookiesFromWebView(ctx)
+            refreshCfBanner()
+        }
+        refreshCfBanner()
+        cfBox.addView(cfStatusBanner)
 
-        saveBtn = Button(ctx).apply {
-            text = "SAVE & APPLY"
-            textSize = 12f
-            setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE)
-            background = cardDrawable(p.accent, p.accent, dp(ctx, 12).toFloat(), 1)
-            val sLp = LinearLayout.LayoutParams(0, dp(ctx, 46), 1.4f)
-            sLp.leftMargin = dp(ctx, 4)
-            layoutParams = sLp
+        cfBox.addView(Button(ctx).apply {
+            text = "Clear CF cookies"; textSize = 11f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
+            setTextColor(safeColor("#FCA5A5"))
+            background = cardBg("#2B1114", "#7F1D1D", 12f, 1)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 36))
             setOnClickListener {
-                Toast.makeText(ctx, "Settings saved & applied", Toast.LENGTH_SHORT).show()
-                dismissAllowingStateLoss()
+                clearAllCfCookies(ctx)
+                refreshCfBanner()
+                safeToast(ctx, "CF cookies cleared")
             }
+        })
+
+        val healthCardsHolder = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
+        val logTv = TextView(ctx).apply {
+            textSize = 10f; setTextColor(safeColor("#E2E8F0"))
+            background = cardBg("#0A0E17", "#26324A", 16f, 2)
+            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+        }
+        fun refreshHealthPane() {
+            refreshCfBanner()
+            healthCardsHolder.removeAllViews()
+            SERVERS.forEach { srv ->
+                healthCardsHolder.addView(buildServerHealthCard(ctx, srv, getServerHealth(srv.key)))
+            }
+            val logs = getDiagnosticLogs()
+            logTv.text = if (logs.isEmpty()) "No error logs yet (ADB tag: $LOG_TAG)" else logs.asReversed().joinToString("\n\n")
         }
 
-        addView(resetBtn)
-        addView(saveBtn)
-    }
+        healthPane.addView(cfBox)
+        healthPane.addView(LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
+            addView(Button(ctx).apply {
+                text = "TEST ALL (${SERVERS.size})"; textSize = 10f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+                background = pillBg("#059669", 14f)
+                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 1.2f).apply { marginEnd = dp(ctx, 5) }
+                setOnClickListener {
+                    dialogScope.launch {
+                        supervisorScope { SERVERS.map { srv -> async { probeServerLive(srv) } }.awaitAll() }
+                        refreshHealthPane()
+                        applyServerFilter()
+                    }
+                }
+            })
+            addView(Button(ctx).apply {
+                text = "COPY ALL"; textSize = 10f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+                background = pillBg("#0284C7", 14f)
+                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 1f).apply { marginEnd = dp(ctx, 5) }
+                setOnClickListener {
+                    copyToClipboard(ctx, "Diagnostic Logs", getDiagnosticLogs().joinToString("\n"))
+                }
+            })
+            addView(Button(ctx).apply {
+                text = "CLEAR"; textSize = 10f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+                background = pillBg("#334155", 14f)
+                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 0.8f)
+                setOnClickListener {
+                    clearDiagnosticLogs()
+                    serverHealthMap.clear()
+                    refreshHealthPane()
+                    applyServerFilter()
+                }
+            })
+        })
+        healthPane.addView(healthCardsHolder)
+        healthPane.addView(logTv)
+        refreshHealthPane()
 
-    private fun copyToClipboard(ctx: Context, text: String) {
-        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-        cm?.setPrimaryClip(ClipData.newPlainText("HungryBirds", text))
-    }
+        val scrollPanes = listOf(extractorPane, streamPane, cs3Pane, healthPane)
+        scrollPanes.forEach { wrapper.addView(it) }
+        scrollView.addView(wrapper)
 
-    private fun readFromClipboard(ctx: Context): String? {
-        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-        return cm?.primaryClip?.getItemAt(0)?.coerceToText(ctx)?.toString()
-    }
-
-    override fun onDestroyView() {
-        testJob?.cancel()
-        dialogScope.cancel()
-        super.onDestroyView()
-    }
-
-    companion object {
-        fun show(activity: FragmentActivity?) {
-            val fm = activity?.supportFragmentManager ?: return
-            if (fm.findFragmentByTag("HungryBirdsSettingsDialog") == null) {
-                HungryBirdsSettingsDialog().show(fm, "HungryBirdsSettingsDialog")
+        fun selectTab(idx: Int) {
+            if (idx == 0) {
+                serversListView.visibility = View.VISIBLE
+                actionRow.visibility = View.VISIBLE
+                scrollView.visibility = View.GONE
+            } else {
+                serversListView.visibility = View.GONE
+                actionRow.visibility = View.GONE
+                scrollView.visibility = View.VISIBLE
+                scrollPanes.forEachIndexed { i, p -> p.visibility = if (i == idx - 1) View.VISIBLE else View.GONE }
+                if (idx == 4) refreshHealthPane()
             }
+            tabButtons.forEachIndexed { i, btn ->
+                if (i == idx) {
+                    btn.background = pillBg(activeTheme.primaryHex, 15f)
+                    btn.setTextColor(Color.WHITE)
+                } else {
+                    btn.setBackgroundColor(Color.TRANSPARENT)
+                    btn.setTextColor(safeColor("#8B93A7"))
+                }
+            }
+        }
+        tabButtons.forEachIndexed { i, btn -> btn.setOnClickListener { selectTab(i) } }
+        selectTab(0)
+
+        root.addView(serversListView)
+        root.addView(scrollView)
+
+        val dialog = AlertDialog.Builder(ctx).setView(root).create()
+        dialog.setOnDismissListener { runCatching { dialogScope.cancel() } }
+
+        val footer = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(ctx, 10) }
+        }
+        footer.addView(Button(ctx).apply {
+            text = "RESET"; textSize = 12f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            background = pillBg("#1C2333", 16f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 42), 1f).apply { marginEnd = dp(ctx, 8) }
+            setOnClickListener {
+                prefs(ctx).edit().clear().apply()
+                serverHealthMap.clear()
+                applyServerFilter()
+                runCatching { dialog.dismiss() }
+            }
+        })
+        footer.addView(Button(ctx).apply {
+            text = "SAVE & APPLY"; textSize = 12f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            background = pillBg(activeTheme.primaryHex, 16f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 42), 1.3f).apply { marginStart = dp(ctx, 8) }
+            setOnClickListener {
+                saveCs3Repos(ctx, cs3RepoList)
+                setSflixHost(ctx, selectedSflixHost)
+                setSelectedTheme(ctx, activeTheme.id)
+                setPreferredPlayer(ctx, selectedPlayer)
+                setQuality4kEnabled(ctx, q4k)
+                setQuality1080Enabled(ctx, q1080)
+                setQuality720Enabled(ctx, q720)
+                setQuality480Enabled(ctx, q480)
+                setLowBufferMode(ctx, lowBuffer)
+                setConcurrency(ctx, currentConcurrency)
+                setTimeoutSeconds(ctx, currentTimeout)
+                setHindiOnly(ctx, hindiOnly)
+                setDownloadOnly(ctx, downloadOnly)
+                setShuffleHomeCategories(ctx, shuffleHome)
+                safeToast(ctx, "Settings saved & applied")
+                runCatching { dialog.dismiss() }
+            }
+        })
+        root.addView(footer)
+
+        runCatching {
+            dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+            dialog.show()
+            val width = (ctx.resources.displayMetrics.widthPixels * 0.94).toInt()
+            dialog.window?.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
     }
 }
