@@ -5,6 +5,7 @@ import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.plugins.Plugin
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -12,6 +13,7 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class CineStreamBridgePayload(
     val title: String = "",
@@ -54,45 +56,50 @@ object MovieFoxCineStreamBridge {
             availableServerKeys()
         }
         if (activeKeys.isEmpty()) return false
+        if (payload.title.isBlank() && payload.imdbId.isBlank() && payload.tmdbId.isNullOrBlank()) {
+            return false
+        }
 
         val timeoutSec = (perServerTimeoutMs / 1000L).coerceAtLeast(5L)
         val concurrency = (ctx?.let { MovieFoxSettingsDialog.getConcurrency(it) } ?: 15).coerceIn(2, 50)
         val gate = Semaphore(concurrency)
-        var emitted = false
-        val lock = Any()
+        val emitted = AtomicBoolean(false)
+        val subLock = Any()
+        val linkLock = Any()
 
         return supervisorScope {
-            val jobs = activeKeys.map { _ ->
-                async(Dispatchers.IO) {
-                    gate.withPermit {
-                        withTimeoutOrNull(perServerTimeoutMs) {
-                            try {
-                                val ok = MovieFoxCineStream.loadStreams(
-                                    provider = provider,
-                                    title = payload.title,
-                                    imdbId = payload.imdbId,
-                                    tmdbId = payload.tmdbId,
-                                    isTv = payload.isTv,
-                                    season = payload.season,
-                                    episode = payload.episode,
-                                    timeoutSec = timeoutSec,
-                                    subtitleCallback = subtitleCallback,
-                                    callback = { link ->
-                                        synchronized(lock) { emitted = true }
-                                        callback(link)
-                                    }
-                                )
-                                if (ok) {
-                                    synchronized(lock) { emitted = true }
+            val sharedLoadJob = async(Dispatchers.IO) {
+                gate.withPermit {
+                    withTimeoutOrNull(perServerTimeoutMs) {
+                        try {
+                            val ok = MovieFoxCineStream.loadStreams(
+                                provider = provider,
+                                title = payload.title,
+                                imdbId = payload.imdbId,
+                                tmdbId = payload.tmdbId,
+                                isTv = payload.isTv,
+                                season = payload.season.coerceAtLeast(1),
+                                episode = payload.episode.coerceAtLeast(1),
+                                timeoutSec = timeoutSec,
+                                subtitleCallback = { sub ->
+                                    synchronized(subLock) { subtitleCallback(sub) }
+                                },
+                                callback = { link ->
+                                    emitted.set(true)
+                                    synchronized(linkLock) { callback(link) }
                                 }
-                            } catch (_: Exception) {
-                            }
+                            )
+                            if (ok) emitted.set(true)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
                         }
                     }
                 }
             }
-            jobs.awaitAll()
-            emitted
+
+            listOf(sharedLoadJob).awaitAll()
+            emitted.get()
         }
     }
 }
