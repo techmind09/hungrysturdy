@@ -6,7 +6,6 @@ import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
 import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.Typeface
@@ -198,13 +197,18 @@ object MovieFoxSettingsDialog {
         var serverCount: Int = 0
     )
 
+    @Volatile
     private var appContext: Context? = null
+    @Volatile
     private var cachedPrefs: SharedPreferences? = null
+    @Volatile
     private var cachedManifests: MutableList<NuvioManifestConfig>? = null
+    @Volatile
     private var cachedCs3Repos: MutableList<Cs3RepoConfig>? = null
     private val cachedCs3Servers = CopyOnWriteArrayList<ServerItem>()
     private val errorLogRing = CopyOnWriteArrayList<String>()
     private val serverHealthMap = ConcurrentHashMap<String, ServerHealthInfo>()
+    @Volatile
     private var cs3Loaded = false
     private var pendingFileCallback: ((String) -> Unit)? = null
 
@@ -321,7 +325,14 @@ object MovieFoxSettingsDialog {
     )
 
     val SERVERS: List<ServerItem>
-        get() = BASE_SERVERS + cachedCs3Servers.toList()
+        get() {
+            appContext?.let { ctx ->
+                if (!cs3Loaded) {
+                    prefs(ctx)
+                }
+            }
+            return BASE_SERVERS + cachedCs3Servers.toList()
+        }
 
     fun copyToClipboard(ctx: Context?, label: String, text: String) {
         if (ctx == null || text.isBlank()) return
@@ -380,16 +391,14 @@ object MovieFoxSettingsDialog {
             problemStage = stage,
             updatedAt = ts
         )
-        if (!isHealthy) {
-            appContext?.let { c -> setServerEnabled(c, key, false) }
-        }
     }
 
     fun getServerHealth(key: String): ServerHealthInfo? = serverHealthMap[key.lowercase()]
 
     fun isServerWorking(key: String): Boolean {
-        val info = getServerHealth(key) ?: return true
-        return info.isHealthy
+        // Soft-fail model: keep servers available unless explicitly disabled by user,
+        // so mirrors/fallbacks still attempt to fetch streams.
+        return true
     }
 
     fun logSiteError(source: String, url: String, error: Throwable?, extra: String = "") {
@@ -450,6 +459,8 @@ object MovieFoxSettingsDialog {
             }
             val code = conn.responseCode
             val ms = System.currentTimeMillis() - start
+            runCatching { conn.inputStream?.close() }
+            runCatching { conn.errorStream?.close() }
             conn.disconnect()
             val ok = code in 200..399 || code == 405
             val status = when {
@@ -481,9 +492,6 @@ object MovieFoxSettingsDialog {
                 updatedAt = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
             )
             serverHealthMap[srv.key.lowercase()] = info
-            if (!ok) {
-                appContext?.let { c -> setServerEnabled(c, srv.key, false) }
-            }
             info
         } catch (e: Exception) {
             val ms = System.currentTimeMillis() - start
@@ -498,7 +506,6 @@ object MovieFoxSettingsDialog {
                 updatedAt = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
             )
             serverHealthMap[srv.key.lowercase()] = info
-            appContext?.let { c -> setServerEnabled(c, srv.key, false) }
             info
         }
     }
@@ -885,6 +892,7 @@ object MovieFoxSettingsDialog {
     }
 
     fun getCs3Repos(ctx: Context): MutableList<Cs3RepoConfig> {
+        prefs(ctx)
         cachedCs3Repos?.let { return it }
         val raw = prefs(ctx).getString(KEY_CS3_REPOS, null)
         val list = mutableListOf<Cs3RepoConfig>()
@@ -923,6 +931,7 @@ object MovieFoxSettingsDialog {
     }
 
     fun getNuvioManifests(ctx: Context): MutableList<NuvioManifestConfig> {
+        prefs(ctx)
         cachedManifests?.let { return it }
         val raw = prefs(ctx).getString(KEY_NUVIO_MANIFESTS, null)
         val list = mutableListOf<NuvioManifestConfig>()
@@ -991,6 +1000,7 @@ object MovieFoxSettingsDialog {
             }
             null
         }
+        runCatching { conn.errorStream?.close() }
         conn.disconnect()
         bytes
     } catch (e: Exception) {
@@ -1470,7 +1480,7 @@ object MovieFoxSettingsDialog {
             setOnClickListener {
                 AlertDialog.Builder(ctx)
                     .setTitle("MovieFox Ultra Max")
-                    .setMessage("• Working servers only in Providers\n• Broken/Error servers auto-listed in Health & Logs\n• Stage tags: SEARCH, LOADLINKS, VIDEO PLAYER, TITLE MISMATCH, CF BYPASS")
+                    .setMessage("• All available servers shown in Providers\n• Health & Logs tracks LIVE / HTTP / CF / Network status\n• Stage tags: SEARCH, LOADLINKS, VIDEO PLAYER, TITLE MISMATCH, CF BYPASS")
                     .setPositiveButton("OK", null)
                     .show()
             }
@@ -1502,7 +1512,7 @@ object MovieFoxSettingsDialog {
             return box to valTv
         }
 
-        val (srvChip, srvValTv) = statChip("WORKING", "#38BDF8", 6)
+        val (srvChip, srvValTv) = statChip("SERVERS", "#38BDF8", 6)
         val (catChip, catValTv) = statChip("CATALOGS", "#C084FC", 6)
         val (spdChip, spdValTv) = statChip("SPEED", "#FBBF24", 0)
         statsRow.addView(srvChip); statsRow.addView(catChip); statsRow.addView(spdChip)
@@ -1553,7 +1563,7 @@ object MovieFoxSettingsDialog {
                 .apply { bottomMargin = dp(ctx, 6) }
         }
         val searchBox = EditText(ctx).apply {
-            hint = "🔍 Search working providers..."
+            hint = "🔍 Search providers..."
             setHintTextColor(safeColor("#64748B")); setTextColor(Color.WHITE); textSize = 12f; isSingleLine = true
             background = cardBg("#10141E", "#253046", 15f)
             setPadding(dp(ctx, 10), dp(ctx, 7), dp(ctx, 10), dp(ctx, 7))
@@ -1661,12 +1671,12 @@ object MovieFoxSettingsDialog {
         allOnBtn.setOnClickListener {
             val ed = prefs(ctx).edit()
             workingServersList().forEach { ed.putBoolean("$KEY_SRV_PREFIX${it.key.lowercase()}", true) }
-            ed.apply(); applyServerFilter(); safeToast(ctx, "Working providers enabled!")
+            ed.apply(); applyServerFilter(); safeToast(ctx, "All providers enabled!")
         }
         allOffBtn.setOnClickListener {
             val ed = prefs(ctx).edit()
             workingServersList().forEach { ed.putBoolean("$KEY_SRV_PREFIX${it.key.lowercase()}", false) }
-            ed.apply(); applyServerFilter(); safeToast(ctx, "Working providers disabled!")
+            ed.apply(); applyServerFilter(); safeToast(ctx, "All providers disabled!")
         }
         searchBox.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
@@ -2175,7 +2185,7 @@ object MovieFoxSettingsDialog {
                         if (isContextAlive(ctx)) {
                             refreshHealthPane()
                             applyServerFilter()
-                            safeToast(ctx, "Working servers updated!")
+                            safeToast(ctx, "Server health updated!")
                         }
                     }
                 }
