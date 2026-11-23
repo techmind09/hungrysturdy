@@ -276,7 +276,8 @@ class Movies4uProvider : MainAPI() {
 
         when {
             fixedUrl.contains("hubcloud", ignoreCase = true) -> {
-                HubCloudExtractor().getUrl(fixedUrl, refererUrl, subtitleCallback) { link ->
+                val extracted = HubCloudExtractor().collectLinks(fixedUrl, refererUrl, subtitleCallback)
+                for (link in extracted) {
                     callback.invoke(
                         newExtractorLink(
                             source = link.source,
@@ -293,7 +294,8 @@ class Movies4uProvider : MainAPI() {
             }
 
             fixedUrl.contains("gdflix", ignoreCase = true) -> {
-                GDFlixExtractor().getUrl(fixedUrl, refererUrl, subtitleCallback) { link ->
+                val extracted = GDFlixExtractor().collectLinks(fixedUrl, refererUrl, subtitleCallback)
+                for (link in extracted) {
                     callback.invoke(
                         newExtractorLink(
                             source = link.source,
@@ -374,3 +376,4 @@ class Movies4uProvider : MainAPI() {
     private fun encodeQuery(q: String): String =
         java.net.URLEncoder.encode(q, "UTF-8")
 }
+
