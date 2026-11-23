@@ -1,6 +1,7 @@
 package com.hungrysturdy
 
 import java.net.URI
+import java.net.URLEncoder
 
 data class MfSiteEntry(
     val key: String,
@@ -586,40 +587,91 @@ object MfSites {
 
     private val byKeyMap: Map<String, MfSiteEntry> = ALL.associateBy { it.key.lowercase() }
 
+    private fun extractHost(raw: String): String = runCatching {
+        val normalized = if (raw.contains("://")) raw.trim() else "https://${raw.trim()}"
+        URI(normalized).host?.lowercase()?.removePrefix("www.").orEmpty()
+    }.getOrDefault("")
+
+    private fun ensureScheme(raw: String): String {
+        val trimmed = raw.trim().trimEnd('/')
+        if (trimmed.isBlank()) return ""
+        return if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
+            trimmed
+        } else {
+            "https://$trimmed"
+        }
+    }
+
     fun byKey(key: String): MfSiteEntry? = byKeyMap[key.lowercase()]
 
     fun siteOfUrl(url: String): MfSiteEntry? {
-        val low = url.lowercase()
+        val targetHost = extractHost(url)
+        if (targetHost.isBlank()) return null
         return ALL.firstOrNull { entry ->
-            entry.mirrors.any { m -> low.contains(m.removePrefix("https://").removePrefix("http://").lowercase()) } ||
-                entry.aliases.any { a -> low.contains(a.lowercase()) }
+            val knownHosts = (listOf(entry.baseUrl) + entry.mirrors + entry.aliases)
+                .map { extractHost(it) }
+                .filter { it.isNotBlank() }
+                .toSet()
+            targetHost in knownHosts || knownHosts.any { h -> targetHost.endsWith(".$h") }
         }
     }
 
     fun candidatesFor(key: String): List<String> {
         val entry = byKey(key) ?: return emptyList()
         return (listOf(entry.baseUrl) + entry.mirrors)
-            .map { it.trim().trimEnd('/') }
+            .map { ensureScheme(it) }
             .filter { it.isNotBlank() }
             .distinct()
     }
 
+    fun candidatesWithDynamic(key: String, dynamicFirst: String? = null): List<String> {
+        val dynClean = dynamicFirst?.let { ensureScheme(it) }?.takeIf { it.isNotBlank() }
+        return (listOfNotNull(dynClean) + candidatesFor(key)).distinct()
+    }
+
     fun rewriteToBase(url: String, targetBase: String): String {
-        val cleanTarget = targetBase.trim().trimEnd('/')
-        if (!url.startsWith("http") || cleanTarget.isBlank()) return url
+        val cleanTarget = ensureScheme(targetBase)
+        if (!url.startsWith("http", ignoreCase = true) || cleanTarget.isBlank()) return url
         val entry = siteOfUrl(url) ?: return url
-        val hostsToReplace = (entry.mirrors.map {
-            runCatching { URI(it).host }.getOrNull().orEmpty()
-        } + entry.aliases).filter { it.isNotBlank() }.distinct()
+        val hostsToReplace = (listOf(entry.baseUrl) + entry.mirrors + entry.aliases)
+            .map { extractHost(it) }
+            .filter { it.isNotBlank() }
+            .distinct()
         var out = url
         for (h in hostsToReplace) {
-            out = out.replaceFirst(Regex("(?i)^https?://${Regex.escape(h)}"), cleanTarget)
+            out = out.replaceFirst(Regex("(?i)^https?://(?:www\\.)?${Regex.escape(h)}"), cleanTarget)
         }
         return out
     }
 
+    fun resolveEndpoint(
+        template: String,
+        baseUrl: String,
+        query: String = "",
+        id: String = "",
+        season: String = "1",
+        episode: String = "1",
+        page: Int = 1
+    ): String {
+        val cleanBase = ensureScheme(baseUrl)
+        val cleanHost = extractHost(cleanBase)
+        val encodedQuery = runCatching { URLEncoder.encode(query, "UTF-8") }.getOrDefault(query)
+        return template
+            .replace("{base}", cleanBase)
+            .replace("{domain}", cleanBase)
+            .replace("{host}", cleanHost)
+            .replace("{query}", encodedQuery)
+            .replace("{id}", id)
+            .replace("{imdbId}", id)
+            .replace("{season}", season)
+            .replace("{episode}", episode)
+            .replace("{page}", page.toString())
+    }
+
     fun isAllowedHost(nameOrUrl: String): Boolean {
+        if (nameOrUrl.isBlank()) return false
         val low = nameOrUrl.lowercase()
         return MfApiEndpoints.ALLOWED_STREAM_AND_FILE_HOSTS.any { low.contains(it) }
     }
 }
+
