@@ -5,6 +5,7 @@ import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.Typeface
@@ -276,6 +277,31 @@ object MovieFoxSettingsDialog {
             serverHealthMap[srv.key.lowercase()] = info
             info
         }
+    }
+
+    private fun resolveActivityContext(rawCtx: Context): Context {
+        if (rawCtx is Activity) return rawCtx
+        var base = (rawCtx as? ContextWrapper)?.baseContext
+        while (base != null) {
+            if (base is Activity) return base
+            base = (base as? ContextWrapper)?.baseContext
+        }
+        val fgActivity = runCatching {
+            val atClass = Class.forName("android.app.ActivityThread")
+            val thread = atClass.getMethod("currentActivityThread").invoke(null)
+            val field = atClass.getDeclaredField("mActivities").apply { isAccessible = true }
+            val activities = field.get(thread) as? Map<*, *>
+            activities?.values?.firstNotNullOfOrNull { record ->
+                val rClass = record?.javaClass
+                val paused = rClass?.getDeclaredField("paused")?.apply { isAccessible = true }
+                    ?.getBoolean(record) ?: true
+                if (!paused) {
+                    rClass?.getDeclaredField("activity")?.apply { isAccessible = true }
+                        ?.get(record) as? Activity
+                } else null
+            }
+        }.getOrNull()
+        return fgActivity ?: rawCtx
     }
 
     private fun isContextAlive(ctx: Context?): Boolean {
@@ -858,7 +884,8 @@ object MovieFoxSettingsDialog {
         }
     }
 
-    fun show(ctx: Context) {
+    fun show(rawCtx: Context) {
+        val ctx = resolveActivityContext(rawCtx)
         if (!isContextAlive(ctx)) return
         bindContext(ctx)
         prefs(ctx)
