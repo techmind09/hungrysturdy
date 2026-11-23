@@ -14,6 +14,7 @@ import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
+import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
@@ -183,6 +184,21 @@ class MovieFoxProvider : MainAPI() {
             .trim()
     }
 
+    private fun titleFromUrlSlug(url: String): String {
+        val lastSeg = url.substringBefore("?").trimEnd('/').substringAfterLast("/")
+        if (lastSeg.isBlank() || lastSeg.matches(Regex("""^(?:movie|series|tv|anime)-\d+$""", RegexOption.IGNORE_CASE))) {
+            return ""
+        }
+        return lastSeg
+            .replace(Regex("""-(?:movie|tv|series|anime)-\d+$""", RegexOption.IGNORE_CASE), "")
+            .replace("-", " ")
+            .replace("_", " ")
+            .split(" ")
+            .filter { it.isNotBlank() }
+            .joinToString(" ") { w -> w.replaceFirstChar { it.uppercase() } }
+            .trim()
+    }
+
     private fun normalizeTitleKey(raw: String?): String {
         if (raw.isNullOrBlank()) return ""
         return raw.lowercase()
@@ -272,7 +288,7 @@ class MovieFoxProvider : MainAPI() {
                     logError(sourceTag, url, e, "attempt=${attempt + 1}")
                 }
             }
-            if (attempt < retries - 1) delay(350L)
+            if (attempt < retries - 1) delay(450L)
         }
         return null
     }
@@ -419,20 +435,13 @@ class MovieFoxProvider : MainAPI() {
             safeGetText("$tmdbBaseUrl/$tmdbPath?api_key=$tmdbApiKey&append_to_response=external_ids", timeoutSec = 6L, retries = 3, sourceTag = "TMDB").orEmpty()
         } else ""
         val obj = runCatching { JSONObject(raw) }.getOrNull() ?: JSONObject()
-        val title = obj.safeStr("title").ifBlank { obj.safeStr("name") }.ifBlank { "Title" }
-        val imdbId = obj.optJSONObject("external_ids")?.safeStr("imdb_id").orEmpty().ifBlank { obj.safeStr("imdb_id") }
-        val pPath = obj.safeStr("poster_path")
-        val poster = if (pPath.startsWith("/")) "${MfRegistries.TMDB_IMAGE_W500}$pPath" else null
-        val plot = obj.safeStr("overview")
 
-        if (!isTv) {
-            return newMovieLoadResponse(title, url, TvType.Movie, encodeLoadData(url, title, id, imdbId, false)) {
-                this.posterUrl = poster
-                this.plot = plot
-            }
-        }
-
+        var title = obj.safeStr("title").ifBlank { obj.safeStr("name") }
+        var imdbId = obj.optJSONObject("external_ids")?.safeStr("imdb_id").orEmpty().ifBlank { obj.safeStr("imdb_id") }
+        var poster: String? = obj.safeStr("poster_path").takeIf { it.startsWith("/") }?.let { "${MfRegistries.TMDB_IMAGE_W500}$it" }
+        var plot = obj.safeStr("overview")
         val episodes = mutableListOf<Episode>()
+
         val seasonsArr = obj.optJSONArray("seasons")
         if (seasonsArr != null) {
             for (i in 0 until seasonsArr.length()) {
@@ -441,7 +450,7 @@ class MovieFoxProvider : MainAPI() {
                 val epCount = sObj.optInt("episode_count", 0)
                 if (sNum <= 0 || epCount <= 0) continue
                 for (eNum in 1..epCount) {
-                    val epData = encodeLoadData("${url.substringBefore("?")}?season=$sNum&episode=$eNum", title, id, imdbId, true, sNum, eNum)
+                    val epData = encodeLoadData("${url.substringBefore("?")}?season=$sNum&episode=$eNum", title.ifBlank { "Series" }, id, imdbId, true, sNum, eNum)
                     episodes.add(newEpisode(epData) {
                         this.name = "Episode $eNum"
                         this.season = sNum
@@ -450,6 +459,62 @@ class MovieFoxProvider : MainAPI() {
                 }
             }
         }
+
+        if (title.isBlank() || plot.isBlank() || (isTv && episodes.isEmpty())) {
+            val slugTitle = titleFromUrlSlug(url)
+            val cineType = if (isTv) "series" else "movie"
+            val lookupId = if (imdbId.startsWith("tt")) imdbId
+            else if (id.isNotBlank()) {
+                val searchType = if (isTv) "tv" else "movie"
+                val extRaw = safeGetText("$tmdbBaseUrl/$searchType/$id/external_ids?api_key=$tmdbApiKey", timeoutSec = 5L, retries = 1, sourceTag = "TMDB").orEmpty()
+                runCatching { JSONObject(extRaw).safeStr("imdb_id") }.getOrNull().orEmpty().ifBlank { id }
+            } else ""
+
+            if (lookupId.isNotBlank()) {
+                val cineRaw = safeGetText("${MfRegistries.CINEMETA_BASE}/$cineType/${safeUriEncode(lookupId)}.json", timeoutSec = 5L, retries = 1, sourceTag = "cinemeta").orEmpty()
+                val metaObj = runCatching { JSONObject(cineRaw).optJSONObject("meta") }.getOrNull()
+                if (metaObj != null) {
+                    if (title.isBlank()) title = metaObj.safeStr("name")
+                    if (imdbId.isBlank()) imdbId = metaObj.safeStr("imdb_id").ifBlank { lookupId.takeIf { it.startsWith("tt") }.orEmpty() }
+                    if (poster.isNullOrBlank()) poster = metaObj.safeStr("poster").takeIf { it.startsWith("http") }
+                    if (plot.isBlank()) plot = metaObj.safeStr("description")
+                    if (isTv && episodes.isEmpty()) {
+                        metaObj.optJSONArray("videos")?.let { vids: JSONArray ->
+                            for (vIdx in 0 until vids.length()) {
+                                val vObj = vids.optJSONObject(vIdx) ?: continue
+                                val sNum = vObj.optInt("season", 1)
+                                val eNum = vObj.optInt("episode", 0)
+                                if (sNum <= 0 || eNum <= 0) continue
+                                val epName = vObj.safeStr("name").ifBlank { vObj.safeStr("title", "Episode $eNum") }
+                                val epThumb = vObj.safeStr("thumbnail").takeIf { it.startsWith("http") } ?: poster
+                                val epData = encodeLoadData("${url.substringBefore("?")}?season=$sNum&episode=$eNum", title.ifBlank { slugTitle.ifBlank { "Series" } }, id, imdbId, true, sNum, eNum)
+                                episodes.add(newEpisode(epData) {
+                                    this.name = epName
+                                    this.season = sNum
+                                    this.episode = eNum
+                                    this.posterUrl = epThumb
+                                })
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (title.isBlank()) {
+                title = slugTitle.ifBlank { if (id.isNotBlank()) "Title #$id" else "MovieFox Title" }
+            }
+            if (plot.isBlank()) {
+                plot = "$title (${if (isTv) "Series" else "Movie"})"
+            }
+        }
+
+        if (!isTv) {
+            return newMovieLoadResponse(title, url, TvType.Movie, encodeLoadData(url, title, id, imdbId, false)) {
+                this.posterUrl = poster
+                this.plot = plot
+            }
+        }
+
         if (episodes.isEmpty()) {
             episodes.add(newEpisode(encodeLoadData(url, title, id, imdbId, true, 1, 1)) {
                 this.name = "Episode 1"
@@ -508,6 +573,7 @@ class MovieFoxProvider : MainAPI() {
                 if (imdbId.isBlank()) imdbId = obj.optJSONObject("external_ids")?.safeStr("imdb_id").orEmpty()
             }
         }
+        if (title.isBlank()) title = titleFromUrlSlug(rawUrl)
         if (title.isBlank()) return null
 
         val cleanQ = cleanSearchTitle(title).ifBlank { title }
