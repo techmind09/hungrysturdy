@@ -21,6 +21,8 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import org.jsoup.Jsoup
@@ -33,6 +35,7 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
@@ -195,14 +198,11 @@ class MovieFoxProvider : MainAPI() {
     private val csVidzeeApi = "https://player.vidzee.wtf"
     private val csVidrockApi = "https://vidrock.ru"
     private val csVidfastApi = "https://vidfast.vc"
-    private val csVidcoreApi = "https://vidcore.io"
     private val csCinejoyApi = "https://api.shegu.st"
     private val csCinejoyBaseApi = "https://cinejoy.to"
     private val csKisskhApi = "https://kisskh.nl"
     private val csAnimesaltApi = "https://animesalt.ac"
     private val csToonstreamApi = "https://toonstream.one"
-    private val csAnikotoApi = "https://anikototv.to"
-    private val csAnizoneApi = "https://anizone.to"
     private val csWyzieSubsApi = "https://sub.wyzie.io"
     private val csUrlsJsonUrl = "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json"
 
@@ -396,12 +396,22 @@ class MovieFoxProvider : MainAPI() {
                     val body = res.text
                     MovieFoxSettingsDialog.reportServerStatus(sourceTag, "LIVE", true, res.code, ms, url)
                     return body
+                } else if (attempt == retries - 1) {
+                    val statusTag = if (res.code in listOf(403, 503)) "CF ${res.code}" else "HTTP ${res.code}"
+                    MovieFoxSettingsDialog.reportServerStatus(sourceTag, statusTag, false, res.code, ms, url)
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 if (attempt == retries - 1) {
-                    logError(sourceTag, url, e, "attempt=${attempt + 1}")
+                    val isTimeout = e.message?.contains("timeout", true) == true ||
+                        e.javaClass.simpleName.contains("Timeout", true) ||
+                        e.javaClass.simpleName.contains("InterruptedIO", true)
+                    if (isTimeout) {
+                        MovieFoxSettingsDialog.logTimeout(sourceTag, url, timeoutSec, "attempt=${attempt + 1}")
+                    } else {
+                        logError(sourceTag, url, e, "attempt=${attempt + 1}")
+                    }
                 }
             }
             if (attempt < retries - 1) delay(250L)
@@ -424,6 +434,8 @@ class MovieFoxProvider : MainAPI() {
                                 if (v.isNotBlank()) firebaseDomainsCache[k] = v
                             }
                             lastFirebaseFetchMs = System.currentTimeMillis()
+                        }.onFailure {
+                            MovieFoxSettingsDialog.logParsing("Firebase", "rtdb", "DOMAIN_JSON", it)
                         }
                     }
                 }
@@ -447,6 +459,8 @@ class MovieFoxProvider : MainAPI() {
                                 if (v.isNotBlank()) csDynamicUrlsCache[k] = v
                             }
                             lastCsUrlsFetchMs = System.currentTimeMillis()
+                        }.onFailure {
+                            MovieFoxSettingsDialog.logParsing("CineStream", csUrlsJsonUrl, "URLS_JSON", it)
                         }
                     }
                 }
@@ -539,7 +553,10 @@ class MovieFoxProvider : MainAPI() {
         }
 
         val raw = safeGetText(endpoint, timeoutSec = 10L, sourceTag = "TMDB").orEmpty()
-        val results = runCatching { JSONObject(raw).optJSONArray("results") }.getOrNull() ?: return emptyList()
+        val results = runCatching { JSONObject(raw).optJSONArray("results") }.onFailure {
+            if (raw.isNotBlank()) MovieFoxSettingsDialog.logParsing("TMDB", endpoint, "HOME_JSON", it)
+        }.getOrNull() ?: return emptyList()
+
         val out = mutableListOf<SearchResponse>()
         for (i in 0 until results.length()) {
             val item = results.optJSONObject(i) ?: continue
@@ -659,6 +676,7 @@ class MovieFoxProvider : MainAPI() {
     }
 
     override suspend fun search(query: String): List<SearchResponse> {
+        val searchStart = System.currentTimeMillis()
         val timeoutSec = currentTimeoutSec(18L)
         val encoded = safeEncode(query)
         val html = safeGetText("$mainUrl/search?q=$encoded", timeoutSec = timeoutSec, sourceTag = "moviefox").orEmpty()
@@ -670,11 +688,18 @@ class MovieFoxProvider : MainAPI() {
                 document.select("a[href*=/movie/], a[href*=/tv/], a[href*=/dramas/], a[href*=/anime/], a[href*=/series/]")
             }
             val parsed = elements.mapNotNull { toSearchResult(it) }.distinctBy { it.url }
-            if (parsed.isNotEmpty()) return parsed
+            if (parsed.isNotEmpty()) {
+                MovieFoxSettingsDialog.logSearch("moviefox", query, parsed.size, System.currentTimeMillis() - searchStart)
+                return parsed
+            }
         }
 
-        val tmdbRaw = safeGetText("$tmdbBaseUrl/search/multi?api_key=$tmdbApiKey&query=$encoded&page=1", timeoutSec = 10L, sourceTag = "TMDB").orEmpty()
-        val results = runCatching { JSONObject(tmdbRaw).optJSONArray("results") }.getOrNull() ?: return emptyList()
+        val tmdbUrl = "$tmdbBaseUrl/search/multi?api_key=$tmdbApiKey&query=$encoded&page=1"
+        val tmdbRaw = safeGetText(tmdbUrl, timeoutSec = 10L, sourceTag = "TMDB").orEmpty()
+        val results = runCatching { JSONObject(tmdbRaw).optJSONArray("results") }.onFailure {
+            if (tmdbRaw.isNotBlank()) MovieFoxSettingsDialog.logParsing("TMDB", tmdbUrl, "SEARCH_JSON", it)
+        }.getOrNull() ?: return emptyList()
+
         val fallbackList = mutableListOf<SearchResponse>()
         for (i in 0 until results.length()) {
             val item = results.optJSONObject(i) ?: continue
@@ -694,6 +719,7 @@ class MovieFoxProvider : MainAPI() {
                 fallbackList.add(newMovieSearchResponse(title, detailUrl, TvType.Movie) { this.posterUrl = poster })
             }
         }
+        MovieFoxSettingsDialog.logSearch("TMDB", query, fallbackList.size, System.currentTimeMillis() - searchStart, "fallback")
         return fallbackList
     }
 
@@ -736,8 +762,12 @@ class MovieFoxProvider : MainAPI() {
                 }
             }
             val tmdbPath = if (isTv) "tv/$id" else "movie/$id"
-            val tmdbJsonStr = safeGetText("$tmdbBaseUrl/$tmdbPath?api_key=$tmdbApiKey&append_to_response=external_ids", timeoutSec = 10L, sourceTag = "TMDB").orEmpty()
-            val obj = runCatching { JSONObject(tmdbJsonStr) }.getOrNull() ?: JSONObject()
+            val tmdbEndpoint = "$tmdbBaseUrl/$tmdbPath?api_key=$tmdbApiKey&append_to_response=external_ids"
+            val tmdbJsonStr = safeGetText(tmdbEndpoint, timeoutSec = 10L, sourceTag = "TMDB").orEmpty()
+            val obj = runCatching { JSONObject(tmdbJsonStr) }.onFailure {
+                if (tmdbJsonStr.isNotBlank()) MovieFoxSettingsDialog.logParsing("TMDB", tmdbEndpoint, "LOAD_JSON", it)
+            }.getOrNull() ?: JSONObject()
+
             val title = obj.safeStr("title").ifBlank { obj.safeStr("name") }.ifBlank { fallbackTitle }
             val imdbId = obj.optJSONObject("external_ids")?.safeStr("imdb_id").orEmpty().ifBlank { obj.safeStr("imdb_id") }
             val pPath = obj.safeStr("poster_path")
@@ -894,16 +924,16 @@ class MovieFoxProvider : MainAPI() {
             h.contains("gamerxyt") && isExtOn("hubcloud") -> GamerXYTExtractor()
             h.contains("gdflix") && isExtOn("gdflix") -> KatGDFlixExtractor()
             h.contains("gdlink") && isExtOn("gdflix") -> GDLink()
-            h.contains("fastdlserver") && isExtOn("fastdlserver") -> KatFastDlServer()
+            h.contains("fastdlserver") && isExtOn("gdflix") -> KatFastDlServer()
             h.contains("fuckingfast") && isExtOn("buzz_hb_go") -> KatFuckingFastExtractor()
             h.contains("hbplay.pages.dev") && isExtOn("buzz_hb_go") -> KatHBPlayExtractor()
             h.contains("goflix.sbs") && isExtOn("buzz_hb_go") -> KatGoFlixExtractor()
             h.contains("voe.") && isExtOn("voe") -> VoeExtractor()
             (h.contains("streamtape") || h.contains("stape.") || h.contains("strtape") || h.contains("shavetape")) && isExtOn("streamtape") -> StreamTapeExtractor()
-            h.contains("nxstreamhub") && isExtOn("nxstreamhub") -> NxStreamHubExtractor()
-            h.contains("itsnitrox") && isExtOn("itsnitrox") -> NitroxExtractor()
-            h.contains("vibuxer") && isExtOn("vibuxer") -> VibuxerExtractor()
-            h.contains("vidprime") && isExtOn("jwp_hosts") -> VidPrimeExtractor()
+            h.contains("nxstreamhub") && isExtOn("basejwp") -> NxStreamHubExtractor()
+            h.contains("itsnitrox") && isExtOn("basejwp") -> NitroxExtractor()
+            h.contains("vibuxer") && isExtOn("basejwp") -> VibuxerExtractor()
+            h.contains("vidprime") && isExtOn("basejwp") -> VidPrimeExtractor()
             (h.contains("luluvid") || h.contains("lulustream") || h.contains("luluvdo")) && isExtOn("jwp_embeds") -> LuluVidExtractor()
             h.contains("vidara") && isExtOn("jwp_embeds") -> VidaraExtractor()
             h.contains("rabbitstream") && isExtOn("jwp_embeds") -> RabbitstreamExtractor()
@@ -991,6 +1021,8 @@ class MovieFoxProvider : MainAPI() {
                         any = true
                         wrappedCb(ex)
                     }
+                }.onFailure {
+                    MovieFoxSettingsDialog.logParsing(sourceTag, targetUrl, "EXTRACTOR", it)
                 }
             }
         }
@@ -998,6 +1030,86 @@ class MovieFoxProvider : MainAPI() {
             withTimeoutOrNull(15_000L) {
                 runCatching {
                     loadExtractor(targetUrl, referer, emitSub, wrappedCb)
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // CUSTOM NUVIO / STREMIO MANIFEST STREAM FETCHER
+    // =========================================================================
+    private suspend fun fetchFromNuvioManifest(
+        srv: MovieFoxSettingsDialog.ServerItem,
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink) -> Unit
+    ) {
+        if (lc.imdbId.isBlank()) return
+        val base = srv.probeUrl.substringBefore("/manifest.json").trimEnd('/')
+        if (!base.startsWith("http")) return
+        val streamUrl = if (lc.isTv) {
+            "$base/stream/series/${lc.imdbId}:${lc.season}:${lc.episode}.json"
+        } else {
+            "$base/stream/movie/${lc.imdbId}.json"
+        }
+        val raw = safeGetText(streamUrl, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = srv.key).orEmpty()
+        if (raw.isBlank()) return
+
+        val streamsArr = runCatching { JSONObject(raw).optJSONArray("streams") }.onFailure {
+            MovieFoxSettingsDialog.logParsing(srv.name, streamUrl, "MANIFEST_STREAM", it)
+        }.getOrNull() ?: return
+
+        for (i in 0 until streamsArr.length()) {
+            val s = streamsArr.optJSONObject(i) ?: continue
+            val mediaUrl = s.optString("url", "").trim()
+            if (!mediaUrl.startsWith("http") || mediaUrl.contains("github.com", true)) continue
+
+            val sTitle = s.optString("description").ifBlank { s.optString("title") }.ifBlank { s.optString("name", "Stream") }
+            val hints = s.optJSONObject("behaviorHints")
+            val proxyReq = hints?.optJSONObject("proxyHeaders")?.optJSONObject("request")
+            val stdHdrs = hints?.optJSONObject("headers")
+
+            val hdrs = mutableMapOf<String, String>()
+            val ref = proxyReq?.optString("Referer").orEmpty()
+                .ifBlank { stdHdrs?.optString("Referer").orEmpty() }
+                .ifBlank { stdHdrs?.optString("referer").orEmpty() }
+            val origin = proxyReq?.optString("Origin").orEmpty()
+                .ifBlank { stdHdrs?.optString("Origin").orEmpty() }
+                .ifBlank { stdHdrs?.optString("origin").orEmpty() }
+            val ua = proxyReq?.optString("User-Agent").orEmpty()
+                .ifBlank { stdHdrs?.optString("User-Agent").orEmpty() }
+                .ifBlank { effectiveUa }
+
+            hdrs["User-Agent"] = ua
+            if (ref.isNotBlank()) hdrs["Referer"] = ref
+            if (origin.isNotBlank()) hdrs["Origin"] = origin
+
+            val qVal = getQualityFromName(sTitle).takeIf { it > 0 } ?: Qualities.P1080.value
+            val lType = when {
+                mediaUrl.contains(".m3u8", true) || sTitle.contains("hls", true) -> ExtractorLinkType.M3U8
+                mediaUrl.contains(".mpd", true) -> ExtractorLinkType.DASH
+                else -> ExtractorLinkType.VIDEO
+            }
+            if (lc.seenUrls.add(mediaUrl)) {
+                emitLink(
+                    newExtractorLink(
+                        source = srv.name,
+                        name = "${srv.name} [$sTitle]",
+                        url = mediaUrl,
+                        type = lType
+                    ) {
+                        this.referer = ref
+                        this.quality = qVal
+                        this.headers = hdrs
+                    }
+                )
+            }
+            s.optJSONArray("subtitles")?.let { subArr ->
+                for (j in 0 until subArr.length()) {
+                    val sub = subArr.optJSONObject(j) ?: continue
+                    val su = sub.optString("url", "")
+                    val sl = sub.optString("lang", "Sub")
+                    if (su.startsWith("http")) emitSub(newSubtitleFile("${srv.name} • $sl", su))
                 }
             }
         }
@@ -1017,6 +1129,7 @@ class MovieFoxProvider : MainAPI() {
         val domains = (listOfNotNull(fbDom, activePrmoviesBase) + prmoviesMirrors).distinct()
 
         for (dom in domains) {
+            val sStart = System.currentTimeMillis()
             val searchHtml = safeGetText(
                 "$dom/?s=$q",
                 mapOf("Referer" to "$dom/"),
@@ -1037,6 +1150,7 @@ class MovieFoxProvider : MainAPI() {
                 .map { normalizeUrl(it.attr("href"), dom) }
                 .distinct()
                 .take(2)
+            MovieFoxSettingsDialog.logSearch("prmovies", lc.searchQueryTitle, matchedPages.size, System.currentTimeMillis() - sStart, dom)
             if (matchedPages.isEmpty()) continue
 
             for (matchedPageUrl in matchedPages) {
@@ -1224,6 +1338,7 @@ class MovieFoxProvider : MainAPI() {
         emitLink: (ExtractorLink) -> Unit
     ) {
         if (lc.searchQueryTitle.isBlank()) return
+        val sStart = System.currentTimeMillis()
         val q = safeEncode(lc.searchQueryTitle)
         val searchHtml = safeGetText(
             "$dramaVerseBase/?s=$q",
@@ -1241,7 +1356,9 @@ class MovieFoxProvider : MainAPI() {
             val href = a?.attr("href")?.trim().orEmpty()
             val title = a?.text()?.trim().orEmpty().ifEmpty { a?.attr("aria-label")?.substringBefore("|")?.trim().orEmpty() }
             if (href.isNotEmpty() && titleMatchesCandidate(title, lc.pageTitle)) normalizeUrl(href, dramaVerseBase) else null
-        } ?: return
+        }
+        MovieFoxSettingsDialog.logSearch("dramaverse", lc.searchQueryTitle, if (matchedUrl != null) 1 else 0, System.currentTimeMillis() - sStart)
+        if (matchedUrl == null) return
 
         val detailHtml = safeGetText(
             matchedUrl,
@@ -1281,6 +1398,7 @@ class MovieFoxProvider : MainAPI() {
         emitLink: (ExtractorLink) -> Unit
     ) {
         if (lc.searchQueryTitle.isBlank()) return
+        val sStart = System.currentTimeMillis()
         val q = safeEncode(lc.searchQueryTitle)
         val searchHtml = safeGetText("$hindiDramaBase/search.php?q=$q", mapOf("Referer" to "$hindiDramaBase/"), timeoutSec = lc.reqTimeoutSec, retries = 2, sourceTag = "hindidrama").orEmpty()
         if (searchHtml.isBlank()) return
@@ -1289,7 +1407,9 @@ class MovieFoxProvider : MainAPI() {
         val matchedUrl = searchDoc.select(".grid .card a, .ac a.it").firstOrNull { anchor ->
             val t = anchor.selectFirst("h3, .t")?.text()?.trim().orEmpty().ifEmpty { anchor.attr("title").trim() }
             titleMatchesCandidate(t, lc.pageTitle)
-        }?.attr("href")?.let { normalizeUrl(it, hindiDramaBase) } ?: return
+        }?.attr("href")?.let { normalizeUrl(it, hindiDramaBase) }
+        MovieFoxSettingsDialog.logSearch("hindidrama", lc.searchQueryTitle, if (matchedUrl != null) 1 else 0, System.currentTimeMillis() - sStart)
+        if (matchedUrl == null) return
 
         val detailHtml = safeGetText(matchedUrl, mapOf("Referer" to "$hindiDramaBase/"), timeoutSec = lc.reqTimeoutSec, retries = 2, sourceTag = "hindidrama").orEmpty()
         if (detailHtml.isBlank()) return
@@ -1381,6 +1501,7 @@ class MovieFoxProvider : MainAPI() {
         emitLink: (ExtractorLink) -> Unit
     ) {
         if (lc.searchQueryTitle.isBlank()) return
+        val sStart = System.currentTimeMillis()
         val q = safeEncode(lc.searchQueryTitle)
         val searchHtml = safeGetText(
             "$katDramaBase/?s=$q",
@@ -1395,7 +1516,9 @@ class MovieFoxProvider : MainAPI() {
         val searchDoc = Jsoup.parse(searchHtml, katDramaBase)
         val matchedUrl = searchDoc.select("article.latest-card h3.latest-title a, article.post h3 a, article.post h2 a")
             .firstOrNull { titleMatchesCandidate(it.text(), lc.pageTitle) }
-            ?.attr("href")?.let { normalizeUrl(it, katDramaBase) } ?: return
+            ?.attr("href")?.let { normalizeUrl(it, katDramaBase) }
+        MovieFoxSettingsDialog.logSearch("katdrama", lc.searchQueryTitle, if (matchedUrl != null) 1 else 0, System.currentTimeMillis() - sStart)
+        if (matchedUrl == null) return
 
         val pageHtml = safeGetText(
             matchedUrl,
@@ -1558,6 +1681,7 @@ class MovieFoxProvider : MainAPI() {
         emitLink: (ExtractorLink) -> Unit
     ) {
         if (lc.searchQueryTitle.isBlank()) return
+        val sStart = System.currentTimeMillis()
         val savedHost = ctxOrNull()?.let { MovieFoxSettingsDialog.getSflixHost(it) }
         val activeHost = if (!savedHost.isNullOrBlank() && savedHost in sflixDomains) savedHost else sflixDomains.first()
         val searchUrl = "$activeHost/search-result?keyword=${safeEncode(lc.searchQueryTitle)}"
@@ -1590,9 +1714,9 @@ class MovieFoxProvider : MainAPI() {
                         break
                     }
                 }
-            }
+            }.onFailure { MovieFoxSettingsDialog.logParsing("sflix", searchUrl, "NUXT_DATA", it) }
         }
-
+        MovieFoxSettingsDialog.logSearch("sflix", lc.searchQueryTitle, if (subjectId.isNotEmpty()) 1 else 0, System.currentTimeMillis() - sStart)
         if (subjectId.isEmpty() || detailPath.isEmpty()) return
 
         val se = if (lc.isTv) lc.season else 0
@@ -1618,7 +1742,9 @@ class MovieFoxProvider : MainAPI() {
             val jsonText = safeGetText(playUrl, webHeaders, timeoutSec = lc.reqTimeoutSec, retries = 2, sourceTag = "sflix").orEmpty()
             if (jsonText.isBlank()) continue
 
-            val dataObj = runCatching { JSONObject(jsonText).optJSONObject("data") }.getOrNull() ?: continue
+            val dataObj = runCatching { JSONObject(jsonText).optJSONObject("data") }.onFailure {
+                MovieFoxSettingsDialog.logParsing("sflix", playUrl, "PLAY_JSON", it)
+            }.getOrNull() ?: continue
             val d1 = emitSflixArray(dataObj.optJSONArray("dash"), "DASH", subjectId, lc, emitSub, emitLink)
             val d2 = emitSflixArray(dataObj.optJSONArray("hls"), "HLS", subjectId, lc, emitSub, emitLink)
             val d3 = emitSflixArray(dataObj.optJSONArray("streams"), "MP4", subjectId, lc, emitSub, emitLink)
@@ -1686,6 +1812,7 @@ class MovieFoxProvider : MainAPI() {
         emitLink: (ExtractorLink) -> Unit
     ) {
         if (lc.searchQueryTitle.isBlank()) return
+        val sStart = System.currentTimeMillis()
         getFirebaseDomain("play4u")?.takeIf { it.contains("play4u", true) }?.let { activePlay4uBase = it }
 
         val p4uHeaders = mapOf(
@@ -1698,20 +1825,29 @@ class MovieFoxProvider : MainAPI() {
         val searchJson = safeGetText(searchUrl, p4uHeaders, timeoutSec = lc.reqTimeoutSec, retries = 2, sourceTag = "play4u").orEmpty()
         if (searchJson.isBlank()) return
 
-        val pageObj = runCatching { parseJson<P4uSearchPage>(searchJson) }.getOrNull() ?: return
+        val pageObj = runCatching { parseJson<P4uSearchPage>(searchJson) }.onFailure {
+            MovieFoxSettingsDialog.logParsing("play4u", searchUrl, "SEARCH_JSON", it)
+        }.getOrNull() ?: return
         val matched = pageObj.items.firstOrNull { item ->
             !item.watch.isNullOrBlank() && titleMatchesCandidate(item.title, lc.pageTitle)
-        } ?: return
+        }
+        MovieFoxSettingsDialog.logSearch("play4u", lc.searchQueryTitle, if (matched != null) 1 else 0, System.currentTimeMillis() - sStart)
+        if (matched == null) return
 
         val watchPath = matched.watch.orEmpty()
-        val pageHtml = safeGetText(normalizeUrl(watchPath, activePlay4uBase), p4uHeaders, timeoutSec = lc.reqTimeoutSec, retries = 2, sourceTag = "play4u").orEmpty()
+        val pageUrl = normalizeUrl(watchPath, activePlay4uBase)
+        val pageHtml = safeGetText(pageUrl, p4uHeaders, timeoutSec = lc.reqTimeoutSec, retries = 2, sourceTag = "play4u").orEmpty()
         if (pageHtml.isBlank()) return
 
         val sealKey = p4uSealKeyRegex.find(pageHtml)?.groupValues?.get(1)?.takeIf { it.isNotBlank() } ?: p4uDefaultSealKey
         val streamHeaders = mapOf("Referer" to "$activePlay4uBase/", "Origin" to activePlay4uBase)
 
         if (lc.isTv && !watchPath.contains("/watch/")) {
-            val series = p4uExtractVar(pageHtml, "__PA_SERIES__")?.let { runCatching { parseJson<P4uSeriesPayload>(it) }.getOrNull() }
+            val series = p4uExtractVar(pageHtml, "__PA_SERIES__")?.let {
+                runCatching { parseJson<P4uSeriesPayload>(it) }.onFailure { e ->
+                    MovieFoxSettingsDialog.logParsing("play4u", pageUrl, "SERIES_VAR", e)
+                }.getOrNull()
+            }
             val targetSeason = series?.seasons?.values?.firstOrNull { (it.number ?: 0) == lc.season }
                 ?: series?.seasons?.values?.firstOrNull()
             val epInfo = targetSeason?.episodes?.values?.firstOrNull { it.number == lc.episode }
@@ -1729,7 +1865,11 @@ class MovieFoxProvider : MainAPI() {
             return
         }
 
-        val play = p4uExtractVar(pageHtml, "__PA_PLAY__")?.let { runCatching { parseJson<P4uPlayPayload>(it) }.getOrNull() }
+        val play = p4uExtractVar(pageHtml, "__PA_PLAY__")?.let {
+            runCatching { parseJson<P4uPlayPayload>(it) }.onFailure { e ->
+                MovieFoxSettingsDialog.logParsing("play4u", pageUrl, "PLAY_VAR", e)
+            }.getOrNull()
+        }
         if (play?.ok == true) {
             for (stream in play.streams) {
                 val unsealed = p4uUnseal(stream.m3u8_url, sealKey)
@@ -1763,6 +1903,7 @@ class MovieFoxProvider : MainAPI() {
         emitLink: (ExtractorLink) -> Unit
     ) {
         if (lc.searchQueryTitle.isBlank()) return
+        val sStart = System.currentTimeMillis()
         getFirebaseDomain("animeworldindia")?.takeIf { it.contains("animeworld", true) }?.let { activeAnimeWorldBase = it }
 
         val awHeaders = mapOf(
@@ -1775,7 +1916,7 @@ class MovieFoxProvider : MainAPI() {
             awHeaders,
             timeoutSec = lc.reqTimeoutSec,
             retries = 2,
-            sourceTag = "animeworldindia",
+            sourceTag = "animeworld",
             useCloudflareBypass = true
         ).orEmpty()
         if (searchHtml.isBlank()) return
@@ -1787,14 +1928,16 @@ class MovieFoxProvider : MainAPI() {
             if (link.isNotEmpty() && !link.endsWith("/series/") && !link.endsWith("/movies/") && titleMatchesCandidate(title, lc.pageTitle)) {
                 normalizeUrl(link, activeAnimeWorldBase)
             } else null
-        } ?: return
+        }
+        MovieFoxSettingsDialog.logSearch("animeworld", lc.searchQueryTitle, if (matchedUrl != null) 1 else 0, System.currentTimeMillis() - sStart)
+        if (matchedUrl == null) return
 
         val detailHtml = safeGetText(
             matchedUrl,
             awHeaders,
             timeoutSec = lc.reqTimeoutSec,
             retries = 2,
-            sourceTag = "animeworldindia",
+            sourceTag = "animeworld",
             useCloudflareBypass = true
         ).orEmpty()
         if (detailHtml.isBlank()) return
@@ -1810,7 +1953,7 @@ class MovieFoxProvider : MainAPI() {
         }
 
         val pageHtml = if (watchPageUrl == matchedUrl) detailHtml else {
-            safeGetText(watchPageUrl, awHeaders, timeoutSec = lc.reqTimeoutSec, retries = 2, sourceTag = "animeworldindia", useCloudflareBypass = true).orEmpty()
+            safeGetText(watchPageUrl, awHeaders, timeoutSec = lc.reqTimeoutSec, retries = 2, sourceTag = "animeworld", useCloudflareBypass = true).orEmpty()
         }
         if (pageHtml.isBlank()) return
         val pageDoc = Jsoup.parse(pageHtml, watchPageUrl)
@@ -1838,7 +1981,9 @@ class MovieFoxProvider : MainAPI() {
                         timeout = lc.reqTimeoutSec
                     )
                 }.getOrNull() ?: continue
-                val vid = runCatching { parseJson<AwZephyrixVideo>(postRes.text) }.getOrNull() ?: continue
+                val vid = runCatching { parseJson<AwZephyrixVideo>(postRes.text) }.onFailure {
+                    MovieFoxSettingsDialog.logParsing("animeworld", iframe, "ZEPHYRIX_JSON", it)
+                }.getOrNull() ?: continue
                 val rawStream = vid.videoSource ?: vid.securedLink ?: continue
                 val streamUrl = if (rawStream.startsWith("http")) rawStream else "$playerBase$rawStream"
                 dispatchEmbedOrDirect(
@@ -2132,6 +2277,7 @@ class MovieFoxProvider : MainAPI() {
         emitLink: (ExtractorLink) -> Unit
     ) {
         if (lc.searchQueryTitle.isBlank()) return
+        val sStart = System.currentTimeMillis()
         val dom = tmfDomain(lc.reqTimeoutSec)
         val searchHtml = safeGetText(
             "$dom/?s=${safeEncode(lc.searchQueryTitle)}",
@@ -2148,7 +2294,9 @@ class MovieFoxProvider : MainAPI() {
             val href = a.attr("href").trim()
             val tRaw = a.attr("title").ifBlank { a.selectFirst("img")?.attr("alt").orEmpty() }
             if (href.isNotEmpty() && titleMatchesCandidate(tRaw, lc.pageTitle)) normalizeUrl(href, dom) else null
-        } ?: return
+        }
+        MovieFoxSettingsDialog.logSearch("themoviesflix", lc.searchQueryTitle, if (matchedUrl != null) 1 else 0, System.currentTimeMillis() - sStart, dom)
+        if (matchedUrl == null) return
 
         val detailHtml = safeGetText(
             matchedUrl,
@@ -2226,6 +2374,7 @@ class MovieFoxProvider : MainAPI() {
         val candidates = (listOfNotNull(fbDom, activeVegaBase) + vegaFallbackDomains).distinct()
 
         for (dom in candidates) {
+            val sStart = System.currentTimeMillis()
             val searchHtml = safeGetText(
                 "$dom/?s=${safeEncode(lc.searchQueryTitle)}",
                 mapOf("Referer" to "$dom/"),
@@ -2243,7 +2392,9 @@ class MovieFoxProvider : MainAPI() {
                     val href = el.attr("href").trim()
                     val tRaw = el.attr("title").ifBlank { el.selectFirst("img")?.attr("alt").orEmpty() }.ifBlank { el.text() }
                     if (href.startsWith("http") && titleMatchesCandidate(tRaw, lc.pageTitle)) href else null
-                } ?: continue
+                }
+            MovieFoxSettingsDialog.logSearch("vegamovies", lc.searchQueryTitle, if (matchedUrl != null) 1 else 0, System.currentTimeMillis() - sStart, dom)
+            if (matchedUrl == null) continue
 
             val detailHtml = safeGetText(
                 matchedUrl,
@@ -2304,15 +2455,13 @@ class MovieFoxProvider : MainAPI() {
     }
 
     // =========================================================================
-    // CINESTREAM SERVERS (Videasy, Vidzee, Hexa, Vidrock, VidFast, Vidcore,
-    // Cinejoy, Moviebox, HDHub4u, 4KHDHub, Movies4u, MoviesDrive, UHDMovies,
-    // Moviesmod, Bollyflix, KissKH, AnimeSalt, Toonstream, Anikoto, Anizone, WYZIE)
+    // CINESTREAM SERVERS
     // =========================================================================
     private suspend fun fetchFromCsVideasy(lc: LinkContext, emitSub: (SubtitleFile) -> Unit, emitLink: (ExtractorLink) -> Unit) {
         val tmdb = lc.candidateIds.firstOrNull()?.toIntOrNull() ?: return
         if (lc.searchQueryTitle.isBlank()) return
         val hdrs = mapOf("Accept" to "*/*", "User-Agent" to effectiveUa, "Origin" to "https://player.videasy.to", "Referer" to "https://player.videasy.to/")
-        val seedJson = safeGetText("$csVideasyApi/seed?mediaId=$tmdb", hdrs, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_videasy").orEmpty()
+        val seedJson = safeGetText("$csVideasyApi/seed?mediaId=$tmdb", hdrs, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "videasy").orEmpty()
         val seed = runCatching { JSONObject(seedJson).optString("seed") }.getOrNull().orEmpty()
         if (seed.isBlank()) return
 
@@ -2324,13 +2473,15 @@ class MovieFoxProvider : MainAPI() {
             } else {
                 "$csVideasyApi/$srv/sources-with-title?title=$encTitle&mediaType=tv&tmdbId=$tmdb&episodeId=${lc.episode}&seasonId=${lc.season}&imdbId=${lc.imdbId}&enc=2&seed=$seed"
             }
-            val encData = safeGetText(apiUrl, hdrs, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_videasy").orEmpty()
+            val encData = safeGetText(apiUrl, hdrs, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "videasy").orEmpty()
             if (encData.isBlank()) continue
             val decRes = runCatching {
                 app.post("$csMultiDecryptApi/dec-videasy", json = mapOf("text" to encData, "id" to tmdb, "seed" to seed), timeout = lc.reqTimeoutSec)
             }.getOrNull() ?: continue
             if (!decRes.isSuccessful) continue
-            val resultObj = runCatching { JSONObject(decRes.text).optJSONObject("result") }.getOrNull() ?: continue
+            val resultObj = runCatching { JSONObject(decRes.text).optJSONObject("result") }.onFailure {
+                MovieFoxSettingsDialog.logParsing("videasy", apiUrl, "DEC_JSON", it)
+            }.getOrNull() ?: continue
             val sources = resultObj.optJSONArray("sources") ?: continue
             for (i in 0 until sources.length()) {
                 val obj = sources.optJSONObject(i) ?: continue
@@ -2357,9 +2508,11 @@ class MovieFoxProvider : MainAPI() {
 
         for (sr in listOf(0, 1, 2, 4, 5, 6, 7)) {
             val apiUrl = if (!lc.isTv) "$csVidzeeApi/api/server?id=$tmdb&sr=$sr" else "$csVidzeeApi/api/server?id=$tmdb&sr=$sr&ss=${lc.season}&ep=${lc.episode}"
-            val raw = safeGetText(apiUrl, mapOf("Referer" to "$csVidzeeApi/", "User-Agent" to effectiveUa), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_vidzee").orEmpty()
+            val raw = safeGetText(apiUrl, mapOf("Referer" to "$csVidzeeApi/", "User-Agent" to effectiveUa), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "vidzee").orEmpty()
             if (raw.isBlank()) continue
-            val json = runCatching { JSONObject(raw) }.getOrNull() ?: continue
+            val json = runCatching { JSONObject(raw) }.onFailure {
+                MovieFoxSettingsDialog.logParsing("vidzee", apiUrl, "SRV_JSON", it)
+            }.getOrNull() ?: continue
             val urls = json.optJSONArray("url") ?: continue
             for (i in 0 until urls.length()) {
                 val obj = urls.optJSONObject(i) ?: continue
@@ -2392,7 +2545,7 @@ class MovieFoxProvider : MainAPI() {
 
     private suspend fun fetchFromCsHexa(lc: LinkContext, emitSub: (SubtitleFile) -> Unit, emitLink: (ExtractorLink) -> Unit) {
         val tmdb = lc.candidateIds.firstOrNull()?.toIntOrNull() ?: return
-        val tokenJson = safeGetText("$csMultiDecryptApi/enc-hexa", timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_hexa").orEmpty()
+        val tokenJson = safeGetText("$csMultiDecryptApi/enc-hexa", timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "hexa").orEmpty()
         val token = runCatching { JSONObject(tokenJson).optJSONObject("result")?.optString("token") }.getOrNull().orEmpty()
         if (token.isBlank()) return
 
@@ -2412,7 +2565,7 @@ class MovieFoxProvider : MainAPI() {
             ),
             timeoutSec = lc.reqTimeoutSec,
             retries = 1,
-            sourceTag = "cs_hexa"
+            sourceTag = "hexa"
         ).orEmpty()
         if (encData.isBlank()) return
 
@@ -2420,7 +2573,9 @@ class MovieFoxProvider : MainAPI() {
             app.post("$csMultiDecryptApi/dec-hexa", json = mapOf("text" to encData, "key" to keyHex), headers = mapOf("Content-Type" to "application/json"), timeout = lc.reqTimeoutSec)
         }.getOrNull() ?: return
         if (!decRes.isSuccessful) return
-        val sources = runCatching { JSONObject(decRes.text).optJSONObject("result")?.optJSONArray("sources") }.getOrNull() ?: return
+        val sources = runCatching { JSONObject(decRes.text).optJSONObject("result")?.optJSONArray("sources") }.onFailure {
+            MovieFoxSettingsDialog.logParsing("hexa", encUrl, "DEC_JSON", it)
+        }.getOrNull() ?: return
         for (i in 0 until sources.length()) {
             val src = sources.optJSONObject(i) ?: continue
             val m3u8 = src.optString("url", "")
@@ -2434,7 +2589,7 @@ class MovieFoxProvider : MainAPI() {
         val tmdb = lc.candidateIds.firstOrNull()?.toIntOrNull() ?: return
         val type = if (!lc.isTv) "movie" else "tv"
         val query = if (!lc.isTv) "$tmdb" else "${tmdb}_${lc.season}_${lc.episode}"
-        val raw = safeGetText("$csVidrockApi/api/$type/$query/", mapOf("Origin" to csVidrockApi, "Referer" to "$csVidrockApi/"), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_vidrock").orEmpty()
+        val raw = safeGetText("$csVidrockApi/api/$type/$query/", mapOf("Origin" to csVidrockApi, "Referer" to "$csVidrockApi/"), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cinestream").orEmpty()
         if (raw.isBlank()) return
 
         val keyHex = "7f3e9c2a8b5d1f4e6a9c3b7d2e5f8a1c4b6d9e2f5a8c1b4d7e9f2a5c8b1d4e7f"
@@ -2463,11 +2618,11 @@ class MovieFoxProvider : MainAPI() {
         val tmdb = lc.candidateIds.firstOrNull()?.toIntOrNull() ?: return
         val hdrs = mapOf("User-Agent" to effectiveUa, "Referer" to "$csVidfastApi/", "X-Requested-With" to "XMLHttpRequest")
         val pageUrl = if (!lc.isTv) "$csVidfastApi/movie/$tmdb/" else "$csVidfastApi/tv/$tmdb/${lc.season}/${lc.episode}/"
-        val html = safeGetText(pageUrl, hdrs, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_vidfast").orEmpty()
+        val html = safeGetText(pageUrl, hdrs, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cinestream").orEmpty()
         val encToken = Regex("""\\"(?:en|token)\\":\\"(.*?)\\"""").find(html)?.groupValues?.get(1).orEmpty()
         if (encToken.isBlank()) return
 
-        val decInfoRaw = safeGetText("$csMultiDecryptApi/enc-vidfast?text=${safeEncode(encToken)}", hdrs, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_vidfast").orEmpty()
+        val decInfoRaw = safeGetText("$csMultiDecryptApi/enc-vidfast?text=${safeEncode(encToken)}", hdrs, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cinestream").orEmpty()
         val resObj = runCatching { JSONObject(decInfoRaw).optJSONObject("result") }.getOrNull() ?: return
         val serversUrl = resObj.optString("servers", "")
         val streamBase = resObj.optString("stream", "")
@@ -2506,7 +2661,7 @@ class MovieFoxProvider : MainAPI() {
         if (lc.searchQueryTitle.isBlank()) return
         val tmdb = lc.candidateIds.firstOrNull()?.toIntOrNull() ?: return
         val hdrs = mapOf("Accept" to "*/*", "Origin" to csCinejoyBaseApi, "Referer" to "$csCinejoyBaseApi/", "User-Agent" to effectiveUa)
-        val srvRaw = safeGetText("$csCinejoyApi/servers", hdrs, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_cinejoy").orEmpty()
+        val srvRaw = safeGetText("$csCinejoyApi/servers", hdrs, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cinestream").orEmpty()
         val srvArr = runCatching { JSONObject(srvRaw).optJSONArray("servers") }.getOrNull() ?: return
         val type = if (lc.isTv) "series" else "movie"
 
@@ -2517,7 +2672,7 @@ class MovieFoxProvider : MainAPI() {
                 append("$csCinejoyApi/?title=${safeEncode(lc.searchQueryTitle)}&type=$type&imdb=${lc.imdbId}&tmdb=$tmdb&server=$srv")
                 if (lc.isTv) append("&season=${lc.season}&episode=${lc.episode}")
             }
-            val encRaw = safeGetText("$csMultiDecryptApi/enc-cinejoy?url=${safeEncode(targetUrl)}", timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_cinejoy").orEmpty()
+            val encRaw = safeGetText("$csMultiDecryptApi/enc-cinejoy?url=${safeEncode(targetUrl)}", timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cinestream").orEmpty()
             val encResult = runCatching { JSONObject(encRaw).optJSONObject("result") }.getOrNull() ?: continue
             val dataB64 = encResult.optString("data", "")
             val stateObj = encResult.optJSONObject("state") ?: continue
@@ -2526,9 +2681,9 @@ class MovieFoxProvider : MainAPI() {
             val pad = when (dataB64.length % 4) { 2 -> "=="; 3 -> "="; else -> "" }
             val bytes = runCatching { Base64.decode(dataB64 + pad, Base64.URL_SAFE or Base64.NO_WRAP) }.getOrNull() ?: continue
             val postRes = runCatching {
-                app.post("$csCinejoyApi/g", requestBody = okhttp3.RequestBody.create(okhttp3.MediaType.parse("application/octet-stream"), bytes), headers = hdrs, timeout = lc.reqTimeoutSec)
+                app.post("$csCinejoyApi/g", requestBody = bytes.toRequestBody("application/octet-stream".toMediaTypeOrNull()), headers = hdrs, timeout = lc.reqTimeoutSec)
             }.getOrNull() ?: continue
-            val respBytes = runCatching { postRes.okhttpResponse.body?.bytes() }.getOrNull() ?: continue
+            val respBytes = runCatching { postRes.okhttpResponse.body.bytes() }.getOrNull() ?: continue
             val b64Out = Base64.encodeToString(respBytes, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING)
 
             val decRaw = runCatching {
@@ -2558,6 +2713,7 @@ class MovieFoxProvider : MainAPI() {
 
     private suspend fun fetchFromCsMoviebox(lc: LinkContext, emitSub: (SubtitleFile) -> Unit, emitLink: (ExtractorLink) -> Unit) {
         if (lc.searchQueryTitle.isBlank()) return
+        val sStart = System.currentTimeMillis()
         val host = "h5-api.aoneroom.com"
         val base = "https://$host"
         val pkgRes = runCatching { app.get("$base/wefeed-h5api-bff/app/get-latest-app-pkgs?app_name=moviebox", timeout = lc.reqTimeoutSec) }.getOrNull() ?: return
@@ -2577,9 +2733,12 @@ class MovieFoxProvider : MainAPI() {
         val searchRaw = runCatching {
             app.post("$base/wefeed-h5api-bff/subject/search", headers = hdrs, json = mapOf("keyword" to lc.searchQueryTitle, "page" to 1, "perPage" to 15, "subjectType" to if (lc.isTv) 2 else 1), timeout = lc.reqTimeoutSec).text
         }.getOrNull().orEmpty()
-        val rootSearch = runCatching { JSONObject(searchRaw) }.getOrNull() ?: return
+        val rootSearch = runCatching { JSONObject(searchRaw) }.onFailure {
+            if (searchRaw.isNotBlank()) MovieFoxSettingsDialog.logParsing("moviebox", "$base/search", "SEARCH_JSON", it)
+        }.getOrNull() ?: return
         val dataSearch = rootSearch.optJSONObject("data")?.optJSONObject("data") ?: rootSearch.optJSONObject("data") ?: return
         val items = dataSearch.optJSONArray("items") ?: return
+        MovieFoxSettingsDialog.logSearch("moviebox", lc.searchQueryTitle, items.length(), System.currentTimeMillis() - sStart)
 
         for (i in 0 until items.length().coerceAtMost(3)) {
             val item = items.optJSONObject(i) ?: continue
@@ -2588,7 +2747,7 @@ class MovieFoxProvider : MainAPI() {
             val sid = item.optString("subjectId", "")
             if (sid.isBlank()) continue
 
-            val detailRaw = safeGetText("https://h5.aoneroom.com/wefeed-h5-bff/web/post/list/subject?id=$sid", hdrs, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_moviebox").orEmpty()
+            val detailRaw = safeGetText("https://h5.aoneroom.com/wefeed-h5-bff/web/post/list/subject?id=$sid", hdrs, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "moviebox").orEmpty()
             val detailPath = runCatching {
                 JSONObject(detailRaw).optJSONObject("data")?.optJSONArray("items")?.optJSONObject(0)?.optJSONObject("subject")?.optString("detailPath", "")
             }.getOrNull().orEmpty()
@@ -2599,7 +2758,7 @@ class MovieFoxProvider : MainAPI() {
                 if (lc.isTv) append("&se=${lc.season}&ep=${lc.episode}")
                 append("&detailPath=$detailPath")
             }
-            val playRaw = safeGetText("$base/wefeed-h5api-bff/subject/play?$params", hdrs + mapOf("Referer" to "https://fmoviesunblocked.net/"), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_moviebox").orEmpty()
+            val playRaw = safeGetText("$base/wefeed-h5api-bff/subject/play?$params", hdrs + mapOf("Referer" to "https://fmoviesunblocked.net/"), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "moviebox").orEmpty()
             val playRoot = runCatching { JSONObject(playRaw) }.getOrNull() ?: continue
             val playData = playRoot.optJSONObject("data")?.optJSONObject("data") ?: playRoot.optJSONObject("data") ?: continue
             val streams = playData.optJSONArray("streams") ?: continue
@@ -2625,14 +2784,13 @@ class MovieFoxProvider : MainAPI() {
         val modApi = getCsDynamicUrl("moviesmod", "https://moviesmod.build")
         val bollyApi = getCsDynamicUrl("bollyflix", "https://bollyflix.re")
 
-        // 1. HDHub4u by IMDb
         if (lc.imdbId.isNotBlank()) {
             val searchJson = safeGetText(
                 "https://search.pingora.fyi/collections/post/documents/search?q=${lc.imdbId}&query_by=post_title,category,stars,director,imdb_id&limit=5",
                 mapOf("Referer" to "$hdhubApi/"),
                 timeoutSec = lc.reqTimeoutSec,
                 retries = 1,
-                sourceTag = "cs_hdhub4u"
+                sourceTag = "cinestream"
             ).orEmpty()
             val hits = runCatching { JSONObject(searchJson).optJSONArray("hits") }.getOrNull()
             if (hits != null) {
@@ -2640,7 +2798,7 @@ class MovieFoxProvider : MainAPI() {
                     val rawPerm = hits.optJSONObject(i)?.optJSONObject("document")?.optString("permalink", "").orEmpty()
                     if (rawPerm.isBlank()) continue
                     val fullPerm = if (rawPerm.startsWith("http")) rawPerm else "$hdhubApi/${rawPerm.removePrefix("/")}"
-                    val doc = safeGetText(fullPerm, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_hdhub4u").orEmpty()
+                    val doc = safeGetText(fullPerm, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cinestream").orEmpty()
                     if (doc.isBlank()) continue
                     val parsed = Jsoup.parse(doc, fullPerm)
                     parsed.select("div.mod a[data-wpel-link=external]").map { it.attr("href") }.filter { it.startsWith("http") }.distinct().take(4).forEach { href ->
@@ -2650,16 +2808,15 @@ class MovieFoxProvider : MainAPI() {
             }
         }
 
-        // 2. MoviesDrive by IMDb
         if (lc.imdbId.isNotBlank()) {
-            val mdJson = safeGetText("$moviesdriveApi/search.php?q=${lc.imdbId}", timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_moviesdrive").orEmpty()
+            val mdJson = safeGetText("$moviesdriveApi/search.php?q=${lc.imdbId}", timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cinestream").orEmpty()
             val hits = runCatching { JSONObject(mdJson).optJSONArray("hits") }.getOrNull()
             if (hits != null) {
                 for (i in 0 until hits.length().coerceAtMost(2)) {
                     val dObj = hits.optJSONObject(i)?.optJSONObject("document") ?: continue
                     if (dObj.optString("imdb_id") != lc.imdbId) continue
                     val itemUrl = normalizeUrl(dObj.optString("permalink", ""), moviesdriveApi)
-                    val html = safeGetText(itemUrl, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_moviesdrive").orEmpty()
+                    val html = safeGetText(itemUrl, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cinestream").orEmpty()
                     if (html.isBlank()) continue
                     val doc = Jsoup.parse(html, itemUrl)
                     doc.select("a[href]").map { it.attr("href") }.filter {
@@ -2671,7 +2828,6 @@ class MovieFoxProvider : MainAPI() {
             }
         }
 
-        // 3. 4KHDHub, Movies4u, UHDMovies, Moviesmod, Bollyflix by Title
         if (lc.searchQueryTitle.isNotBlank()) {
             val q = safeEncode(lc.searchQueryTitle)
             val titleSites = listOf(
@@ -2682,7 +2838,7 @@ class MovieFoxProvider : MainAPI() {
                 "Bollyflix" to "$bollyApi/search/$q"
             )
             for ((tag, sUrl) in titleSites) {
-                val sHtml = safeGetText(sUrl, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_${tag.lowercase()}").orEmpty()
+                val sHtml = safeGetText(sUrl, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cinestream").orEmpty()
                 if (sHtml.isBlank()) continue
                 val sDoc = Jsoup.parse(sHtml, sUrl)
                 val matchHref = sDoc.select("div.card-grid > a, article h3 a, article > a, div > article > a").firstOrNull { el ->
@@ -2690,7 +2846,7 @@ class MovieFoxProvider : MainAPI() {
                     el.attr("href").isNotBlank() && titleMatchesCandidate(t, lc.pageTitle)
                 }?.attr("href")?.let { normalizeUrl(it, sUrl) } ?: continue
 
-                val pHtml = safeGetText(matchHref, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_${tag.lowercase()}").orEmpty()
+                val pHtml = safeGetText(matchHref, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cinestream").orEmpty()
                 if (pHtml.isBlank()) continue
                 val pDoc = Jsoup.parse(pHtml, matchHref)
                 pDoc.select("a[href]").map { it.attr("href") }.filter {
@@ -2706,9 +2862,8 @@ class MovieFoxProvider : MainAPI() {
         val slug = slugify(lc.searchQueryTitle).orEmpty()
         if (slug.isBlank()) return
 
-        // KissKH for Asian dramas
         if (lc.searchQueryTitle.isNotBlank()) {
-            val khRaw = safeGetText("$csKisskhApi/api/DramaList/Search?q=${safeEncode(lc.searchQueryTitle)}&type=${if (lc.isTv) 1 else 2}", mapOf("Referer" to "$csKisskhApi/"), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_kisskh").orEmpty()
+            val khRaw = safeGetText("$csKisskhApi/api/DramaList/Search?q=${safeEncode(lc.searchQueryTitle)}&type=${if (lc.isTv) 1 else 2}", mapOf("Referer" to "$csKisskhApi/"), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cinestream").orEmpty()
             val khArr = runCatching { JSONArray(khRaw) }.getOrNull()
             if (khArr != null) {
                 for (i in 0 until khArr.length().coerceAtMost(3)) {
@@ -2716,7 +2871,7 @@ class MovieFoxProvider : MainAPI() {
                     if (!titleMatchesCandidate(obj.optString("title", ""), lc.pageTitle)) continue
                     val dramaId = obj.optInt("id", 0)
                     if (dramaId <= 0) continue
-                    val detailRaw = safeGetText("$csKisskhApi/api/DramaList/Drama/$dramaId?isq=false", mapOf("Referer" to "$csKisskhApi/"), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_kisskh").orEmpty()
+                    val detailRaw = safeGetText("$csKisskhApi/api/DramaList/Drama/$dramaId?isq=false", mapOf("Referer" to "$csKisskhApi/"), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cinestream").orEmpty()
                     val eps = runCatching { JSONObject(detailRaw).optJSONArray("episodes") }.getOrNull() ?: continue
                     var targetEpId = 0
                     for (e in 0 until eps.length()) {
@@ -2727,10 +2882,10 @@ class MovieFoxProvider : MainAPI() {
                         }
                     }
                     if (targetEpId > 0) {
-                        val vidKeyRaw = safeGetText("$csMultiDecryptApi/enc-kisskh?text=$targetEpId&type=vid", timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_kisskh").orEmpty()
+                        val vidKeyRaw = safeGetText("$csMultiDecryptApi/enc-kisskh?text=$targetEpId&type=vid", timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cinestream").orEmpty()
                         val vidKey = runCatching { JSONObject(vidKeyRaw).optString("result", "") }.getOrNull().orEmpty()
                         if (vidKey.isNotBlank()) {
-                            val srcRaw = safeGetText("$csKisskhApi/api/DramaList/Episode/$targetEpId.png?err=false&ts=&time=&kkey=$vidKey", mapOf("Referer" to "$csKisskhApi/"), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_kisskh").orEmpty()
+                            val srcRaw = safeGetText("$csKisskhApi/api/DramaList/Episode/$targetEpId.png?err=false&ts=&time=&kkey=$vidKey", mapOf("Referer" to "$csKisskhApi/"), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cinestream").orEmpty()
                             val srcObj = runCatching { JSONObject(srcRaw) }.getOrNull()
                             listOfNotNull(srcObj?.optString("Video"), srcObj?.optString("ThirdParty")).filter { it.startsWith("http") }.forEach { vUrl ->
                                 dispatchEmbedOrDirect("KissKH", "Asian", vUrl, "$csKisskhApi/", lc, emitSub, emitLink)
@@ -2742,9 +2897,8 @@ class MovieFoxProvider : MainAPI() {
             }
         }
 
-        // AnimeSalt
         val saltUrl = if (!lc.isTv) "$csAnimesaltApi/movies/$slug/" else "$csAnimesaltApi/episode/$slug-${lc.season}x${lc.episode}/"
-        val saltHtml = safeGetText(saltUrl, mapOf("Referer" to "$csAnimesaltApi/"), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_animesalt").orEmpty()
+        val saltHtml = safeGetText(saltUrl, mapOf("Referer" to "$csAnimesaltApi/"), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cinestream").orEmpty()
         if (saltHtml.isNotBlank()) {
             Regex("""src="(https://as-cdn\d+\.top/video/([a-f0-9]+))\"""").find(saltHtml)?.let { m ->
                 val pUrl = m.groupValues[1]
@@ -2766,14 +2920,13 @@ class MovieFoxProvider : MainAPI() {
             }
         }
 
-        // Toonstream
         val toonApi = getCsDynamicUrl("toonstream", csToonstreamApi)
         val toonUrl = if (!lc.isTv) "$toonApi/movies/$slug/" else "$toonApi/episode/$slug-${lc.season}x${lc.episode}/"
-        val toonHtml = safeGetText(toonUrl, mapOf("Referer" to toonApi), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_toonstream").orEmpty()
+        val toonHtml = safeGetText(toonUrl, mapOf("Referer" to toonApi), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cinestream").orEmpty()
         if (toonHtml.isNotBlank()) {
             val tDoc = Jsoup.parse(toonHtml, toonUrl)
             tDoc.select("div.video > iframe").map { it.attr("data-src").ifBlank { it.attr("src") } }.filter { it.isNotBlank() }.take(3).forEach { iUrl ->
-                val subHtml = safeGetText(normalizeUrl(iUrl, toonApi), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cs_toonstream").orEmpty()
+                val subHtml = safeGetText(normalizeUrl(iUrl, toonApi), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "cinestream").orEmpty()
                 Jsoup.parse(subHtml).select("div.Video > iframe").map { it.attr("src") }.filter { it.startsWith("http") }.forEach { emb ->
                     dispatchEmbedOrDirect("Toonstream", "Toon", emb, "$toonApi/", lc, emitSub, emitLink)
                 }
@@ -2788,7 +2941,7 @@ class MovieFoxProvider : MainAPI() {
         } else {
             "$csWyzieSubsApi/search?id=${lc.imdbId}&source=all"
         }
-        val raw = safeGetText(subUrl, timeoutSec = 8L, retries = 1, sourceTag = "cs_wyzie").orEmpty()
+        val raw = safeGetText(subUrl, timeoutSec = 8L, retries = 1, sourceTag = "cinestream").orEmpty()
         val arr = runCatching { JSONArray(raw) }.getOrNull() ?: return
         for (i in 0 until arr.length().coerceAtMost(25)) {
             val item = arr.optJSONObject(i) ?: continue
@@ -2821,7 +2974,7 @@ class MovieFoxProvider : MainAPI() {
     }
 
     // =========================================================================
-    // LOAD LINKS: High Timeout (32s Server Cap) Across All Servers
+    // LOAD LINKS: High Timeout + Live Telemetry + Nuvio Manifest Support
     // =========================================================================
     override suspend fun loadLinks(
         data: String,
@@ -2829,6 +2982,7 @@ class MovieFoxProvider : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
+        val loadStartMs = System.currentTimeMillis()
         return try {
             val ctx = ctxOrNull()
             val reqTimeoutSec = currentTimeoutSec(18L)
@@ -2852,6 +3006,8 @@ class MovieFoxProvider : MainAPI() {
                     isTv = obj.optBoolean("isTv", false)
                     season = obj.optInt("season", 1).coerceAtLeast(1)
                     episode = obj.optInt("episode", 1).coerceAtLeast(1)
+                }.onFailure {
+                    MovieFoxSettingsDialog.logParsing("loadLinks", data.take(80), "DATA_JSON", it)
                 }
             }
 
@@ -2887,6 +3043,7 @@ class MovieFoxProvider : MainAPI() {
             val emitLock = Any()
             val subLock = Any()
             val foundFlag = AtomicBoolean(false)
+            val totalEmitted = AtomicInteger(0)
 
             val emitSub: (SubtitleFile) -> Unit = { sub ->
                 synchronized(subLock) { subtitleCallback(sub) }
@@ -2899,6 +3056,7 @@ class MovieFoxProvider : MainAPI() {
                     if (allowedMode && (allowedQual || isStream)) {
                         synchronized(emitLock) {
                             foundFlag.set(true)
+                            totalEmitted.incrementAndGet()
                             callback(link)
                         }
                     }
@@ -2912,6 +3070,8 @@ class MovieFoxProvider : MainAPI() {
                     "cinestream", "videasy", "vidzee", "hexa", "moviebox"
                 )).distinct()
 
+            val nuvioByKey = MovieFoxSettingsDialog.getNuvioManifestServers(ctx).associateBy { it.key.lowercase() }
+
             val concurrency = (ctx?.let { MovieFoxSettingsDialog.getConcurrency(it) } ?: 24).coerceIn(6, 50)
             val sem = Semaphore(concurrency)
             supervisorScope {
@@ -2919,23 +3079,38 @@ class MovieFoxProvider : MainAPI() {
                 orderedKeys.forEach { key ->
                     tasks.add(async(Dispatchers.IO) {
                         sem.withPermit {
-                            withTimeoutOrNull(serverCapMs) {
-                                when (key.lowercase()) {
-                                    "sflix" -> fetchFromSflix(lc, emitSub, emitLink)
-                                    "play4u" -> fetchFromPlay4u(lc, emitSub, emitLink)
-                                    "prmovies" -> fetchFromPrmovies(lc, emitSub, emitLink)
-                                    "hindidrama" -> fetchFromHindiDrama(lc, emitSub, emitLink)
-                                    "themoviesflix" -> fetchFromTheMoviesFlix(lc, emitSub, emitLink)
-                                    "dramaverse" -> fetchFromDramaVerse(lc, emitSub, emitLink)
-                                    "katdrama" -> fetchFromKatDrama(lc, emitSub, emitLink)
-                                    "animeworld" -> fetchFromAnimeWorld(lc, emitSub, emitLink)
-                                    "vegamovies" -> fetchFromVegaMovies(lc, emitSub, emitLink)
-                                    "cinestream" -> fetchFromCineStreamServers(lc, emitSub, emitLink)
-                                    "videasy" -> fetchFromCsVideasy(lc, emitSub, emitLink)
-                                    "vidzee" -> fetchFromCsVidzee(lc, emitSub, emitLink)
-                                    "hexa" -> fetchFromCsHexa(lc, emitSub, emitLink)
-                                    "moviebox" -> fetchFromCsMoviebox(lc, emitSub, emitLink)
+                            val srvStart = System.currentTimeMillis()
+                            val srvCount = AtomicInteger(0)
+                            val trackedEmitLink: (ExtractorLink) -> Unit = { ex ->
+                                srvCount.incrementAndGet()
+                                emitLink(ex)
+                            }
+                            val completed = withTimeoutOrNull(serverCapMs) {
+                                val lowKey = key.lowercase()
+                                when (lowKey) {
+                                    "sflix" -> fetchFromSflix(lc, emitSub, trackedEmitLink)
+                                    "play4u" -> fetchFromPlay4u(lc, emitSub, trackedEmitLink)
+                                    "prmovies" -> fetchFromPrmovies(lc, emitSub, trackedEmitLink)
+                                    "hindidrama" -> fetchFromHindiDrama(lc, emitSub, trackedEmitLink)
+                                    "themoviesflix" -> fetchFromTheMoviesFlix(lc, emitSub, trackedEmitLink)
+                                    "dramaverse" -> fetchFromDramaVerse(lc, emitSub, trackedEmitLink)
+                                    "katdrama" -> fetchFromKatDrama(lc, emitSub, trackedEmitLink)
+                                    "animeworld" -> fetchFromAnimeWorld(lc, emitSub, trackedEmitLink)
+                                    "vegamovies" -> fetchFromVegaMovies(lc, emitSub, trackedEmitLink)
+                                    "cinestream" -> fetchFromCineStreamServers(lc, emitSub, trackedEmitLink)
+                                    "videasy" -> fetchFromCsVideasy(lc, emitSub, trackedEmitLink)
+                                    "vidzee" -> fetchFromCsVidzee(lc, emitSub, trackedEmitLink)
+                                    "hexa" -> fetchFromCsHexa(lc, emitSub, trackedEmitLink)
+                                    "moviebox" -> fetchFromCsMoviebox(lc, emitSub, trackedEmitLink)
+                                    else -> nuvioByKey[lowKey]?.let { fetchFromNuvioManifest(it, lc, emitSub, trackedEmitLink) }
                                 }
+                                true
+                            }
+                            val srvMs = System.currentTimeMillis() - srvStart
+                            if (completed == null) {
+                                MovieFoxSettingsDialog.logTimeout(key, lc.pageTitle, serverCapMs / 1000L, "SERVER_CAP")
+                            } else {
+                                MovieFoxSettingsDialog.logLoadLink(key, lc.pageTitle, srvCount.get(), srvMs)
                             }
                         }
                         Unit
@@ -2944,6 +3119,14 @@ class MovieFoxProvider : MainAPI() {
                 tasks.awaitAll()
             }
 
+            val totalMs = System.currentTimeMillis() - loadStartMs
+            MovieFoxSettingsDialog.logLoadLink(
+                "MovieFox",
+                lc.pageTitle.ifBlank { cleanPageUrl },
+                totalEmitted.get(),
+                totalMs,
+                "servers=${orderedKeys.size}"
+            )
             foundFlag.get()
         } catch (e: CancellationException) {
             throw e
