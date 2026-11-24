@@ -3294,7 +3294,7 @@ class MovieFoxProvider : MainAPI() {
         return try {
             val ctx = ctxOrNull()
             val reqTimeoutSec = currentTimeoutSec(25L)
-            val serverCapMs = (reqTimeoutSec * 1000L).coerceIn(15_000L, 35_000L)
+            val serverCapMs = (reqTimeoutSec * 1000L).coerceIn(8_000L, 15_000L)
 
             var rawPageUrl = data
             var pageTitle = ""
@@ -3445,4 +3445,3 @@ class MovieFoxProvider : MainAPI() {
         }
     }
 }
-
