@@ -1985,3 +1985,4 @@ class Iqsmartgames : GDMirrorbot() {
     override var mainUrl = "https://streams.iqsmartgames.com"
     override var requiresReferer = true
 }
+
