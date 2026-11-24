@@ -57,7 +57,7 @@ import java.util.zip.ZipInputStream
 object MovieFoxSettingsDialog {
 
     const val LOG_TAG = "MovieFoxDiag"
-    private const val PREFS_NAME = "moviefox_ultra_max_v35"
+    private const val PREFS_NAME = "moviefox_ultra_max_v36"
     private const val CF_VERIFIED_MARKER = "__CF_VERIFIED__"
     private const val KEY_SRV_PREFIX = "mf_srv_"
     private const val KEY_EXT_PREFIX = "mf_ext_"
@@ -166,6 +166,14 @@ object MovieFoxSettingsDialog {
         }
     }
 
+    private val PERMANENT_REPOS = listOf(
+        Cs3RepoConfig("hungrysturdy_repo", "HungrySturdy Builds Repo", HUNGRYSTURDY_REPO_URL, "CS3", true, 0),
+        Cs3RepoConfig("phisher98_repo", "Phisher98 Extensions", "https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/refs/heads/builds/repo.json", "CS3", true, 0),
+        Cs3RepoConfig("eclipsia_repo", "Eclipsia Repo", "https://cs.eclipsia.dpdns.org/repo.json", "CS3", true, 0),
+        Cs3RepoConfig("desi_repo", "Desi Repo", "https://raw.githubusercontent.com/Faisal0786/Desi/main/repo.json", "CS3", true, 0),
+        Cs3RepoConfig("plaviohd_repo", "PlavioHD Repo", "https://raw.githubusercontent.com/kotlinsyd/plaviohd/builds/repo.json", "CS3", true, 0)
+    )
+
     @Volatile
     private var appContext: Context? = null
     @Volatile
@@ -177,9 +185,34 @@ object MovieFoxSettingsDialog {
     private val serverHealthMap = ConcurrentHashMap<String, ServerHealthInfo>()
     @Volatile
     private var cs3Loaded = false
+    private val autoSyncStarted = AtomicBoolean(false)
 
     fun bindContext(ctx: Context?) {
-        if (ctx != null) appContext = ctx.applicationContext
+        if (ctx != null) {
+            appContext = ctx.applicationContext
+            if (autoSyncStarted.compareAndSet(false, true)) {
+                CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+                    runCatching {
+                        val c = ctx.applicationContext
+                        val repos = getCs3Repos(c)
+                        val fetched = mutableListOf<ServerItem>()
+                        supervisorScope {
+                            repos.filter { it.enabled }.map { r ->
+                                async {
+                                    val list = fetchServersFromCs3Repo(r)
+                                    r.serverCount = list.size
+                                    list
+                                }
+                            }.awaitAll().forEach { fetched.addAll(it) }
+                        }
+                        if (fetched.isNotEmpty()) {
+                            saveCs3Servers(c, fetched)
+                            saveCs3Repos(c, repos)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fun currentContext(): Context? = appContext
@@ -198,6 +231,10 @@ object MovieFoxSettingsDialog {
     )
 
     val BASE_SERVERS = listOf(
+        ServerItem("mf_1", "MovieFox 1", "MANIFEST", "https://cncverse.dpdns.org/u/p_ij06hqyj40r4/manifest.json", "#38BDF8", false, true, "Movies", "⚡ MF"),
+        ServerItem("mf_2", "MovieFox 2", "MANIFEST", "https://pengu.uk/%7B%22auth_token%22%3A%22LIuypj1fVzaEnmUrpUmn7_RyN-Vad4fzSP3p5NRukRs%22%7D/manifest.json", "#A855F7", false, true, "Movies", "⚡ MF"),
+        ServerItem("mf_3", "MovieFox 3", "MANIFEST", "https://hdhub.thevolecitor.qzz.io/eyJ0b3Jib3giOiJ1bnNldCIsInF1YWxpdGllcyI6IjIxNjBwLDEwODBwLDcyMHAsNDgwcCIsInNvcnQiOiJkZXNjIiwiY29udGVudCI6ImxhdGluLGdlcm1hbixwb3J0dWd1ZXNlLGZyZW5jaCxpdGFsaWFuLGFzaWFuIiwiY2F0YWxvZ3MiOiJmZWF0dXJlZCxwb3B1bGFyIn0/manifest.json", "#10B981", false, true, "Movies", "⚡ MF"),
+        ServerItem("mf_4", "MovieFox 4", "MANIFEST", "https://free.flixnest.app/eNqNUctuwjAQ_BefQXKcQKX8SoVWJt40W9Z25EciqPrvNa9CgUNPlnd2RrMzXwIwRnSJNAPThIBT-UXQzH4GwzEF1DaCwzT7sBNtChkXAvqACLEb0GrRCiXVWq6VWp7Zy544YViOPh6fqRYLcZPqdMIPHwijaN83f5BBO4cMZ_oTTK7jbBC0yZxE22uOxQo6vWWEZjeYIW-vBi9To4n31ify7hG5yj7MX8bxn527sAwF7NID6WSvyb_TFxoQRx_S5W5yMZUWgEwJuCeQrN7qdaMkKSWd_FxV9dzEapa-3le1rGqWq5LznVoii9D7YHU6dtQMz_DBOyzYGPxEBgOw7zSXtTGgpWzP3tIEts4QfQ7dqbRbJ2Lz_QPhgdTs/manifest.json", "#F59E0B", false, true, "Movies", "⚡ MF"),
         ServerItem("sflix", "Sflix", "HLS/MP4", "https://sflix.film/", "#34D399", false, false, "Series", "⚡ MF"),
         ServerItem("play4u", "Play4u", "HI/M3U8", "https://play4u.org/", "#FB923C", false, true, "Movies", "⚡ MF"),
         ServerItem("prmovies", "Prmovies", "HI/M3U8", "https://prmovies.coupons/", "#F59E0B", false, true, "Movies", "⚡ MF"),
@@ -208,11 +245,11 @@ object MovieFoxSettingsDialog {
         ServerItem("animeworld", "AnimeWorld", "ANIME", "https://animesalt.cx/", "#818CF8", false, true, "AsianDrama", "⚡ MF"),
         ServerItem("vegamovies", "VegaMovies", "FSL/PXL", "https://vegamovies11.in/", "#FACC15", false, true, "Movies", "⚡ MF"),
         ServerItem("bollyflix", "BollyFlix", "GDFlix/HI", "https://new1.bollyflix.tours/", "#F43F5E", false, true, "Movies", "⚡ MF"),
-        ServerItem("cinestream", "CineStream Hub", "ALL/MULTI", "https://new16.hdhub4u.cl/", "#10B981", false, true, "Movies", "⚡ CS"),
-        ServerItem("videasy", "Videasy", "HLS/MP4", "https://player.videasy.to/", "#38BDF8", false, true, "Movies", "⚡ CS"),
-        ServerItem("vidzee", "Vidzee", "MULTI/HLS", "https://player.vidzee.wtf/", "#C084FC", false, true, "Movies", "⚡ CS"),
-        ServerItem("hexa", "Hexa", "HLS/1080p", "https://hexa.su/", "#22D3EE", false, true, "Movies", "⚡ CS"),
-        ServerItem("moviebox", "MovieBox", "MULTI/HD", "https://moviebox01.com/", "#FB7185", false, true, "Series", "⚡ CS")
+        ServerItem("cinestream", "CineStream Hub", "ALL/MULTI", "https://new16.hdhub4u.cl/", "#10B981", false, true, "Movies", "⚡ MF"),
+        ServerItem("videasy", "Videasy", "HLS/MP4", "https://player.videasy.to/", "#38BDF8", false, true, "Movies", "⚡ MF"),
+        ServerItem("vidzee", "Vidzee", "MULTI/HLS", "https://player.vidzee.wtf/", "#C084FC", false, true, "Movies", "⚡ MF"),
+        ServerItem("hexa", "Hexa", "HLS/1080p", "https://hexa.su/", "#22D3EE", false, true, "Movies", "⚡ MF"),
+        ServerItem("moviebox", "MovieBox", "MULTI/HD", "https://moviebox01.com/", "#FB7185", false, true, "Series", "⚡ MF")
     )
 
     private val AVATAR_PALETTE = listOf(
@@ -231,7 +268,9 @@ object MovieFoxSettingsDialog {
     fun getNuvioManifestServers(ctx: Context?): List<ServerItem> {
         val c = ctx ?: appContext
         if (c != null && !cs3Loaded) prefs(c)
-        return cachedCs3Servers.filter { it.tag.equals("NUVIO", true) || it.tag.equals("MANIFEST", true) }
+        val builtInManifests = BASE_SERVERS.filter { it.tag.equals("MANIFEST", true) }
+        val customManifests = cachedCs3Servers.filter { it.tag.equals("NUVIO", true) || it.tag.equals("MANIFEST", true) }
+        return builtInManifests + customManifests
     }
 
     fun copyToClipboard(ctx: Context?, label: String, text: String) {
@@ -645,7 +684,6 @@ object MovieFoxSettingsDialog {
             webViewRef?.stopLoading()
             webViewRef?.loadUrl(srv.probeUrl)
 
-            // Safety hint if a site hangs too long
             handler.postDelayed({
                 if (!closed.get() && stepToken.get() == token) {
                     statusTv.text = "Slow load • Solve challenge or tap Skip / Save"
@@ -988,7 +1026,6 @@ object MovieFoxSettingsDialog {
                 val probeUrl = obj.optString("probeUrl").trim()
                 if (key.isNotBlank() && name.isNotBlank() && probeUrl.isNotBlank()) {
                     val tag = obj.optString("tag", "CS3").ifBlank { "CS3" }
-                    val badge = obj.optString("runtimeBadge", if (tag == "NUVIO") "⚡ NUV" else if (tag == "SKY") "⚡ SKY" else "⚡ CS3")
                     out.add(
                         ServerItem(
                             key = key,
@@ -999,7 +1036,7 @@ object MovieFoxSettingsDialog {
                             isCustom = true,
                             isHindi = true,
                             category = "Movies",
-                            runtimeBadge = badge
+                            runtimeBadge = "⚡ MF"
                         )
                     )
                 }
@@ -1021,7 +1058,7 @@ object MovieFoxSettingsDialog {
                     .put("tag", srv.tag)
                     .put("probeUrl", srv.probeUrl)
                     .put("accentHex", srv.accentHex)
-                    .put("runtimeBadge", srv.runtimeBadge)
+                    .put("runtimeBadge", "⚡ MF")
             )
         }
         prefs(ctx).edit().putString(KEY_CS3_SERVERS, arr.toString()).apply()
@@ -1055,8 +1092,10 @@ object MovieFoxSettingsDialog {
                 }
             }
         }
-        if (loaded.none { it.id == "hungrysturdy_repo" }) {
-            loaded.add(0, Cs3RepoConfig("hungrysturdy_repo", "HungrySturdy Builds Repo", HUNGRYSTURDY_REPO_URL, "CS3", true, 0))
+        PERMANENT_REPOS.asReversed().forEach { perm ->
+            if (loaded.none { it.id == perm.id }) {
+                loaded.add(0, perm.copy())
+            }
         }
         cachedCs3Repos = loaded
         return loaded
@@ -1109,11 +1148,6 @@ object MovieFoxSettingsDialog {
             "SKYSTREAM" -> "SKY"
             else -> "CS3"
         }
-        val badgeLabel = when (repoType.uppercase()) {
-            "NUVIO" -> "⚡ NUV"
-            "SKYSTREAM" -> "⚡ SKY"
-            else -> "⚡ CS3"
-        }
 
         runCatching {
             val entries = mutableListOf<JSONObject>()
@@ -1137,7 +1171,7 @@ object MovieFoxSettingsDialog {
                             isCustom = true,
                             isHindi = true,
                             category = "Movies",
-                            runtimeBadge = "⚡ NUV"
+                            runtimeBadge = "⚡ MF"
                         )
                     )
                     return nestedPluginLists
@@ -1176,7 +1210,7 @@ object MovieFoxSettingsDialog {
                         isCustom = true,
                         isHindi = true,
                         category = "Movies",
-                        runtimeBadge = badgeLabel
+                        runtimeBadge = "⚡ MF"
                     )
                 )
             }
@@ -1265,7 +1299,7 @@ object MovieFoxSettingsDialog {
                     setPadding(dp(ctx, 10), dp(ctx, 9), dp(ctx, 10), dp(ctx, 9))
                 }
                 val avatarTv = TextView(ctx).apply {
-                    textSize = 13f; gravity = Gravity.CENTER; setTypeface(typeface, Typeface.BOLD)
+                    textSize = 11f; gravity = Gravity.CENTER; setTypeface(typeface, Typeface.BOLD)
                     layoutParams = LinearLayout.LayoutParams(dp(ctx, 32), dp(ctx, 32)).apply { marginEnd = dp(ctx, 9) }
                 }
                 val col = LinearLayout(ctx).apply {
@@ -1325,11 +1359,11 @@ object MovieFoxSettingsDialog {
             }
 
             val srv = items[position]
-            holder.avatarTv.text = srv.name.take(1).uppercase()
+            holder.avatarTv.text = "MF"
             holder.avatarTv.setTextColor(safeColor(srv.accentHex, "#38BDF8"))
             holder.avatarTv.background = pillBg("#192236", 10f)
             holder.nameTv.text = srv.name
-            holder.platformTv.text = srv.runtimeBadge
+            holder.platformTv.text = "⚡ MF"
             holder.platformTv.setTextColor(safeColor("#38BDF8"))
             holder.platformTv.background = pillBg("#0B2239", 8f)
             holder.tagTv.text = srv.tag
@@ -1419,7 +1453,7 @@ object MovieFoxSettingsDialog {
                 gravity = Gravity.CENTER_VERTICAL
             }
             titleRow.addView(TextView(ctx).apply {
-                text = "${srv.name} ${srv.runtimeBadge}"
+                text = "${srv.name} ⚡ MF"
                 textSize = 12f
                 isSingleLine = true
                 ellipsize = TextUtils.TruncateAt.END
@@ -1662,7 +1696,6 @@ object MovieFoxSettingsDialog {
         }
         root.addView(chipScroll)
 
-        // Responsive height so tall phones show more servers & logs without cramping
         val screenH = ctx.resources.displayMetrics.heightPixels
         val contentHeight = (screenH * 0.44f).toInt().coerceIn(dp(ctx, 300), dp(ctx, 440))
 
@@ -2028,6 +2061,8 @@ object MovieFoxSettingsDialog {
         addRepoCard.addView(repoTypeRow)
         addRepoCard.addView(addBtnRow)
 
+        val permanentIds = PERMANENT_REPOS.map { it.id }.toSet()
+
         renderRepoCards = {
             cs3RepoHolder.removeAllViews()
             cs3RepoList.forEach { repo ->
@@ -2076,7 +2111,7 @@ object MovieFoxSettingsDialog {
                         }
                     }
                 })
-                if (repo.id != "hungrysturdy_repo") {
+                if (repo.id !in permanentIds) {
                     rowBtns.addView(Button(ctx).apply {
                         text = "DELETE"; textSize = 10f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#FCA5A5"))
                         background = cardBg("#2B1114", "#7F1D1D", 12f, 1)
