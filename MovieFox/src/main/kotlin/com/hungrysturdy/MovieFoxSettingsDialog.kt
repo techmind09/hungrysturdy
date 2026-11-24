@@ -51,12 +51,14 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.ZipInputStream
 
 object MovieFoxSettingsDialog {
 
     const val LOG_TAG = "MovieFoxDiag"
-    private const val PREFS_NAME = "moviefox_ultra_max_v34"
+    private const val PREFS_NAME = "moviefox_ultra_max_v35"
+    private const val CF_VERIFIED_MARKER = "__CF_VERIFIED__"
     private const val KEY_SRV_PREFIX = "mf_srv_"
     private const val KEY_EXT_PREFIX = "mf_ext_"
     private const val KEY_SRV_ORDER = "mf_srv_order_csv"
@@ -459,11 +461,13 @@ object MovieFoxSettingsDialog {
     fun isUseWebViewCf(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_USE_WEBVIEW_CF, true)
     fun setUseWebViewCf(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_USE_WEBVIEW_CF, enabled).apply()
 
+    private fun extractHostKey(domainOrUrl: String): String = runCatching {
+        val raw = if (domainOrUrl.startsWith("http")) domainOrUrl else "https://$domainOrUrl"
+        URL(raw).host.lowercase().removePrefix("www.")
+    }.getOrDefault(domainOrUrl.lowercase())
+
     fun saveCookieForDomain(ctx: Context, domainOrUrl: String, cookie: String) {
-        val host = runCatching {
-            val raw = if (domainOrUrl.startsWith("http")) domainOrUrl else "https://$domainOrUrl"
-            URL(raw).host.lowercase().removePrefix("www.")
-        }.getOrDefault(domainOrUrl.lowercase())
+        val host = extractHostKey(domainOrUrl)
         val map = getSavedCookiesMap(ctx).toMutableMap()
         if (cookie.isBlank()) map.remove(host) else map[host] = cookie
         prefs(ctx).edit().putString(KEY_CF_COOKIES, JSONObject(map as Map<*, *>).toString()).apply()
@@ -481,6 +485,13 @@ object MovieFoxSettingsDialog {
             }
         }
         return out
+    }
+
+    fun isDomainCfVerified(ctx: Context?, urlOrDomain: String): Boolean {
+        val map = getSavedCookiesMap(ctx)
+        if (map.isEmpty()) return false
+        val host = extractHostKey(urlOrDomain)
+        return map.containsKey(host) || map.keys.any { host.endsWith(it) || it.endsWith(host) }
     }
 
     fun syncCookiesFromWebView(ctx: Context): Int {
@@ -510,15 +521,13 @@ object MovieFoxSettingsDialog {
     fun getCookieForDomain(ctx: Context?, urlOrDomain: String): String? {
         val map = getSavedCookiesMap(ctx)
         if (map.isEmpty()) return null
-        val host = runCatching {
-            val raw = if (urlOrDomain.startsWith("http")) urlOrDomain else "https://$urlOrDomain"
-            URL(raw).host.lowercase().removePrefix("www.")
-        }.getOrDefault(urlOrDomain.lowercase())
-        return map[host] ?: map.entries.firstOrNull { host.endsWith(it.key) || it.key.endsWith(host) }?.value
+        val host = extractHostKey(urlOrDomain)
+        val raw = map[host] ?: map.entries.firstOrNull { host.endsWith(it.key) || it.key.endsWith(host) }?.value
+        return raw?.takeIf { it.isNotBlank() && it != CF_VERIFIED_MARKER }
     }
 
     // =========================================================================
-    // Advance CF WebView Solver — Single Server OR Sequential All-Servers Queue
+    // Advance CF WebView Solver — Accurate Challenge Detection + Zero Double-Skip
     // =========================================================================
     fun openCfBypassWindow(
         rawCtx: Context,
@@ -548,51 +557,74 @@ object MovieFoxSettingsDialog {
 
         val handler = Handler(Looper.getMainLooper())
         val closed = AtomicBoolean(false)
+        val stepToken = AtomicInteger(0)
         var dialogRef: Dialog? = null
         var webViewRef: WebView? = null
         var idx = 0
         var savedCount = 0
+        var challengeDetected = false
 
         val titleTv = TextView(ctx).apply {
-            textSize = 14.5f
+            textSize = 14f
+            isSingleLine = true
+            ellipsize = TextUtils.TruncateAt.END
             setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE)
         }
         val statusTv = TextView(ctx).apply {
             textSize = 10.5f
+            isSingleLine = true
+            ellipsize = TextUtils.TruncateAt.END
             setTextColor(safeColor("#93C5FD"))
-            setPadding(0, dp(ctx, 2), 0, dp(ctx, 6))
+            setPadding(0, dp(ctx, 2), 0, dp(ctx, 5))
+        }
+        val progressBar = ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progress = 10
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 4)).apply {
+                bottomMargin = dp(ctx, 6)
+            }
         }
 
         fun currentTarget(): ServerItem = targets[idx.coerceIn(0, targets.lastIndex)]
 
-        fun tryCaptureCookie(url: String, forceSave: Boolean = false): Boolean {
+        fun saveDomainState(url: String, requireClearance: Boolean): Boolean {
             return runCatching {
                 val cm = CookieManager.getInstance()
                 cm.flush()
-                val cookie = cm.getCookie(url).orEmpty()
-                val hasClearance = cookie.contains("cf_clearance", true) ||
-                    cookie.contains("__cf_bm", true) ||
-                    cookie.contains("PHPSESSID", true)
-                if (hasClearance || (forceSave && cookie.isNotBlank())) {
-                    saveCookieForDomain(ctx, url, cookie)
-                    appendDiagLog("INFO", currentTarget().key, "CF cookie saved (${cookie.length} chars)")
-                    true
-                } else {
-                    false
+                val srv = currentTarget()
+                val cookie = cm.getCookie(url).orEmpty().ifBlank { cm.getCookie(srv.probeUrl).orEmpty() }
+                val hasClearance = cookie.contains("cf_clearance", true) || cookie.contains("__cf_bm", true)
+                when {
+                    hasClearance -> {
+                        saveCookieForDomain(ctx, srv.probeUrl, cookie)
+                        if (url.startsWith("http") && extractHostKey(url) != extractHostKey(srv.probeUrl)) {
+                            saveCookieForDomain(ctx, url, cookie)
+                        }
+                        appendDiagLog("INFO", srv.key, "CF clearance saved (${cookie.length} chars)")
+                        true
+                    }
+                    !requireClearance -> {
+                        val toStore = cookie.ifBlank { CF_VERIFIED_MARKER }
+                        saveCookieForDomain(ctx, srv.probeUrl, toStore)
+                        appendDiagLog("INFO", srv.key, if (cookie.isNotBlank()) "Cookie saved (${cookie.length} chars)" else "Verified (no CF challenge)")
+                        true
+                    }
+                    else -> false
                 }
             }.getOrDefault(false)
         }
 
         fun closeAll() {
             if (!closed.compareAndSet(false, true)) return
+            stepToken.incrementAndGet()
             handler.removeCallbacksAndMessages(null)
             runCatching { webViewRef?.stopLoading(); webViewRef?.destroy() }
             webViewRef = null
             runCatching { dialogRef?.dismiss() }
             dialogRef = null
             syncCookiesFromWebView(ctx)
-            if (savedCount > 0) safeToast(ctx, "CF Solved & Saved ($savedCount/${targets.size})")
+            if (savedCount > 0) safeToast(ctx, "Verified & Saved ($savedCount/${targets.size})")
             onCompleted?.invoke()
         }
 
@@ -602,15 +634,29 @@ object MovieFoxSettingsDialog {
                 closeAll()
                 return
             }
+            val token = stepToken.incrementAndGet()
+            challengeDetected = false
             val srv = currentTarget()
-            titleTv.text = "🛡️ CF Bypass (${idx + 1}/${targets.size}) • ${srv.name}"
+            titleTv.text = "🛡️ CF Solver (${idx + 1}/${targets.size}) • ${srv.name}"
             statusTv.text = "Loading ${srv.probeUrl}..."
+            statusTv.setTextColor(safeColor("#93C5FD"))
+            progressBar.visibility = View.VISIBLE
+            progressBar.progress = 15
             webViewRef?.stopLoading()
             webViewRef?.loadUrl(srv.probeUrl)
+
+            // Safety hint if a site hangs too long
+            handler.postDelayed({
+                if (!closed.get() && stepToken.get() == token) {
+                    statusTv.text = "Slow load • Solve challenge or tap Skip / Save"
+                    statusTv.setTextColor(safeColor("#FDE68A"))
+                }
+            }, 10_000L)
         }
 
-        fun advanceNext(markSaved: Boolean) {
+        fun advanceNext(expectedToken: Int, markSaved: Boolean) {
             if (closed.get()) return
+            if (!stepToken.compareAndSet(expectedToken, expectedToken + 1)) return
             if (markSaved) savedCount++
             idx++
             if (idx >= targets.size) {
@@ -620,41 +666,111 @@ object MovieFoxSettingsDialog {
             }
         }
 
-        fun clickWebViewCenter() {
+        fun inspectPageState(view: WebView?, url: String?, expectedToken: Int) {
+            if (closed.get() || stepToken.get() != expectedToken || view == null) return
+            val srv = currentTarget()
+            if (saveDomainState(url ?: srv.probeUrl, requireClearance = true)) {
+                statusTv.text = "✓ CF Cleared for ${srv.name}!"
+                statusTv.setTextColor(safeColor("#6EE7B7"))
+                handler.postDelayed({ advanceNext(expectedToken, true) }, 400L)
+                return
+            }
+
+            view.evaluateJavascript(
+                """
+                (function(){
+                    var t = (document.title || '').toLowerCase();
+                    var b = (document.body ? document.body.innerText : '').toLowerCase().slice(0, 800);
+                    var hasTurnstile = !!document.querySelector('iframe[src*="challenges.cloudflare.com"], #challenge-stage, #cf-challenge-running, .cf-turnstile, #turnstile-wrapper');
+                    var isCfText = t.indexOf('just a moment') !== -1 || t.indexOf('attention required') !== -1 ||
+                        t.indexOf('security check') !== -1 || b.indexOf('verify you are human') !== -1 ||
+                        b.indexOf('checking your browser') !== -1 || (b.indexOf('cloudflare') !== -1 && b.indexOf('ray id') !== -1);
+                    if (hasTurnstile || isCfText) return 'CF';
+                    if (b.trim().length > 25 || document.images.length > 0) return 'OK';
+                    return 'WAIT';
+                })();
+                """.trimIndent()
+            ) { rawRes ->
+                if (closed.get() || stepToken.get() != expectedToken) return@evaluateJavascript
+                val state = rawRes?.replace("\"", "")?.trim().orEmpty()
+                when (state) {
+                    "CF" -> {
+                        challengeDetected = true
+                        statusTv.text = "🛡️ CF Challenge active — tap Verify box or ⚡ CF Click"
+                        statusTv.setTextColor(safeColor("#FBBF24"))
+                    }
+                    "OK" -> {
+                        challengeDetected = false
+                        saveDomainState(url ?: srv.probeUrl, requireClearance = false)
+                        statusTv.text = "✓ ${srv.name} ready! Moving next..."
+                        statusTv.setTextColor(safeColor("#6EE7B7"))
+                        handler.postDelayed({ advanceNext(expectedToken, true) }, 450L)
+                    }
+                    else -> {
+                        statusTv.text = "Waiting for ${srv.name}..."
+                    }
+                }
+            }
+        }
+
+        fun clickCfChallengeOnly() {
             val wv = webViewRef ?: return
+            val token = stepToken.get()
             runCatching {
-                val cx = (wv.width / 2f).coerceAtLeast(10f)
-                val cy = (wv.height / 2f).coerceAtLeast(10f)
-                val now = SystemClock.uptimeMillis()
-                val down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, cx, cy, 0)
-                val up = MotionEvent.obtain(now, now + 90L, MotionEvent.ACTION_UP, cx, cy, 0)
-                wv.dispatchTouchEvent(down)
-                wv.dispatchTouchEvent(up)
-                down.recycle()
-                up.recycle()
                 wv.evaluateJavascript(
                     """
                     (function(){
-                        var btns = document.querySelectorAll('input[type=checkbox], button, [role=checkbox], .cb-i');
-                        for (var i=0; i<btns.length; i++) {
-                            try { btns[i].click(); } catch(e) {}
+                        var cf = document.querySelector('#challenge-stage input[type=checkbox], .cf-turnstile input, .cb-i, #turnstile-wrapper input');
+                        if (cf) { cf.click(); return 'CLICKED'; }
+                        var ifr = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
+                        if (ifr) {
+                            var r = ifr.getBoundingClientRect();
+                            return 'IFRAME:' + Math.round(r.left + 32) + ':' + Math.round(r.top + r.height / 2);
                         }
+                        return 'NONE';
                     })();
-                    """.trimIndent(),
-                    null
-                )
+                    """.trimIndent()
+                ) { res ->
+                    if (closed.get() || stepToken.get() != token) return@evaluateJavascript
+                    val clean = res?.replace("\"", "")?.trim().orEmpty()
+                    if (clean.startsWith("IFRAME:")) {
+                        val parts = clean.split(":")
+                        val density = ctx.resources.displayMetrics.density
+                        val x = (parts.getOrNull(1)?.toFloatOrNull() ?: 80f) * density
+                        val y = (parts.getOrNull(2)?.toFloatOrNull() ?: 160f) * density
+                        val now = SystemClock.uptimeMillis()
+                        val down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, x, y, 0)
+                        val up = MotionEvent.obtain(now, now + 80L, MotionEvent.ACTION_UP, x, y, 0)
+                        wv.dispatchTouchEvent(down)
+                        wv.dispatchTouchEvent(up)
+                        down.recycle()
+                        up.recycle()
+                        statusTv.text = "Tapped CF Turnstile • Waiting for clearance..."
+                    } else if (clean == "CLICKED") {
+                        statusTv.text = "Clicked CF checkbox • Waiting..."
+                    } else if (!challengeDetected) {
+                        val srv = currentTarget()
+                        saveDomainState(wv.url ?: srv.probeUrl, requireClearance = false)
+                        statusTv.text = "✓ No CF challenge on ${srv.name} — Saved!"
+                        handler.postDelayed({ advanceNext(token, true) }, 350L)
+                    } else {
+                        statusTv.text = "Tap the Cloudflare box manually, then wait"
+                    }
+                }
             }
         }
 
         val pollRunnable = object : Runnable {
             override fun run() {
                 if (closed.get()) return
+                val token = stepToken.get()
                 val srv = currentTarget()
-                if (tryCaptureCookie(srv.probeUrl, forceSave = false)) {
-                    statusTv.text = "✓ Solved ${srv.name}! Moving next..."
-                    handler.postDelayed({ advanceNext(true) }, 450L)
+                if (saveDomainState(webViewRef?.url ?: srv.probeUrl, requireClearance = true)) {
+                    statusTv.text = "✓ CF Cleared for ${srv.name}!"
+                    statusTv.setTextColor(safeColor("#6EE7B7"))
+                    handler.postDelayed({ advanceNext(token, true) }, 350L)
                 }
-                handler.postDelayed(this, 1400L)
+                handler.postDelayed(this, 1600L)
             }
         }
 
@@ -665,8 +781,9 @@ object MovieFoxSettingsDialog {
         }
         container.addView(titleTv)
         container.addView(statusTv)
+        container.addView(progressBar)
 
-        val wvHeight = (ctx.resources.displayMetrics.heightPixels * 0.54f).toInt().coerceAtLeast(dp(ctx, 290))
+        val wvHeight = (ctx.resources.displayMetrics.heightPixels * 0.56f).toInt().coerceAtLeast(dp(ctx, 300))
         val wv = WebView(ctx).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, wvHeight).apply {
                 bottomMargin = dp(ctx, 8)
@@ -679,17 +796,17 @@ object MovieFoxSettingsDialog {
                 userAgentString = CF_BYPASS_UA
                 mediaPlaybackRequiresUserGesture = false
             }
-            webChromeClient = WebChromeClient()
+            webChromeClient = object : WebChromeClient() {
+                override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                    progressBar.progress = newProgress
+                    if (newProgress >= 100) progressBar.visibility = View.INVISIBLE
+                }
+            }
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
                 override fun onPageFinished(view: WebView?, url: String?) {
-                    if (closed.get()) return
-                    val srv = currentTarget()
-                    statusTv.text = "Loaded ${srv.name} • Tap CF Click or Save & Next"
-                    if (tryCaptureCookie(url ?: srv.probeUrl, forceSave = false)) {
-                        statusTv.text = "✓ Auto-saved ${srv.name}!"
-                        handler.postDelayed({ advanceNext(true) }, 400L)
-                    }
+                    val token = stepToken.get()
+                    handler.postDelayed({ inspectPageState(view, url, token) }, 700L)
                 }
             }
         }
@@ -702,46 +819,37 @@ object MovieFoxSettingsDialog {
         }
         btnRow.addView(Button(ctx).apply {
             text = "⚡ CF Click"
-            textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            textSize = 10f; isAllCaps = false; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
             background = pillBg("#059669", 12f)
             layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1f).apply { marginEnd = dp(ctx, 4) }
-            setOnClickListener {
-                clickWebViewCenter()
-                handler.postDelayed({
-                    val srv = currentTarget()
-                    if (tryCaptureCookie(srv.probeUrl, forceSave = true)) {
-                        advanceNext(true)
-                    } else {
-                        statusTv.text = "Clicked! Complete challenge & tap Save"
-                    }
-                }, 800L)
-            }
+            setOnClickListener { clickCfChallengeOnly() }
         })
         btnRow.addView(Button(ctx).apply {
             text = if (targets.size > 1) "✓ Save & Next" else "✓ Save"
-            textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            textSize = 10f; isAllCaps = false; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
             background = pillBg("#2563EB", 12f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1.1f).apply { marginEnd = dp(ctx, 4) }
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1.15f).apply { marginEnd = dp(ctx, 4) }
             setOnClickListener {
+                val token = stepToken.get()
                 val srv = currentTarget()
-                val ok = tryCaptureCookie(srv.probeUrl, forceSave = true)
-                advanceNext(ok)
+                val ok = saveDomainState(wv.url ?: srv.probeUrl, requireClearance = false)
+                advanceNext(token, ok)
             }
         })
         if (targets.size > 1) {
             btnRow.addView(Button(ctx).apply {
-                text = "Skip ➔"
-                textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+                text = "Skip"
+                textSize = 10f; isAllCaps = false; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
                 background = pillBg("#475569", 12f)
-                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 0.75f).apply { marginEnd = dp(ctx, 4) }
-                setOnClickListener { advanceNext(false) }
+                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 0.7f).apply { marginEnd = dp(ctx, 4) }
+                setOnClickListener { advanceNext(stepToken.get(), false) }
             })
         }
         btnRow.addView(Button(ctx).apply {
             text = "Close"
-            textSize = 10f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            textSize = 10f; isAllCaps = false; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
             background = pillBg("#334155", 12f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 0.75f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 0.7f)
             setOnClickListener { closeAll() }
         })
         container.addView(btnRow)
@@ -758,7 +866,7 @@ object MovieFoxSettingsDialog {
             val width = (ctx.resources.displayMetrics.widthPixels * 0.95).toInt()
             dlg.window?.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT)
             loadCurrentTarget()
-            handler.postDelayed(pollRunnable, 1500L)
+            handler.postDelayed(pollRunnable, 1600L)
         }
     }
 
@@ -1282,13 +1390,13 @@ object MovieFoxSettingsDialog {
             statusText.contains("TIMEOUT", true) -> "#FBBF24"
             else -> "#F87171"
         }
-        val hasCookie = getCookieForDomain(ctx, srv.probeUrl) != null
+        val isVerified = isDomainCfVerified(ctx, srv.probeUrl)
 
         return LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             background = cardBg("#121621", borderHex, 15f, 2)
-            setPadding(dp(ctx, 10), dp(ctx, 7), dp(ctx, 10), dp(ctx, 7))
+            setPadding(dp(ctx, 10), dp(ctx, 8), dp(ctx, 10), dp(ctx, 8))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -1313,12 +1421,15 @@ object MovieFoxSettingsDialog {
             titleRow.addView(TextView(ctx).apply {
                 text = "${srv.name} ${srv.runtimeBadge}"
                 textSize = 12f
+                isSingleLine = true
+                ellipsize = TextUtils.TruncateAt.END
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.WHITE)
             })
             titleRow.addView(TextView(ctx).apply {
                 text = if (h != null && h.latencyMs > 0) "$statusText • ${h.latencyMs}ms" else statusText
                 textSize = 8f
+                isSingleLine = true
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(safeColor(badgeFg))
                 background = pillBg(badgeBg, 8f)
@@ -1332,7 +1443,7 @@ object MovieFoxSettingsDialog {
             infoCol.addView(TextView(ctx).apply {
                 text = h?.detail ?: srv.probeUrl
                 textSize = 9.5f
-                maxLines = 2
+                maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
                 setTextColor(safeColor("#94A3B8"))
                 setPadding(0, dp(ctx, 2), dp(ctx, 4), 0)
@@ -1340,12 +1451,12 @@ object MovieFoxSettingsDialog {
             addView(infoCol)
 
             addView(TextView(ctx).apply {
-                text = if (hasCookie) "CF ✓" else "CF"
-                textSize = 8.5f
+                text = if (isVerified) "CF ✓" else "CF"
+                textSize = 9f
                 setTypeface(typeface, Typeface.BOLD)
-                setTextColor(safeColor(if (hasCookie) "#34D399" else "#38BDF8"))
-                background = pillBg(if (hasCookie) "#0D2B22" else "#0D2338", 10f)
-                setPadding(dp(ctx, 7), dp(ctx, 5), dp(ctx, 7), dp(ctx, 5))
+                setTextColor(safeColor(if (isVerified) "#34D399" else "#38BDF8"))
+                background = pillBg(if (isVerified) "#0D2B22" else "#0D2338", 10f)
+                setPadding(dp(ctx, 8), dp(ctx, 6), dp(ctx, 8), dp(ctx, 6))
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
@@ -1357,11 +1468,11 @@ object MovieFoxSettingsDialog {
 
             addView(TextView(ctx).apply {
                 text = "COPY"
-                textSize = 8.5f
+                textSize = 9f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(safeColor("#38BDF8"))
                 background = pillBg("#0D2338", 10f)
-                setPadding(dp(ctx, 8), dp(ctx, 5), dp(ctx, 8), dp(ctx, 5))
+                setPadding(dp(ctx, 8), dp(ctx, 6), dp(ctx, 8), dp(ctx, 6))
                 setOnClickListener {
                     copyToClipboard(ctx, srv.name, "${srv.name}: $statusText -> ${h?.detail ?: srv.probeUrl}")
                 }
@@ -1398,7 +1509,7 @@ object MovieFoxSettingsDialog {
 
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            background = cardBg("#07090F", "#1E273B", 32f, 3)
+            background = cardBg("#07090F", "#1E273B", 30f, 3)
             setPadding(dp(ctx, 13), dp(ctx, 13), dp(ctx, 13), dp(ctx, 13))
         }
 
@@ -1482,7 +1593,7 @@ object MovieFoxSettingsDialog {
                 text = title; textSize = 11f; isAllCaps = false; isSingleLine = true
                 setTypeface(typeface, Typeface.BOLD)
                 setPadding(dp(ctx, 11), 0, dp(ctx, 11), 0)
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 33))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 34))
             }
         }
         tabButtons.forEach { tabBar.addView(it) }
@@ -1498,19 +1609,19 @@ object MovieFoxSettingsDialog {
             setHintTextColor(safeColor("#64748B")); setTextColor(Color.WHITE); textSize = 12f; isSingleLine = true
             background = cardBg("#10141E", "#253046", 14f)
             setPadding(dp(ctx, 10), dp(ctx, 6), dp(ctx, 10), dp(ctx, 6))
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 35), 1f).apply { marginEnd = dp(ctx, 6) }
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 1f).apply { marginEnd = dp(ctx, 6) }
         }
         val allOnBtn = Button(ctx).apply {
             text = "ALL ON"; textSize = 9.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE); background = pillBg(activeTheme.primaryHex, 13f)
             setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 35)).apply { marginEnd = dp(ctx, 5) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 36)).apply { marginEnd = dp(ctx, 5) }
         }
         val allOffBtn = Button(ctx).apply {
             text = "ALL OFF"; textSize = 9.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
             setTextColor(Color.WHITE); background = pillBg("#334155", 13f)
             setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 35))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 36))
         }
         actionRow.addView(searchBox); actionRow.addView(allOnBtn); actionRow.addView(allOffBtn)
         root.addView(actionRow)
@@ -1551,7 +1662,10 @@ object MovieFoxSettingsDialog {
         }
         root.addView(chipScroll)
 
-        val contentHeight = dp(ctx, 315)
+        // Responsive height so tall phones show more servers & logs without cramping
+        val screenH = ctx.resources.displayMetrics.heightPixels
+        val contentHeight = (screenH * 0.44f).toInt().coerceIn(dp(ctx, 300), dp(ctx, 440))
+
         lateinit var serverAdapter: ServerListAdapter
         serverAdapter = ServerListAdapter(
             ctx = ctx,
@@ -1627,7 +1741,7 @@ object MovieFoxSettingsDialog {
 
         val scrollView = ScrollView(ctx).apply {
             isVerticalScrollBarEnabled = false; visibility = View.GONE
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, contentHeight + dp(ctx, 68))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, contentHeight + dp(ctx, 72))
         }
         val wrapper = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         val extractorPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
@@ -2007,9 +2121,9 @@ object MovieFoxSettingsDialog {
             text = "⚡ Solve All"; textSize = 9.5f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
             background = pillBg("#059669", 10f)
             setPadding(dp(ctx, 9), 0, dp(ctx, 9), 0)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 30)).apply { marginEnd = dp(ctx, 4) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 32)).apply { marginEnd = dp(ctx, 4) }
             setOnClickListener {
-                val cfTargets = SERVERS.filter { isServerEnabled(ctx, it.key) && getCookieForDomain(ctx, it.probeUrl) == null }
+                val cfTargets = SERVERS.filter { isServerEnabled(ctx, it.key) && !isDomainCfVerified(ctx, it.probeUrl) }
                     .ifEmpty { SERVERS.filter { isServerEnabled(ctx, it.key) } }
                 openCfBypassQueue(ctx, cfTargets) {
                     refreshHealthPane()
@@ -2021,7 +2135,7 @@ object MovieFoxSettingsDialog {
             text = "✓ Sync"; textSize = 9.5f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
             background = pillBg("#2563EB", 10f)
             setPadding(dp(ctx, 9), 0, dp(ctx, 9), 0)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 30))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 32))
             setOnClickListener {
                 val synced = syncCookiesFromWebView(ctx)
                 refreshHealthPane()
@@ -2031,7 +2145,7 @@ object MovieFoxSettingsDialog {
         cfBox.addView(cfHeader)
 
         cfBox.addView(TextView(ctx).apply {
-            text = "Solve All runs sequential WebView solver across servers & saves cookies automatically."
+            text = "Auto-verifies non-CF sites & pauses only when a real Cloudflare challenge appears."
             textSize = 9.5f; setTextColor(safeColor("#94A3B8"))
             setPadding(0, dp(ctx, 3), 0, dp(ctx, 5))
         })
@@ -2053,28 +2167,28 @@ object MovieFoxSettingsDialog {
 
         val cfStatusBanner = TextView(ctx).apply {
             textSize = 10.5f; setTypeface(typeface, Typeface.BOLD); gravity = Gravity.CENTER
-            setPadding(dp(ctx, 10), dp(ctx, 7), dp(ctx, 10), dp(ctx, 7))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 5) }
+            setPadding(dp(ctx, 10), dp(ctx, 8), dp(ctx, 10), dp(ctx, 8))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
         }
         fun refreshCfBanner() {
             val totalSrvs = SERVERS.size.coerceAtLeast(1)
-            val solvedSrvs = SERVERS.count { getCookieForDomain(ctx, it.probeUrl) != null }
+            val solvedSrvs = SERVERS.count { isDomainCfVerified(ctx, it.probeUrl) }
             if (solvedSrvs >= totalSrvs) {
-                cfStatusBanner.text = "✓ CF Cookies Saved: ALL ($solvedSrvs/$totalSrvs Servers Solved)"
+                cfStatusBanner.text = "✓ All Servers Verified ($solvedSrvs/$totalSrvs)"
                 cfStatusBanner.setTextColor(safeColor("#6EE7B7"))
                 cfStatusBanner.background = cardBg("#08241C", "#10B981", 12f, 1)
             } else if (solvedSrvs > 0) {
-                cfStatusBanner.text = "✓ CF Cookies Saved ($solvedSrvs/$totalSrvs) — Tap to Solve Remaining"
+                cfStatusBanner.text = "✓ Verified ($solvedSrvs/$totalSrvs) — Tap to Verify Remaining"
                 cfStatusBanner.setTextColor(safeColor("#FDE68A"))
                 cfStatusBanner.background = cardBg("#211A0A", "#D97706", 12f, 1)
             } else {
-                cfStatusBanner.text = "⚡ Tap Here to Solve CF Cookies for All Servers"
+                cfStatusBanner.text = "⚡ Tap Here to Verify & Solve CF for All Servers"
                 cfStatusBanner.setTextColor(safeColor("#93C5FD"))
                 cfStatusBanner.background = cardBg("#0B1B2E", "#2563EB", 12f, 1)
             }
         }
         cfStatusBanner.setOnClickListener {
-            val remaining = SERVERS.filter { getCookieForDomain(ctx, it.probeUrl) == null }.ifEmpty { SERVERS }
+            val remaining = SERVERS.filter { !isDomainCfVerified(ctx, it.probeUrl) }.ifEmpty { SERVERS }
             openCfBypassQueue(ctx, remaining) { refreshHealthPane() }
         }
         cfBox.addView(cfStatusBanner)
@@ -2184,27 +2298,33 @@ object MovieFoxSettingsDialog {
             renderFilteredLogs()
         }
 
+        val testAllBtn = Button(ctx).apply {
+            text = "TEST ALL (${SERVERS.size})"; textSize = 9.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            background = pillBg("#059669", 12f)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 35), 1.25f).apply { marginEnd = dp(ctx, 5) }
+            setOnClickListener {
+                text = "TESTING..."
+                isEnabled = false
+                dialogScope.launch {
+                    supervisorScope { SERVERS.map { srv -> async { probeServerLive(srv) } }.awaitAll() }
+                    text = "TEST ALL (${SERVERS.size})"
+                    isEnabled = true
+                    refreshHealthPane()
+                    applyServerFilter()
+                }
+            }
+        }
+
         healthPane.addView(cfBox)
         healthPane.addView(metricsRow)
         healthPane.addView(LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+            addView(testAllBtn)
             addView(Button(ctx).apply {
-                text = "TEST ALL (${SERVERS.size})"; textSize = 9.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                background = pillBg("#059669", 12f)
-                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 34), 1.25f).apply { marginEnd = dp(ctx, 5) }
-                setOnClickListener {
-                    dialogScope.launch {
-                        supervisorScope { SERVERS.map { srv -> async { probeServerLive(srv) } }.awaitAll() }
-                        refreshHealthPane()
-                        applyServerFilter()
-                    }
-                }
-            })
-            addView(Button(ctx).apply {
-                text = "COPY LOGS"; textSize = 9.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+                text = "COPY LOGS"; textSize = 9.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
                 background = pillBg("#0284C7", 12f)
-                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 34), 1f).apply { marginEnd = dp(ctx, 5) }
+                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 35), 1f).apply { marginEnd = dp(ctx, 5) }
                 setOnClickListener {
                     val report = buildString {
                         appendLine("=== MovieFox Diagnostics ($selectedLogFilter) ===")
@@ -2219,9 +2339,9 @@ object MovieFoxSettingsDialog {
                 }
             })
             addView(Button(ctx).apply {
-                text = "CLEAR"; textSize = 9.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+                text = "CLEAR"; textSize = 9.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
                 background = pillBg("#334155", 12f)
-                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 34), 0.75f)
+                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 35), 0.75f)
                 setOnClickListener {
                     clearDiagnosticLogs()
                     serverHealthMap.clear()
@@ -2323,5 +2443,4 @@ object MovieFoxSettingsDialog {
         }
     }
 }
-
 
