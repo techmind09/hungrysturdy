@@ -56,7 +56,7 @@ import java.util.zip.ZipInputStream
 object MovieFoxSettingsDialog {
 
     const val LOG_TAG = "MovieFoxDiag"
-    private const val PREFS_NAME = "moviefox_ultra_max_v32"
+    private const val PREFS_NAME = "moviefox_ultra_max_v33"
     private const val KEY_SRV_PREFIX = "mf_srv_"
     private const val KEY_EXT_PREFIX = "mf_ext_"
     private const val KEY_SRV_ORDER = "mf_srv_order_csv"
@@ -205,6 +205,7 @@ object MovieFoxSettingsDialog {
         ServerItem("katdrama", "KatDrama", "ASIAN", "https://katdrama.org/", "#38BDF8", false, true, "AsianDrama", "⚡ MF"),
         ServerItem("animeworld", "AnimeWorld", "ANIME", "https://watchanimeworld.top/", "#818CF8", false, true, "AsianDrama", "⚡ MF"),
         ServerItem("vegamovies", "VegaMovies", "DUAL/HI", "https://vegamovies.latino/", "#FACC15", false, true, "Movies", "⚡ MF"),
+        ServerItem("bollyflix", "BollyFlix", "GDFlix/HI", "https://bollyflix.frl/", "#F43F5E", false, true, "Movies", "⚡ MF"),
         ServerItem("cinestream", "CineStream Hub", "ALL/MULTI", "https://vidfast.vc/", "#10B981", false, true, "Movies", "⚡ CS"),
         ServerItem("videasy", "Videasy", "HLS/MP4", "https://player.videasy.to/", "#38BDF8", false, true, "Movies", "⚡ CS"),
         ServerItem("vidzee", "Vidzee", "MULTI/HLS", "https://player.vidzee.wtf/", "#C084FC", false, true, "Movies", "⚡ CS"),
