@@ -450,8 +450,32 @@ object MovieFoxSettingsDialog {
         return true
     }
 
+    // =========================================================================
+    // Ultra Glass & Neon Design System Helpers
+    // =========================================================================
     private fun safeColor(hex: String, fallback: String = "#94A3B8"): Int =
         runCatching { Color.parseColor(hex) }.getOrElse { Color.parseColor(fallback) }
+
+    private fun alphaColor(hex: String, alpha: Int): Int {
+        val base = safeColor(hex)
+        return Color.argb(alpha.coerceIn(0, 255), Color.red(base), Color.green(base), Color.blue(base))
+    }
+
+    private fun lightenColor(hex: String, factor: Float = 0.22f): Int {
+        val c = safeColor(hex)
+        val r = (Color.red(c) + (255 - Color.red(c)) * factor).toInt().coerceIn(0, 255)
+        val g = (Color.green(c) + (255 - Color.green(c)) * factor).toInt().coerceIn(0, 255)
+        val b = (Color.blue(c) + (255 - Color.blue(c)) * factor).toInt().coerceIn(0, 255)
+        return Color.rgb(r, g, b)
+    }
+
+    private fun darkenColor(hex: String, factor: Float = 0.22f): Int {
+        val c = safeColor(hex)
+        val r = (Color.red(c) * (1f - factor)).toInt().coerceIn(0, 255)
+        val g = (Color.green(c) * (1f - factor)).toInt().coerceIn(0, 255)
+        val b = (Color.blue(c) * (1f - factor)).toInt().coerceIn(0, 255)
+        return Color.rgb(r, g, b)
+    }
 
     private fun safeToast(ctx: Context?, msg: String) {
         if (!isContextAlive(ctx)) return
@@ -461,20 +485,179 @@ object MovieFoxSettingsDialog {
     private fun dp(ctx: Context, px: Int): Int =
         (px * ctx.resources.displayMetrics.density).toInt()
 
+    private fun dpf(ctx: Context, px: Float): Float =
+        px * ctx.resources.displayMetrics.density
+
     private fun cardBg(
-        bgHex: String = "#141822",
-        strokeHex: String = "#252E42",
+        bgHex: String = "#111624",
+        strokeHex: String = "#232D45",
         radius: Float = 20f,
         strokeWidth: Int = 2
     ): GradientDrawable = GradientDrawable().apply {
-        setColor(safeColor(bgHex, "#141822"))
+        setColor(safeColor(bgHex, "#111624"))
         cornerRadius = radius
-        setStroke(strokeWidth, safeColor(strokeHex, "#252E42"))
+        setStroke(strokeWidth, safeColor(strokeHex, "#232D45"))
+    }
+
+    private fun glassCardBg(
+        topHex: String = "#151C2E",
+        bottomHex: String = "#0E1320",
+        strokeColor: Int = safeColor("#26334D"),
+        radius: Float = 20f,
+        strokeWidth: Int = 2
+    ): GradientDrawable = GradientDrawable(
+        GradientDrawable.Orientation.TOP_BOTTOM,
+        intArrayOf(safeColor(topHex), safeColor(bottomHex))
+    ).apply {
+        cornerRadius = radius
+        setStroke(strokeWidth, strokeColor)
     }
 
     private fun pillBg(bgHex: String, radius: Float = 14f): GradientDrawable = GradientDrawable().apply {
         setColor(safeColor(bgHex, "#1C2230"))
         cornerRadius = radius
+    }
+
+    private fun tintBadgeBg(accentHex: String, radius: Float = 10f, bgAlpha: Int = 36, strokeAlpha: Int = 95): GradientDrawable =
+        GradientDrawable().apply {
+            setColor(alphaColor(accentHex, bgAlpha))
+            cornerRadius = radius
+            setStroke(2, alphaColor(accentHex, strokeAlpha))
+        }
+
+    private fun neonGradBtn(primaryHex: String, radius: Float = 16f): GradientDrawable =
+        GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(lightenColor(primaryHex, 0.14f), safeColor(primaryHex), darkenColor(primaryHex, 0.14f))
+        ).apply {
+            cornerRadius = radius
+            setStroke(2, alphaColor("#FFFFFF", 42))
+        }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun attachPressAnim(view: View) {
+        view.setOnTouchListener { v, ev ->
+            when (ev.action) {
+                MotionEvent.ACTION_DOWN -> v.animate().scaleX(0.95f).scaleY(0.95f).setDuration(85).start()
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> v.animate().scaleX(1f).scaleY(1f).setDuration(120).start()
+            }
+            false
+        }
+    }
+
+    private fun monogramOf(name: String): String {
+        val parts = name.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+        return when {
+            parts.size >= 2 -> "${parts[0].first()}${parts[1].first()}".uppercase()
+            name.length >= 2 -> name.take(2).uppercase()
+            else -> "MF"
+        }
+    }
+
+    /**
+     * Custom Animated Neon Pill Switch — Zero OEM glitch, smooth slide, live theme color.
+     */
+    private class NeonSwitch(
+        ctx: Context,
+        initialChecked: Boolean,
+        private var accentHex: String
+    ) : FrameLayout(ctx) {
+
+        private val trackW = dp(ctx, 44)
+        private val trackH = dp(ctx, 24)
+        private val thumbSize = dp(ctx, 18)
+        private val thumbPad = dp(ctx, 3)
+        private val travelX = (trackW - thumbSize - thumbPad * 2).toFloat()
+
+        private val thumbView: View
+        var isChecked: Boolean = initialChecked
+            private set
+        var onCheckedChange: ((Boolean) -> Unit)? = null
+
+        init {
+            layoutParams = LinearLayout.LayoutParams(trackW, trackH)
+            isClickable = true
+            isFocusable = true
+
+            thumbView = View(ctx).apply {
+                layoutParams = LayoutParams(thumbSize, thumbSize, Gravity.START or Gravity.CENTER_VERTICAL).apply {
+                    marginStart = thumbPad
+                }
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(Color.WHITE)
+                }
+                elevation = dpf(ctx, 2f)
+            }
+            addView(thumbView)
+            applyVisualState(animated = false)
+            setOnClickListener { toggle() }
+        }
+
+        fun updateAccent(newHex: String) {
+            accentHex = newHex
+            applyVisualState(animated = false)
+        }
+
+        fun setCheckedSilent(checked: Boolean) {
+            isChecked = checked
+            applyVisualState(animated = false)
+        }
+
+        fun setChecked(checked: Boolean, animate: Boolean = true) {
+            if (isChecked == checked) return
+            isChecked = checked
+            applyVisualState(animated = animate)
+            onCheckedChange?.invoke(isChecked)
+        }
+
+        fun toggle() = setChecked(!isChecked, animate = true)
+
+        private fun applyVisualState(animated: Boolean) {
+            background = GradientDrawable().apply {
+                cornerRadius = trackH / 2f
+                if (isChecked) {
+                    setColor(safeColor(accentHex, "#7C3AED"))
+                    setStroke(2, alphaColor("#FFFFFF", 55))
+                } else {
+                    setColor(safeColor("#1B2335"))
+                    setStroke(2, safeColor("#2E3B56"))
+                }
+            }
+            val targetX = if (isChecked) travelX else 0f
+            thumbView.animate().cancel()
+            if (animated) {
+                thumbView.animate().translationX(targetX).setDuration(150).start()
+            } else {
+                thumbView.translationX = targetX
+            }
+            thumbView.alpha = if (isChecked) 1f else 0.78f
+        }
+    }
+
+    private fun makeSectionLabel(ctx: Context, textStr: String, accentHex: String): LinearLayout {
+        return LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(ctx, 8)
+                bottomMargin = dp(ctx, 6)
+            }
+            addView(View(ctx).apply {
+                layoutParams = LinearLayout.LayoutParams(dp(ctx, 3), dp(ctx, 13)).apply { marginEnd = dp(ctx, 7) }
+                background = pillBg(accentHex, 4f)
+            })
+            addView(TextView(ctx).apply {
+                text = textStr.uppercase()
+                textSize = 9.5f
+                letterSpacing = 0.08f
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(safeColor("#94A3B8"))
+            })
+        }
     }
 
     private fun prefs(ctx: Context): SharedPreferences {
@@ -615,13 +798,13 @@ object MovieFoxSettingsDialog {
             isSingleLine = true
             ellipsize = TextUtils.TruncateAt.END
             setTextColor(safeColor("#93C5FD"))
-            setPadding(0, dp(ctx, 2), 0, dp(ctx, 5))
+            setPadding(0, dp(ctx, 2), 0, dp(ctx, 6))
         }
         val progressBar = ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
             progress = 10
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 4)).apply {
-                bottomMargin = dp(ctx, 6)
+                bottomMargin = dp(ctx, 8)
             }
         }
 
@@ -814,8 +997,8 @@ object MovieFoxSettingsDialog {
 
         val container = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            background = cardBg("#0A0F1A", "#2563EB", 24f, 2)
-            setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
+            background = glassCardBg("#0B1120", "#070B14", alphaColor("#38BDF8", 110), dpf(ctx, 20f), 2)
+            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
         }
         container.addView(titleTv)
         container.addView(statusTv)
@@ -824,7 +1007,7 @@ object MovieFoxSettingsDialog {
         val wvHeight = (ctx.resources.displayMetrics.heightPixels * 0.56f).toInt().coerceAtLeast(dp(ctx, 300))
         val wv = WebView(ctx).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, wvHeight).apply {
-                bottomMargin = dp(ctx, 8)
+                bottomMargin = dp(ctx, 10)
             }
             settings.apply {
                 javaScriptEnabled = true
@@ -858,15 +1041,17 @@ object MovieFoxSettingsDialog {
         btnRow.addView(Button(ctx).apply {
             text = "⚡ CF Click"
             textSize = 10f; isAllCaps = false; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            background = pillBg("#059669", 12f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1f).apply { marginEnd = dp(ctx, 4) }
+            background = neonGradBtn("#059669", dpf(ctx, 10f))
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1f).apply { marginEnd = dp(ctx, 5) }
+            attachPressAnim(this)
             setOnClickListener { clickCfChallengeOnly() }
         })
         btnRow.addView(Button(ctx).apply {
             text = if (targets.size > 1) "✓ Save & Next" else "✓ Save"
             textSize = 10f; isAllCaps = false; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            background = pillBg("#2563EB", 12f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1.15f).apply { marginEnd = dp(ctx, 4) }
+            background = neonGradBtn("#2563EB", dpf(ctx, 10f))
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1.15f).apply { marginEnd = dp(ctx, 5) }
+            attachPressAnim(this)
             setOnClickListener {
                 val token = stepToken.get()
                 val srv = currentTarget()
@@ -878,16 +1063,18 @@ object MovieFoxSettingsDialog {
             btnRow.addView(Button(ctx).apply {
                 text = "Skip"
                 textSize = 10f; isAllCaps = false; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                background = pillBg("#475569", 12f)
-                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 0.7f).apply { marginEnd = dp(ctx, 4) }
+                background = cardBg("#1E293B", "#334155", dpf(ctx, 10f), 1)
+                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 0.7f).apply { marginEnd = dp(ctx, 5) }
+                attachPressAnim(this)
                 setOnClickListener { advanceNext(stepToken.get(), false) }
             })
         }
         btnRow.addView(Button(ctx).apply {
             text = "Close"
-            textSize = 10f; isAllCaps = false; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            background = pillBg("#334155", 12f)
+            textSize = 10f; isAllCaps = false; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#CBD5E1"))
+            background = cardBg("#141C2B", "#2A3650", dpf(ctx, 10f), 1)
             layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 0.7f)
+            attachPressAnim(this)
             setOnClickListener { closeAll() }
         })
         container.addView(btnRow)
@@ -1256,8 +1443,12 @@ object MovieFoxSettingsDialog {
         out.distinctBy { "${it.name.lowercase()}|${it.probeUrl.lowercase()}" }
     }
 
+    // =========================================================================
+    // Ultra Server List Adapter — Zero Clipping, Glowing Monogram, NeonSwitch
+    // =========================================================================
     private class ServerListAdapter(
         private val ctx: Context,
+        private val getAccentHex: () -> String,
         private val onToggleChanged: () -> Unit,
         private val onMoveUp: (ServerItem) -> Unit,
         private val onMoveDown: (ServerItem) -> Unit
@@ -1273,6 +1464,7 @@ object MovieFoxSettingsDialog {
         private class VH(
             val root: LinearLayout,
             val avatarTv: TextView,
+            val statusDot: View,
             val nameTv: TextView,
             val platformTv: TextView,
             val tagTv: TextView,
@@ -1280,7 +1472,7 @@ object MovieFoxSettingsDialog {
             val urlTv: TextView,
             val upBtn: TextView,
             val downBtn: TextView,
-            val sw: Switch
+            val sw: NeonSwitch
         )
 
         override fun getCount(): Int = items.size
@@ -1295,62 +1487,111 @@ object MovieFoxSettingsDialog {
                 val card = LinearLayout(ctx).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    background = cardBg("#121621", "#232C40", 18f)
+                    background = glassCardBg("#131A2B", "#0D121F", safeColor("#222D45"), dpf(ctx, 15f), 2)
                     setPadding(dp(ctx, 10), dp(ctx, 9), dp(ctx, 10), dp(ctx, 9))
                 }
-                val avatarTv = TextView(ctx).apply {
-                    textSize = 11f; gravity = Gravity.CENTER; setTypeface(typeface, Typeface.BOLD)
-                    layoutParams = LinearLayout.LayoutParams(dp(ctx, 32), dp(ctx, 32)).apply { marginEnd = dp(ctx, 9) }
+
+                // Left Monogram Avatar + Corner Health Dot
+                val avatarWrap = FrameLayout(ctx).apply {
+                    layoutParams = LinearLayout.LayoutParams(dp(ctx, 36), dp(ctx, 36)).apply { marginEnd = dp(ctx, 10) }
                 }
+                val avatarTv = TextView(ctx).apply {
+                    textSize = 11.5f
+                    gravity = Gravity.CENTER
+                    setTypeface(typeface, Typeface.BOLD)
+                    layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                }
+                val statusDot = View(ctx).apply {
+                    layoutParams = FrameLayout.LayoutParams(dp(ctx, 9), dp(ctx, 9), Gravity.END or Gravity.BOTTOM)
+                }
+                avatarWrap.addView(avatarTv)
+                avatarWrap.addView(statusDot)
+
+                // Center Info Stack (Name -> Badges -> URL) — zero horizontal overflow
                 val col = LinearLayout(ctx).apply {
                     orientation = LinearLayout.VERTICAL
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-                }
-                val topLine = LinearLayout(ctx).apply {
-                    orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                        marginEnd = dp(ctx, 6)
+                    }
                 }
                 val nameTv = TextView(ctx).apply {
-                    textSize = 13f; isSingleLine = true; ellipsize = TextUtils.TruncateAt.END
-                    setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+                    textSize = 13f
+                    isSingleLine = true
+                    ellipsize = TextUtils.TruncateAt.END
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.WHITE)
+                }
+                val badgeLine = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        topMargin = dp(ctx, 3)
+                    }
                 }
                 val platformTv = TextView(ctx).apply {
                     textSize = 8f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
-                    setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2))
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                        .apply { marginStart = dp(ctx, 5) }
+                    setPadding(dp(ctx, 5), dp(ctx, 1), dp(ctx, 5), dp(ctx, 1))
                 }
                 val tagTv = TextView(ctx).apply {
                     textSize = 8f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
-                    setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2))
+                    setPadding(dp(ctx, 5), dp(ctx, 1), dp(ctx, 5), dp(ctx, 1))
                     layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                         .apply { marginStart = dp(ctx, 4) }
                 }
                 val statusTv = TextView(ctx).apply {
                     textSize = 8f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
-                    setPadding(dp(ctx, 5), dp(ctx, 2), dp(ctx, 5), dp(ctx, 2))
+                    setPadding(dp(ctx, 5), dp(ctx, 1), dp(ctx, 5), dp(ctx, 1))
                     layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                         .apply { marginStart = dp(ctx, 4) }
                 }
-                topLine.addView(nameTv); topLine.addView(platformTv); topLine.addView(tagTv); topLine.addView(statusTv)
+                badgeLine.addView(platformTv)
+                badgeLine.addView(tagTv)
+                badgeLine.addView(statusTv)
 
                 val urlTv = TextView(ctx).apply {
-                    textSize = 9.5f; isSingleLine = true; ellipsize = TextUtils.TruncateAt.END
-                    setTextColor(safeColor("#7C869C")); setPadding(0, dp(ctx, 2), dp(ctx, 4), 0)
+                    textSize = 9.2f; isSingleLine = true; ellipsize = TextUtils.TruncateAt.END
+                    setTextColor(safeColor("#6B7894"))
+                    setPadding(0, dp(ctx, 2), 0, 0)
                 }
-                col.addView(topLine); col.addView(urlTv)
+                col.addView(nameTv)
+                col.addView(badgeLine)
+                col.addView(urlTv)
 
+                // Clean Centered Up/Down Priority Pill Controls (Zero Clipping)
+                val orderCol = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        marginEnd = dp(ctx, 8)
+                    }
+                }
                 val upBtn = TextView(ctx).apply {
-                    text = "↑"; textSize = 13f; setTypeface(typeface, Typeface.BOLD)
-                    setPadding(dp(ctx, 6), dp(ctx, 4), dp(ctx, 6), dp(ctx, 4))
+                    text = "▲"
+                    textSize = 8.5f
+                    gravity = Gravity.CENTER
+                    includeFontPadding = false
+                    layoutParams = LinearLayout.LayoutParams(dp(ctx, 24), dp(ctx, 18)).apply { bottomMargin = dp(ctx, 3) }
+                    attachPressAnim(this)
                 }
                 val downBtn = TextView(ctx).apply {
-                    text = "↓"; textSize = 13f; setTypeface(typeface, Typeface.BOLD)
-                    setPadding(dp(ctx, 6), dp(ctx, 4), dp(ctx, 6), dp(ctx, 4))
+                    text = "▼"
+                    textSize = 8.5f
+                    gravity = Gravity.CENTER
+                    includeFontPadding = false
+                    layoutParams = LinearLayout.LayoutParams(dp(ctx, 24), dp(ctx, 18))
+                    attachPressAnim(this)
                 }
-                val sw = Switch(ctx)
+                orderCol.addView(upBtn)
+                orderCol.addView(downBtn)
 
-                card.addView(avatarTv); card.addView(col); card.addView(upBtn); card.addView(downBtn); card.addView(sw)
-                holder = VH(card, avatarTv, nameTv, platformTv, tagTv, statusTv, urlTv, upBtn, downBtn, sw)
+                val sw = NeonSwitch(ctx, true, getAccentHex())
+
+                card.addView(avatarWrap)
+                card.addView(col)
+                card.addView(orderCol)
+                card.addView(sw)
+
+                holder = VH(card, avatarTv, statusDot, nameTv, platformTv, tagTv, statusTv, urlTv, upBtn, downBtn, sw)
                 card.tag = holder
                 rowView = card
             } else {
@@ -1359,45 +1600,87 @@ object MovieFoxSettingsDialog {
             }
 
             val srv = items[position]
-            holder.avatarTv.text = "MF"
+            val isOn = prefs(ctx).getBoolean("$KEY_SRV_PREFIX${srv.key.lowercase()}", true)
+            val accent = getAccentHex()
+
+            holder.root.background = glassCardBg(
+                topHex = if (isOn) "#141C2F" else "#0E131F",
+                bottomHex = if (isOn) "#0D1322" else "#0A0E17",
+                strokeColor = if (isOn) alphaColor(srv.accentHex, 78) else safeColor("#1C2438"),
+                radius = dpf(ctx, 15f),
+                strokeWidth = 2
+            )
+
+            holder.avatarTv.text = monogramOf(srv.name)
             holder.avatarTv.setTextColor(safeColor(srv.accentHex, "#38BDF8"))
-            holder.avatarTv.background = pillBg("#192236", 10f)
-            holder.nameTv.text = srv.name
-            holder.platformTv.text = "⚡ MF"
-            holder.platformTv.setTextColor(safeColor("#38BDF8"))
-            holder.platformTv.background = pillBg("#0B2239", 8f)
-            holder.tagTv.text = srv.tag
-            holder.tagTv.setTextColor(safeColor(srv.accentHex, "#38BDF8"))
-            holder.tagTv.background = pillBg("#192236", 8f)
+            holder.avatarTv.background = tintBadgeBg(srv.accentHex, dpf(ctx, 10f), 42, 110)
 
             val health = getServerHealth(srv.key)
+            val dotHex = when {
+                health == null -> if (isOn) "#38BDF8" else "#475569"
+                health.isHealthy -> "#22C55E"
+                health.status.contains("TIMEOUT", true) -> "#F59E0B"
+                else -> "#EF4444"
+            }
+            holder.statusDot.background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(safeColor(dotHex))
+                setStroke(dp(ctx, 2), safeColor("#0E1320"))
+            }
+
+            holder.nameTv.text = srv.name
+            holder.nameTv.alpha = if (isOn) 1f else 0.58f
+
+            holder.platformTv.text = srv.runtimeBadge
+            holder.platformTv.setTextColor(safeColor("#38BDF8"))
+            holder.platformTv.background = tintBadgeBg("#38BDF8", dpf(ctx, 6f), 32, 70)
+
+            holder.tagTv.text = srv.tag
+            holder.tagTv.setTextColor(safeColor(srv.accentHex, "#38BDF8"))
+            holder.tagTv.background = tintBadgeBg(srv.accentHex, dpf(ctx, 6f), 32, 70)
+
             if (health != null) {
                 holder.statusTv.visibility = View.VISIBLE
-                holder.statusTv.text = if (health.latencyMs > 0) "${health.status} • ${health.latencyMs}ms" else health.status
-                val (fg, bg) = if (health.isHealthy) "#34D399" to "#0D2B22" else "#F87171" to "#2D1216"
-                holder.statusTv.setTextColor(safeColor(fg))
-                holder.statusTv.background = pillBg(bg, 8f)
+                holder.statusTv.text = if (health.latencyMs > 0) "${health.status} ${health.latencyMs}ms" else health.status
+                val hHex = when {
+                    health.isHealthy -> "#34D399"
+                    health.status.contains("TIMEOUT", true) -> "#FBBF24"
+                    else -> "#F87171"
+                }
+                holder.statusTv.setTextColor(safeColor(hHex))
+                holder.statusTv.background = tintBadgeBg(hHex, dpf(ctx, 6f), 38, 95)
             } else {
                 holder.statusTv.visibility = View.GONE
             }
 
             holder.urlTv.text = srv.probeUrl
-            holder.upBtn.setTextColor(safeColor(if (position > 0) "#38BDF8" else "#334155"))
-            holder.downBtn.setTextColor(safeColor(if (position < items.lastIndex) "#38BDF8" else "#334155"))
-            holder.upBtn.setOnClickListener { if (position > 0) onMoveUp(srv) }
-            holder.downBtn.setOnClickListener { if (position < items.lastIndex) onMoveDown(srv) }
 
-            holder.sw.setOnCheckedChangeListener(null)
-            holder.sw.isChecked = prefs(ctx).getBoolean("$KEY_SRV_PREFIX${srv.key.lowercase()}", true)
-            holder.sw.setOnCheckedChangeListener { _, checked ->
+            val canUp = position > 0
+            val canDown = position < items.lastIndex
+            holder.upBtn.setTextColor(safeColor(if (canUp) "#7DD3FC" else "#334155"))
+            holder.upBtn.background = cardBg(if (canUp) "#162238" else "#0E1422", if (canUp) "#263B5E" else "#182033", dpf(ctx, 6f), 1)
+            holder.downBtn.setTextColor(safeColor(if (canDown) "#7DD3FC" else "#334155"))
+            holder.downBtn.background = cardBg(if (canDown) "#162238" else "#0E1422", if (canDown) "#263B5E" else "#182033", dpf(ctx, 6f), 1)
+
+            holder.upBtn.setOnClickListener { if (canUp) onMoveUp(srv) }
+            holder.downBtn.setOnClickListener { if (canDown) onMoveDown(srv) }
+
+            holder.sw.onCheckedChange = null
+            holder.sw.updateAccent(accent)
+            holder.sw.setCheckedSilent(isOn)
+            holder.sw.onCheckedChange = { checked ->
                 setServerEnabled(ctx, srv.key, checked)
                 onToggleChanged()
+                notifyDataSetChanged()
             }
-            holder.root.setOnClickListener { holder.sw.isChecked = !holder.sw.isChecked }
+            holder.root.setOnClickListener { holder.sw.toggle() }
             return rowView
         }
     }
 
+    // =========================================================================
+    // Ultra Server Health Card — Left Neon Strip, Zero Badge Wrap
+    // =========================================================================
     private fun buildServerHealthCard(
         ctx: Context,
         srv: ServerItem,
@@ -1406,17 +1689,11 @@ object MovieFoxSettingsDialog {
     ): LinearLayout {
         val isHealthy = h?.isHealthy == true
         val statusText = h?.status ?: "READY"
-        val borderHex = when {
-            h == null -> "#232C40"
+        val accentHex = when {
+            h == null -> "#475569"
             isHealthy -> "#22C55E"
             statusText.contains("TIMEOUT", true) -> "#F59E0B"
             else -> "#EF4444"
-        }
-        val badgeBg = when {
-            h == null -> "#192236"
-            isHealthy -> "#0D2B22"
-            statusText.contains("TIMEOUT", true) -> "#2E2009"
-            else -> "#2D1216"
         }
         val badgeFg = when {
             h == null -> "#94A3B8"
@@ -1429,72 +1706,83 @@ object MovieFoxSettingsDialog {
         return LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            background = cardBg("#121621", borderHex, 15f, 2)
-            setPadding(dp(ctx, 10), dp(ctx, 8), dp(ctx, 10), dp(ctx, 8))
+            background = glassCardBg(
+                topHex = "#131A2B",
+                bottomHex = "#0C111E",
+                strokeColor = alphaColor(accentHex, if (h == null) 80 else 135),
+                radius = dpf(ctx, 14f),
+                strokeWidth = 2
+            )
+            setPadding(dp(ctx, 8), dp(ctx, 9), dp(ctx, 10), dp(ctx, 9))
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(ctx, 6) }
+            ).apply { bottomMargin = dp(ctx, 7) }
 
+            // Glowing Left Vertical Accent Strip
             addView(View(ctx).apply {
-                layoutParams = LinearLayout.LayoutParams(dp(ctx, 8), dp(ctx, 8)).apply { marginEnd = dp(ctx, 8) }
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(safeColor(if (h == null) "#475569" else borderHex))
-                }
+                layoutParams = LinearLayout.LayoutParams(dp(ctx, 4), dp(ctx, 36)).apply { marginEnd = dp(ctx, 9) }
+                background = pillBg(accentHex, dpf(ctx, 4f))
             })
 
             val infoCol = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginEnd = dp(ctx, 6)
+                }
             }
-            val titleRow = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            titleRow.addView(TextView(ctx).apply {
-                text = "${srv.name} ⚡ MF"
-                textSize = 12f
+            // Line 1: Clean Title + ⚡ MF
+            infoCol.addView(TextView(ctx).apply {
+                text = "${srv.name}  ⚡ MF"
+                textSize = 12.5f
                 isSingleLine = true
                 ellipsize = TextUtils.TruncateAt.END
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.WHITE)
             })
-            titleRow.addView(TextView(ctx).apply {
-                text = if (h != null && h.latencyMs > 0) "$statusText • ${h.latencyMs}ms" else statusText
-                textSize = 8f
+            // Line 2: Dedicated Single-Line Status Pill (Never wraps awkwardly)
+            val statusRow = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = dp(ctx, 3)
+                }
+            }
+            statusRow.addView(TextView(ctx).apply {
+                text = if (h != null && h.latencyMs > 0) "● $statusText • ${h.latencyMs}ms" else "● $statusText"
+                textSize = 8.5f
                 isSingleLine = true
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(safeColor(badgeFg))
-                background = pillBg(badgeBg, 8f)
-                setPadding(dp(ctx, 6), dp(ctx, 2), dp(ctx, 6), dp(ctx, 2))
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT
-                ).apply { marginStart = dp(ctx, 6) }
+                background = tintBadgeBg(accentHex, dpf(ctx, 7f), 38, 100)
+                setPadding(dp(ctx, 7), dp(ctx, 2), dp(ctx, 7), dp(ctx, 2))
             })
-            infoCol.addView(titleRow)
+            infoCol.addView(statusRow)
+
+            // Line 3: Detail / URL
             infoCol.addView(TextView(ctx).apply {
                 text = h?.detail ?: srv.probeUrl
-                textSize = 9.5f
+                textSize = 9.2f
                 maxLines = 1
                 ellipsize = TextUtils.TruncateAt.END
-                setTextColor(safeColor("#94A3B8"))
-                setPadding(0, dp(ctx, 2), dp(ctx, 4), 0)
+                setTextColor(safeColor("#7D8AA6"))
+                setPadding(0, dp(ctx, 3), 0, 0)
             })
             addView(infoCol)
 
+            // Action Buttons (CF + COPY)
             addView(TextView(ctx).apply {
                 text = if (isVerified) "CF ✓" else "CF"
-                textSize = 9f
+                textSize = 9.2f
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(safeColor(if (isVerified) "#34D399" else "#38BDF8"))
-                background = pillBg(if (isVerified) "#0D2B22" else "#0D2338", 10f)
-                setPadding(dp(ctx, 8), dp(ctx, 6), dp(ctx, 8), dp(ctx, 6))
+                background = tintBadgeBg(if (isVerified) "#10B981" else "#38BDF8", dpf(ctx, 9f), 38, 105)
+                setPadding(dp(ctx, 9), dp(ctx, 7), dp(ctx, 9), dp(ctx, 7))
                 layoutParams = LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply { marginEnd = dp(ctx, 5) }
+                attachPressAnim(this)
                 setOnClickListener {
                     openCfBypassWindow(ctx, srv.name, srv.probeUrl, onCfSolved)
                 }
@@ -1502,11 +1790,12 @@ object MovieFoxSettingsDialog {
 
             addView(TextView(ctx).apply {
                 text = "COPY"
-                textSize = 9f
+                textSize = 9.2f
                 setTypeface(typeface, Typeface.BOLD)
-                setTextColor(safeColor("#38BDF8"))
-                background = pillBg("#0D2338", 10f)
-                setPadding(dp(ctx, 8), dp(ctx, 6), dp(ctx, 8), dp(ctx, 6))
+                setTextColor(safeColor("#93C5FD"))
+                background = tintBadgeBg("#2563EB", dpf(ctx, 9f), 34, 95)
+                setPadding(dp(ctx, 9), dp(ctx, 7), dp(ctx, 9), dp(ctx, 7))
+                attachPressAnim(this)
                 setOnClickListener {
                     copyToClipboard(ctx, srv.name, "${srv.name}: $statusText -> ${h?.detail ?: srv.probeUrl}")
                 }
@@ -1540,72 +1829,104 @@ object MovieFoxSettingsDialog {
         var q720 = isQuality720Enabled(ctx)
         var q480 = isQuality480Enabled(ctx)
         var lowBuffer = isLowBufferMode(ctx)
+        var activeTabIdx = 0
+
+        // Track theme-reactive controls so switching theme updates EVERYTHING live
+        val themedSwitches = mutableListOf<NeonSwitch>()
+        val themedPlusBtns = mutableListOf<TextView>()
+        val themedSectionBars = mutableListOf<View>()
 
         val root = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            background = cardBg("#07090F", "#1E273B", 30f, 3)
             setPadding(dp(ctx, 13), dp(ctx, 13), dp(ctx, 13), dp(ctx, 13))
         }
 
-        // ── Header ───────────────────────────────────────────────────────────
+        // ── Hero Header ──────────────────────────────────────────────────────
         val header = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
+            setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
         }
-        fun applyHeaderTheme() {
-            header.background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(safeColor(activeTheme.gradStart), safeColor(activeTheme.gradMid), safeColor(activeTheme.gradEnd))
-            ).apply {
-                cornerRadius = 22f
-                setStroke(2, safeColor(activeTheme.primaryHex))
-            }
-        }
-        applyHeaderTheme()
 
         val titleRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        titleRow.addView(TextView(ctx).apply {
-            text = "MOVIEFOX ULTRA MAX"
-            textSize = 16f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+        val titleCol = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        titleCol.addView(TextView(ctx).apply {
+            text = "MOVIEFOX ULTRA MAX"
+            textSize = 16.5f
+            letterSpacing = 0.04f
+            isSingleLine = true
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
         })
+        titleCol.addView(TextView(ctx).apply {
+            text = "PRO ENGINE • CLOUDSTREAM & NUVIO CORE"
+            textSize = 8.2f
+            letterSpacing = 0.09f
+            isSingleLine = true
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(safeColor("#94A3B8"))
+            setPadding(0, dp(ctx, 2), 0, 0)
+        })
+        titleRow.addView(titleCol)
+
         titleRow.addView(TextView(ctx).apply {
             text = "⚡ TURBO FAST"
-            textSize = 9f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
+            textSize = 9f
+            isSingleLine = true
+            setTypeface(typeface, Typeface.BOLD)
             setTextColor(safeColor("#6EE7B7"))
-            background = pillBg("#064E3B", 10f)
-            setPadding(dp(ctx, 8), dp(ctx, 4), dp(ctx, 8), dp(ctx, 4))
+            background = tintBadgeBg("#10B981", dpf(ctx, 10f), 46, 130)
+            setPadding(dp(ctx, 9), dp(ctx, 5), dp(ctx, 9), dp(ctx, 5))
         })
         header.addView(titleRow)
 
         val statsRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                .apply { topMargin = dp(ctx, 9) }
+                .apply { topMargin = dp(ctx, 11) }
         }
         fun statChip(label: String, colorHex: String, marginEndDp: Int): Pair<LinearLayout, TextView> {
             val box = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
-                background = cardBg("#0A0E17", "#26324A", 14f, 2)
-                setPadding(dp(ctx, 9), dp(ctx, 6), dp(ctx, 9), dp(ctx, 6))
+                background = glassCardBg("#0E1525", "#090D18", alphaColor(colorHex, 75), dpf(ctx, 12f), 2)
+                setPadding(dp(ctx, 10), dp(ctx, 7), dp(ctx, 10), dp(ctx, 7))
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                     if (marginEndDp > 0) marginEnd = dp(ctx, marginEndDp)
                 }
             }
-            val valTv = TextView(ctx).apply { text = "-"; textSize = 12.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor(colorHex)) }
-            val lblTv = TextView(ctx).apply { text = label; textSize = 8f; isSingleLine = true; setTextColor(safeColor("#94A3B8")) }
-            box.addView(valTv); box.addView(lblTv)
+            val valTv = TextView(ctx).apply {
+                text = "-"
+                textSize = 13f
+                isSingleLine = true
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(safeColor(colorHex))
+            }
+            val lblTv = TextView(ctx).apply {
+                text = label
+                textSize = 7.8f
+                letterSpacing = 0.08f
+                isSingleLine = true
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(safeColor("#8A98B5"))
+                setPadding(0, dp(ctx, 1), 0, 0)
+            }
+            box.addView(valTv)
+            box.addView(lblTv)
             return box to valTv
         }
-        val (srvChip, srvValTv) = statChip("SERVERS", "#38BDF8", 6)
-        val (extChip, extValTv) = statChip("EXTRACTORS", "#C084FC", 6)
+        val (srvChip, srvValTv) = statChip("SERVERS", "#38BDF8", 7)
+        val (extChip, extValTv) = statChip("EXTRACTORS", "#C084FC", 7)
         val (spdChip, spdValTv) = statChip("SPEED", "#FBBF24", 0)
-        statsRow.addView(srvChip); statsRow.addView(extChip); statsRow.addView(spdChip)
+        statsRow.addView(srvChip)
+        statsRow.addView(extChip)
+        statsRow.addView(spdChip)
         header.addView(statsRow)
-        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 9) })
+        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 10) })
 
         fun refreshStats() {
             val srvOn = SERVERS.count { isServerEnabled(ctx, it.key) }
@@ -1615,54 +1936,79 @@ object MovieFoxSettingsDialog {
         }
         refreshStats()
 
-        // ── Tab Bar ──────────────────────────────────────────────────────────
+        // ── Sleek Segmented Tab Bar with Icons ───────────────────────────────
         val tabBar = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
-            background = cardBg("#0F131C", "#212A3D", 16f)
+            background = cardBg("#0C111D", "#1E2940", dpf(ctx, 14f), 2)
             setPadding(dp(ctx, 4), dp(ctx, 4), dp(ctx, 4), dp(ctx, 4))
         }
-        val tabTitles = listOf("Providers", "Extractors", "Streaming", "Repos & Manifest", "Health & Logs")
+        val tabTitles = listOf("⚡ Providers", "🧩 Extractors", "🎛️ Streaming", "📦 Repos", "🩺 Health")
         val tabButtons = tabTitles.map { title ->
             Button(ctx).apply {
-                text = title; textSize = 11f; isAllCaps = false; isSingleLine = true
+                text = title
+                textSize = 10.8f
+                isAllCaps = false
+                isSingleLine = true
                 setTypeface(typeface, Typeface.BOLD)
-                setPadding(dp(ctx, 11), 0, dp(ctx, 11), 0)
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 34))
+                setPadding(dp(ctx, 12), 0, dp(ctx, 12), 0)
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 35)).apply {
+                    marginEnd = dp(ctx, 3)
+                }
+                attachPressAnim(this)
             }
         }
         tabButtons.forEach { tabBar.addView(it) }
-        root.addView(HorizontalScrollView(ctx).apply { isHorizontalScrollBarEnabled = false; addView(tabBar) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) })
+        val tabScroll = HorizontalScrollView(ctx).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(tabBar)
+        }
+        root.addView(tabScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 9) })
 
-        // ── Providers Filter Controls ────────────────────────────────────────
+        // ── Providers Filter & Search Controls ───────────────────────────────
         val actionRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
         }
         val searchBox = EditText(ctx).apply {
-            hint = "🔍 Search servers..."
-            setHintTextColor(safeColor("#64748B")); setTextColor(Color.WHITE); textSize = 12f; isSingleLine = true
-            background = cardBg("#10141E", "#253046", 14f)
-            setPadding(dp(ctx, 10), dp(ctx, 6), dp(ctx, 10), dp(ctx, 6))
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 1f).apply { marginEnd = dp(ctx, 6) }
+            hint = "🔍 Search servers, tags..."
+            setHintTextColor(safeColor("#64748B"))
+            setTextColor(Color.WHITE)
+            textSize = 12f
+            isSingleLine = true
+            background = cardBg("#0F1524", "#24314B", dpf(ctx, 12f), 2)
+            setPadding(dp(ctx, 11), dp(ctx, 6), dp(ctx, 11), dp(ctx, 6))
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1f).apply { marginEnd = dp(ctx, 6) }
         }
         val allOnBtn = Button(ctx).apply {
-            text = "ALL ON"; textSize = 9.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE); background = pillBg(activeTheme.primaryHex, 13f)
+            text = "ALL ON"
+            textSize = 9.5f
+            isSingleLine = true
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
             setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 36)).apply { marginEnd = dp(ctx, 5) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 38)).apply { marginEnd = dp(ctx, 5) }
+            attachPressAnim(this)
         }
         val allOffBtn = Button(ctx).apply {
-            text = "ALL OFF"; textSize = 9.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD)
-            setTextColor(Color.WHITE); background = pillBg("#334155", 13f)
+            text = "OFF"
+            textSize = 9.5f
+            isSingleLine = true
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(safeColor("#CBD5E1"))
+            background = cardBg("#1A2234", "#2D3A54", dpf(ctx, 12f), 2)
             setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 36))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 38))
+            attachPressAnim(this)
         }
-        actionRow.addView(searchBox); actionRow.addView(allOnBtn); actionRow.addView(allOffBtn)
+        actionRow.addView(searchBox)
+        actionRow.addView(allOnBtn)
+        actionRow.addView(allOffBtn)
         root.addView(actionRow)
 
         val chipRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
         }
         val categories = listOf("All", "Movies", "Series", "AsianDrama", "Hindi", "Custom")
         val chipViews = mutableListOf<TextView>()
@@ -1672,14 +2018,18 @@ object MovieFoxSettingsDialog {
             chipViews.forEachIndexed { idx, tv ->
                 val active = categories[idx] == selectedCategory
                 tv.setTextColor(if (active) Color.WHITE else safeColor("#94A3B8"))
-                tv.background = pillBg(if (active) activeTheme.primaryHex else "#141926", 11f)
+                tv.background = if (active) neonGradBtn(activeTheme.primaryHex, dpf(ctx, 10f))
+                else cardBg("#111726", "#202A40", dpf(ctx, 10f), 1)
             }
         }
         categories.forEach { cat ->
             val tv = TextView(ctx).apply {
-                text = cat; textSize = 10f; setTypeface(typeface, Typeface.BOLD)
-                setPadding(dp(ctx, 10), dp(ctx, 5), dp(ctx, 10), dp(ctx, 5))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 5) }
+                text = cat
+                textSize = 10f
+                setTypeface(typeface, Typeface.BOLD)
+                setPadding(dp(ctx, 11), dp(ctx, 6), dp(ctx, 11), dp(ctx, 6))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 6) }
+                attachPressAnim(this)
                 setOnClickListener {
                     selectedCategory = cat
                     refreshCategoryChips()
@@ -1702,6 +2052,7 @@ object MovieFoxSettingsDialog {
         lateinit var serverAdapter: ServerListAdapter
         serverAdapter = ServerListAdapter(
             ctx = ctx,
+            getAccentHex = { activeTheme.primaryHex },
             onToggleChanged = { refreshStats() },
             onMoveUp = { srv ->
                 val order = getServerOrder(ctx).toMutableList()
@@ -1726,7 +2077,7 @@ object MovieFoxSettingsDialog {
         val serversListView = ListView(ctx).apply {
             adapter = serverAdapter
             divider = GradientDrawable().apply { setColor(Color.TRANSPARENT) }
-            dividerHeight = dp(ctx, 6)
+            dividerHeight = dp(ctx, 7)
             overScrollMode = View.OVER_SCROLL_NEVER
             isVerticalScrollBarEnabled = false
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, contentHeight)
@@ -1756,12 +2107,14 @@ object MovieFoxSettingsDialog {
         allOnBtn.setOnClickListener {
             val ed = prefs(ctx).edit()
             SERVERS.forEach { ed.putBoolean("$KEY_SRV_PREFIX${it.key.lowercase()}", true) }
-            ed.apply(); applyServerFilter()
+            ed.apply()
+            applyServerFilter()
         }
         allOffBtn.setOnClickListener {
             val ed = prefs(ctx).edit()
             SERVERS.forEach { ed.putBoolean("$KEY_SRV_PREFIX${it.key.lowercase()}", false) }
-            ed.apply(); applyServerFilter()
+            ed.apply()
+            applyServerFilter()
         }
         searchBox.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
@@ -1773,8 +2126,9 @@ object MovieFoxSettingsDialog {
         })
 
         val scrollView = ScrollView(ctx).apply {
-            isVerticalScrollBarEnabled = false; visibility = View.GONE
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, contentHeight + dp(ctx, 72))
+            isVerticalScrollBarEnabled = false
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, contentHeight + dp(ctx, 76))
         }
         val wrapper = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         val extractorPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
@@ -1783,73 +2137,120 @@ object MovieFoxSettingsDialog {
         val healthPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
 
         // ── Tab 2: Extractors ────────────────────────────────────────────────
-        EXTRACTORS.forEach { ext ->
+        val extSec = makeSectionLabel(ctx, "Link Extractors & Mirrors", activeTheme.primaryHex)
+        themedSectionBars.add(extSec.getChildAt(0))
+        extractorPane.addView(extSec)
+
+        EXTRACTORS.forEachIndexed { idx, ext ->
+            val badgeAccent = AVATAR_PALETTE[idx % AVATAR_PALETTE.size]
             val card = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                background = cardBg("#121621", "#232C40", 16f)
-                setPadding(dp(ctx, 11), dp(ctx, 9), dp(ctx, 11), dp(ctx, 9))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = glassCardBg("#131A2B", "#0D121F", safeColor("#222D45"), dpf(ctx, 15f), 2)
+                setPadding(dp(ctx, 11), dp(ctx, 10), dp(ctx, 11), dp(ctx, 10))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
             }
             val col = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(ctx, 8) }
+            }
+            val headRow = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            headRow.addView(TextView(ctx).apply {
+                text = ext.name
+                textSize = 12.5f
+                isSingleLine = true
+                ellipsize = TextUtils.TruncateAt.END
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(Color.WHITE)
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            headRow.addView(TextView(ctx).apply {
+                text = ext.tag
+                textSize = 8f
+                isSingleLine = true
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(safeColor(badgeAccent))
+                background = tintBadgeBg(badgeAccent, dpf(ctx, 6f), 34, 85)
+                setPadding(dp(ctx, 6), dp(ctx, 2), dp(ctx, 6), dp(ctx, 2))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(ctx, 6) }
+            })
+            col.addView(headRow)
+            col.addView(TextView(ctx).apply {
+                text = ext.hosts
+                textSize = 9.5f
+                setTextColor(safeColor("#7D8AA6"))
+                setPadding(0, dp(ctx, 3), 0, 0)
+            })
+            val sw = NeonSwitch(ctx, isExtractorEnabled(ctx, ext.key), activeTheme.primaryHex).apply {
+                onCheckedChange = { checked -> setExtractorEnabled(ctx, ext.key, checked); refreshStats() }
             }
-            col.addView(TextView(ctx).apply { text = "${ext.name} [${ext.tag}]"; textSize = 12.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
-            col.addView(TextView(ctx).apply { text = ext.hosts; textSize = 9.5f; setTextColor(safeColor("#94A3B8")) })
-            val sw = Switch(ctx).apply {
-                isChecked = isExtractorEnabled(ctx, ext.key)
-                setOnCheckedChangeListener { _, checked -> setExtractorEnabled(ctx, ext.key, checked); refreshStats() }
-            }
-            card.setOnClickListener { sw.isChecked = !sw.isChecked }
-            card.addView(col); card.addView(sw)
+            themedSwitches.add(sw)
+            card.setOnClickListener { sw.toggle() }
+            card.addView(col)
+            card.addView(sw)
             extractorPane.addView(card)
         }
 
-        // ── Tab 3: Streaming ─────────────────────────────────────────────────
+        // ── Tab 3: Streaming (Grouped Pro Cards) ─────────────────────────────
         fun makeToggleCard(parent: LinearLayout, title: String, desc: String, initial: Boolean, onChange: (Boolean) -> Unit) {
             val card = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                background = cardBg("#121621", "#232C40", 18f)
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = glassCardBg("#131A2B", "#0D121F", safeColor("#222D45"), dpf(ctx, 15f), 2)
                 setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
             }
             val col = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(ctx, 8) }
             }
             col.addView(TextView(ctx).apply { text = title; textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
-            col.addView(TextView(ctx).apply { text = desc; textSize = 10f; setTextColor(safeColor("#8B93A7")) })
-            val sw = Switch(ctx).apply {
-                isChecked = initial
-                setOnCheckedChangeListener { _, checked -> onChange(checked) }
+            col.addView(TextView(ctx).apply { text = desc; textSize = 10f; setTextColor(safeColor("#7D8AA6")); setPadding(0, dp(ctx, 2), 0, 0) })
+            val sw = NeonSwitch(ctx, initial, activeTheme.primaryHex).apply {
+                onCheckedChange = { checked -> onChange(checked) }
             }
-            card.setOnClickListener { sw.isChecked = !sw.isChecked }
-            card.addView(col); card.addView(sw)
+            themedSwitches.add(sw)
+            card.setOnClickListener { sw.toggle() }
+            card.addView(col)
+            card.addView(sw)
             parent.addView(card)
         }
 
         fun makeStepperCard(parent: LinearLayout, title: String, desc: String, initial: Int, step: Int, minVal: Int, maxVal: Int, suffix: String, onChange: (Int) -> Unit) {
             var cur = initial
             val card = LinearLayout(ctx).apply {
-                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                background = cardBg("#121621", "#232C40", 18f)
-                setPadding(dp(ctx, 12), dp(ctx, 9), dp(ctx, 12), dp(ctx, 9))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = glassCardBg("#131A2B", "#0D121F", safeColor("#222D45"), dpf(ctx, 15f), 2)
+                setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
             }
             val col = LinearLayout(ctx).apply {
                 orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(ctx, 8) }
             }
             col.addView(TextView(ctx).apply { text = title; textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
-            col.addView(TextView(ctx).apply { text = desc; textSize = 10f; setTextColor(safeColor("#8B93A7")) })
+            col.addView(TextView(ctx).apply { text = desc; textSize = 10f; setTextColor(safeColor("#7D8AA6")); setPadding(0, dp(ctx, 2), 0, 0) })
             val valTv = TextView(ctx).apply {
-                text = "$cur$suffix"; textSize = 12.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
+                text = "$cur$suffix"
+                textSize = 12.5f
+                gravity = Gravity.CENTER
+                minWidth = dp(ctx, 40)
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(Color.WHITE)
             }
             val minusBtn = TextView(ctx).apply {
-                text = "−"; textSize = 15f; gravity = Gravity.CENTER; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                background = pillBg("#1E293B", 10f)
+                text = "−"
+                textSize = 16f
+                gravity = Gravity.CENTER
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(Color.WHITE)
+                background = cardBg("#1A2338", "#2C3B59", dpf(ctx, 9f), 1)
                 layoutParams = LinearLayout.LayoutParams(dp(ctx, 30), dp(ctx, 30))
+                attachPressAnim(this)
                 setOnClickListener {
                     if (cur - step >= minVal) {
                         cur -= step; valTv.text = "$cur$suffix"; onChange(cur)
@@ -1857,28 +2258,47 @@ object MovieFoxSettingsDialog {
                 }
             }
             val plusBtn = TextView(ctx).apply {
-                text = "+"; textSize = 15f; gravity = Gravity.CENTER; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                background = pillBg(activeTheme.primaryHex, 10f)
+                text = "+"
+                textSize = 16f
+                gravity = Gravity.CENTER
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(Color.WHITE)
+                background = neonGradBtn(activeTheme.primaryHex, dpf(ctx, 9f))
                 layoutParams = LinearLayout.LayoutParams(dp(ctx, 30), dp(ctx, 30))
+                attachPressAnim(this)
                 setOnClickListener {
                     if (cur + step <= maxVal) {
                         cur += step; valTv.text = "$cur$suffix"; onChange(cur)
                     }
                 }
             }
-            card.addView(col); card.addView(minusBtn); card.addView(valTv); card.addView(plusBtn)
+            themedPlusBtns.add(plusBtn)
+            card.addView(col)
+            card.addView(minusBtn)
+            card.addView(valTv)
+            card.addView(plusBtn)
             parent.addView(card)
         }
 
-        makeToggleCard(streamPane, "4K + 1440p", "Ultra HD & QHD streams", q4k) { q4k = it; setQuality4kEnabled(ctx, it); refreshStats() }
-        makeToggleCard(streamPane, "1080p FHD", "Full HD streams", q1080) { q1080 = it; setQuality1080Enabled(ctx, it); refreshStats() }
+        val qSec = makeSectionLabel(ctx, "🎞️ Video Quality Filters", activeTheme.primaryHex)
+        themedSectionBars.add(qSec.getChildAt(0))
+        streamPane.addView(qSec)
+        makeToggleCard(streamPane, "4K + 1440p UHD", "Ultra HD & QHD streams", q4k) { q4k = it; setQuality4kEnabled(ctx, it); refreshStats() }
+        makeToggleCard(streamPane, "1080p Full HD", "Crisp FHD streams", q1080) { q1080 = it; setQuality1080Enabled(ctx, it); refreshStats() }
         makeToggleCard(streamPane, "720p HD & Web", "Standard HD & WebRip", q720) { q720 = it; setQuality720Enabled(ctx, it); refreshStats() }
         makeToggleCard(streamPane, "480p & Below", "Data saver streams", q480) { q480 = it; setQuality480Enabled(ctx, it); refreshStats() }
+
+        val pSec = makeSectionLabel(ctx, "⚡ Playback & Engine", activeTheme.primaryHex)
+        themedSectionBars.add(pSec.getChildAt(0))
+        streamPane.addView(pSec)
         makeToggleCard(streamPane, "Hindi Providers Only 🇮🇳", "Hide English-only providers", hindiOnly) { hindiOnly = it; setHindiOnly(ctx, it); applyServerFilter() }
         makeToggleCard(streamPane, "Download Only Links", "Prefer direct MP4/MKV links", downloadOnly) { downloadOnly = it; setDownloadOnly(ctx, it) }
         makeToggleCard(streamPane, "Zero-Buffer Mode", "Prioritize fast HLS/MP4 streams first", lowBuffer) { lowBuffer = it; setLowBufferMode(ctx, it) }
         makeToggleCard(streamPane, "Shuffle Home", "Shuffle home categories", shuffleHome) { shuffleHome = it; setShuffleHomeCategories(ctx, it) }
 
+        val tSec = makeSectionLabel(ctx, "🚀 Performance Tuning", activeTheme.primaryHex)
+        themedSectionBars.add(tSec.getChildAt(0))
+        streamPane.addView(tSec)
         makeStepperCard(streamPane, "Parallel Workers", "Concurrent server fetch threads", currentConcurrency, 2, 4, 40, "x") {
             currentConcurrency = it; setConcurrency(ctx, it); refreshStats()
         }
@@ -1886,43 +2306,130 @@ object MovieFoxSettingsDialog {
             currentTimeout = it; setTimeoutSeconds(ctx, it)
         }
 
+        val aSec = makeSectionLabel(ctx, "🎨 Appearance & Network", activeTheme.primaryHex)
+        themedSectionBars.add(aSec.getChildAt(0))
+        streamPane.addView(aSec)
+
+        // Theme Picker Card
         val themeCard = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#232C40", 18f)
+            orientation = LinearLayout.VERTICAL
+            background = glassCardBg("#131A2B", "#0D121F", safeColor("#222D45"), dpf(ctx, 15f), 2)
             setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
         }
-        themeCard.addView(TextView(ctx).apply { text = "🎨 UI Colour Theme"; textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
+        themeCard.addView(TextView(ctx).apply { text = "UI Accent Theme"; textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
         val themeScroll = HorizontalScrollView(ctx).apply { isHorizontalScrollBarEnabled = false }
-        val themeRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(ctx, 7), 0, 0) }
+        val themeRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(ctx, 8), 0, 0) }
+        val themeChipMap = linkedMapOf<String, LinearLayout>()
+
+        lateinit var applyThemeEverywhere: () -> Unit
+
+        fun refreshThemeSwatches() {
+            UI_THEMES.forEach { pal ->
+                val chip = themeChipMap[pal.id] ?: return@forEach
+                val isSel = pal.id == activeTheme.id
+                chip.background = if (isSel) {
+                    GradientDrawable().apply {
+                        setColor(alphaColor(pal.primaryHex, 70))
+                        cornerRadius = dpf(ctx, 10f)
+                        setStroke(dp(ctx, 2), safeColor(pal.primaryHex))
+                    }
+                } else {
+                    cardBg("#0F1523", "#222E46", dpf(ctx, 10f), 1)
+                }
+            }
+        }
+
         UI_THEMES.forEach { pal ->
-            themeRow.addView(TextView(ctx).apply {
-                text = pal.name; textSize = 10.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                background = pillBg(pal.primaryHex, 11f)
-                setPadding(dp(ctx, 10), dp(ctx, 6), dp(ctx, 10), dp(ctx, 6))
+            val chip = LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(ctx, 10), dp(ctx, 6), dp(ctx, 11), dp(ctx, 6))
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 6) }
+                attachPressAnim(this)
+                addView(View(ctx).apply {
+                    layoutParams = LinearLayout.LayoutParams(dp(ctx, 10), dp(ctx, 10)).apply { marginEnd = dp(ctx, 6) }
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(safeColor(pal.primaryHex))
+                    }
+                })
+                addView(TextView(ctx).apply {
+                    text = pal.name
+                    textSize = 10.5f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.WHITE)
+                })
                 setOnClickListener {
                     activeTheme = pal
                     setSelectedTheme(ctx, pal.id)
-                    applyHeaderTheme()
-                    allOnBtn.background = pillBg(pal.primaryHex, 13f)
-                    refreshCategoryChips()
+                    applyThemeEverywhere()
+                    refreshThemeSwatches()
                 }
-            })
+            }
+            themeChipMap[pal.id] = chip
+            themeRow.addView(chip)
         }
+        refreshThemeSwatches()
         themeScroll.addView(themeRow)
         themeCard.addView(themeScroll)
         streamPane.addView(themeCard)
 
-        val hostCard = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#232C40", 18f)
+        // Preferred Player Chips Card
+        val playerCard = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = glassCardBg("#131A2B", "#0D121F", safeColor("#222D45"), dpf(ctx, 15f), 2)
             setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+        }
+        playerCard.addView(TextView(ctx).apply { text = "🎬 Preferred Player"; textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
+        val playerScroll = HorizontalScrollView(ctx).apply { isHorizontalScrollBarEnabled = false }
+        val playerRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(ctx, 8), 0, 0) }
+        val playerChips = mutableListOf<TextView>()
+        fun refreshPlayerChips() {
+            playerChips.forEachIndexed { idx, tv ->
+                val active = PLAYER_OPTIONS[idx].equals(selectedPlayer, true)
+                tv.setTextColor(if (active) Color.WHITE else safeColor("#94A3B8"))
+                tv.background = if (active) neonGradBtn(activeTheme.primaryHex, dpf(ctx, 10f))
+                else cardBg("#0F1523", "#222E46", dpf(ctx, 10f), 1)
+            }
+        }
+        PLAYER_OPTIONS.forEach { pl ->
+            val tv = TextView(ctx).apply {
+                text = pl
+                textSize = 10.5f
+                setTypeface(typeface, Typeface.BOLD)
+                setPadding(dp(ctx, 11), dp(ctx, 6), dp(ctx, 11), dp(ctx, 6))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 6) }
+                attachPressAnim(this)
+                setOnClickListener {
+                    selectedPlayer = pl
+                    setPreferredPlayer(ctx, pl)
+                    refreshPlayerChips()
+                }
+            }
+            playerChips.add(tv)
+            playerRow.addView(tv)
+        }
+        refreshPlayerChips()
+        playerScroll.addView(playerRow)
+        playerCard.addView(playerScroll)
+        streamPane.addView(playerCard)
+
+        // Sflix Mirror Host Card
+        val hostCard = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = glassCardBg("#131A2B", "#0D121F", safeColor("#222D45"), dpf(ctx, 15f), 2)
+            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
         }
         hostCard.addView(TextView(ctx).apply { text = "🌐 Sflix Mirror Host"; textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE) })
-        val rg = RadioGroup(ctx)
+        val rg = RadioGroup(ctx).apply { setPadding(0, dp(ctx, 4), 0, 0) }
         SFLIX_HOSTS.forEach { h ->
             rg.addView(RadioButton(ctx).apply {
-                text = h; textSize = 11f; setTextColor(safeColor("#CBD5E1"))
+                text = h
+                textSize = 11.2f
+                setTextColor(safeColor("#CBD5E1"))
                 isChecked = selectedSflixHost.equals(h, true)
                 setOnCheckedChangeListener { _, checked -> if (checked) selectedSflixHost = h }
             })
@@ -1933,53 +2440,66 @@ object MovieFoxSettingsDialog {
         // ── Tab 4: Repos & Manifest (CS3 / SkyStream / Nuvio Manifest URL) ──
         val addRepoCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            background = cardBg("#0C1322", "#2563EB", 18f, 2)
-            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
+            background = glassCardBg("#0E1A30", "#0A1120", alphaColor("#38BDF8", 115), dpf(ctx, 16f), 2)
+            setPadding(dp(ctx, 13), dp(ctx, 11), dp(ctx, 13), dp(ctx, 11))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 9) }
         }
         addRepoCard.addView(TextView(ctx).apply {
-            text = "🔗 Add CS3 / SkyStream / Nuvio Manifest URL"
-            textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            text = "🔗 Add CS3 / SkyStream / Nuvio Manifest"
+            textSize = 13.5f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
         })
         addRepoCard.addView(TextView(ctx).apply {
             text = "Paste repo.json, plugins.json, .cs3, SkyStream repo, or Nuvio/Stremio manifest.json link"
-            textSize = 9.5f; setTextColor(safeColor("#94A3B8"))
-            setPadding(0, dp(ctx, 2), 0, dp(ctx, 6))
+            textSize = 9.5f
+            setTextColor(safeColor("#8A9AB8"))
+            setPadding(0, dp(ctx, 3), 0, dp(ctx, 8))
         })
 
         val repoNameInput = EditText(ctx).apply {
             hint = "Repo / Addon Name (optional)"
-            setHintTextColor(safeColor("#64748B")); setTextColor(Color.WHITE); textSize = 11.5f; isSingleLine = true
-            background = cardBg("#101726", "#2A3650", 12f)
-            setPadding(dp(ctx, 10), dp(ctx, 7), dp(ctx, 10), dp(ctx, 7))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 36)).apply { bottomMargin = dp(ctx, 6) }
+            setHintTextColor(safeColor("#64748B"))
+            setTextColor(Color.WHITE)
+            textSize = 11.5f
+            isSingleLine = true
+            background = cardBg("#0B111E", "#263654", dpf(ctx, 11f), 2)
+            setPadding(dp(ctx, 11), dp(ctx, 7), dp(ctx, 11), dp(ctx, 7))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 38)).apply { bottomMargin = dp(ctx, 7) }
         }
         val repoUrlInput = EditText(ctx).apply {
             hint = "https://.../repo.json or .../manifest.json"
-            setHintTextColor(safeColor("#64748B")); setTextColor(Color.WHITE); textSize = 11.5f; isSingleLine = true
-            background = cardBg("#101726", "#2A3650", 12f)
-            setPadding(dp(ctx, 10), dp(ctx, 7), dp(ctx, 10), dp(ctx, 7))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 36)).apply { bottomMargin = dp(ctx, 6) }
+            setHintTextColor(safeColor("#64748B"))
+            setTextColor(Color.WHITE)
+            textSize = 11.5f
+            isSingleLine = true
+            background = cardBg("#0B111E", "#263654", dpf(ctx, 11f), 2)
+            setPadding(dp(ctx, 11), dp(ctx, 7), dp(ctx, 11), dp(ctx, 7))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 38)).apply { bottomMargin = dp(ctx, 8) }
         }
 
         val repoTypes = listOf("AUTO", "CS3", "SKYSTREAM", "NUVIO")
         val repoTypeChips = mutableListOf<TextView>()
         val repoTypeRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 9) }
         }
         fun refreshRepoTypeChips() {
             repoTypeChips.forEachIndexed { i, tv ->
                 val active = repoTypes[i] == selectedRepoType
                 tv.setTextColor(if (active) Color.WHITE else safeColor("#94A3B8"))
-                tv.background = pillBg(if (active) activeTheme.primaryHex else "#161E31", 10f)
+                tv.background = if (active) neonGradBtn(activeTheme.primaryHex, dpf(ctx, 9f))
+                else cardBg("#11192B", "#22304C", dpf(ctx, 9f), 1)
             }
         }
         repoTypes.forEach { rt ->
             val tv = TextView(ctx).apply {
-                text = rt; textSize = 9.5f; setTypeface(typeface, Typeface.BOLD)
-                setPadding(dp(ctx, 10), dp(ctx, 5), dp(ctx, 10), dp(ctx, 5))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 5) }
+                text = rt
+                textSize = 9.5f
+                setTypeface(typeface, Typeface.BOLD)
+                setPadding(dp(ctx, 10), dp(ctx, 6), dp(ctx, 10), dp(ctx, 6))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 6) }
+                attachPressAnim(this)
                 setOnClickListener { selectedRepoType = rt; refreshRepoTypeChips() }
             }
             repoTypeChips.add(tv)
@@ -2010,9 +2530,13 @@ object MovieFoxSettingsDialog {
 
         val addBtnRow = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
         addBtnRow.addView(Button(ctx).apply {
-            text = "+ ADD & FETCH"; textSize = 10.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            background = pillBg("#059669", 12f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 1.3f).apply { marginEnd = dp(ctx, 5) }
+            text = "+ ADD & FETCH"
+            textSize = 10.5f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            background = neonGradBtn("#059669", dpf(ctx, 11f))
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1.3f).apply { marginEnd = dp(ctx, 6) }
+            attachPressAnim(this)
             setOnClickListener {
                 val rawUrl = repoUrlInput.text?.toString().orEmpty().trim()
                 if (rawUrl.isBlank() || !rawUrl.contains(".")) {
@@ -2045,9 +2569,13 @@ object MovieFoxSettingsDialog {
             }
         })
         addBtnRow.addView(Button(ctx).apply {
-            text = "FETCH ALL"; textSize = 10.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            background = pillBg("#0284C7", 12f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 1f)
+            text = "FETCH ALL"
+            textSize = 10.5f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            background = neonGradBtn("#0284C7", dpf(ctx, 11f))
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 38), 1f)
+            attachPressAnim(this)
             setOnClickListener {
                 dialogScope.launch {
                     val total = syncAllReposAndSave()
@@ -2072,32 +2600,48 @@ object MovieFoxSettingsDialog {
                     else -> "#A855F7"
                 }
                 val card = LinearLayout(ctx).apply {
-                    orientation = LinearLayout.VERTICAL; background = cardBg("#121621", "#232C40", 18f)
+                    orientation = LinearLayout.VERTICAL
+                    background = glassCardBg("#131A2B", "#0D121F", alphaColor(typeColor, 75), dpf(ctx, 15f), 2)
                     setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
-                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
                 }
                 val head = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
                 head.addView(TextView(ctx).apply {
-                    text = repo.name; textSize = 12.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    text = repo.name
+                    textSize = 12.8f
+                    isSingleLine = true
+                    ellipsize = TextUtils.TruncateAt.END
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.WHITE)
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = dp(ctx, 6) }
                 })
                 head.addView(TextView(ctx).apply {
                     text = "${repo.repoType} • ${repo.serverCount}"
-                    textSize = 8.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                    background = pillBg(typeColor, 8f)
-                    setPadding(dp(ctx, 6), dp(ctx, 2), dp(ctx, 6), dp(ctx, 2))
+                    textSize = 8.5f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(safeColor(typeColor))
+                    background = tintBadgeBg(typeColor, dpf(ctx, 8f), 40, 110)
+                    setPadding(dp(ctx, 7), dp(ctx, 3), dp(ctx, 7), dp(ctx, 3))
                 })
                 card.addView(head)
                 card.addView(TextView(ctx).apply {
-                    text = repo.repoUrl; textSize = 9.5f; setTextColor(safeColor("#94A3B8"))
-                    setPadding(0, dp(ctx, 3), 0, dp(ctx, 6))
+                    text = repo.repoUrl
+                    textSize = 9.5f
+                    maxLines = 2
+                    ellipsize = TextUtils.TruncateAt.END
+                    setTextColor(safeColor("#7D8AA6"))
+                    setPadding(0, dp(ctx, 4), 0, dp(ctx, 8))
                 })
 
                 val rowBtns = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL }
                 rowBtns.addView(Button(ctx).apply {
-                    text = "FETCH SERVERS"; textSize = 10f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                    background = pillBg("#0284C7", 12f)
-                    layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 34), 1f).apply { marginEnd = dp(ctx, 5) }
+                    text = "⟳ FETCH SERVERS"
+                    textSize = 10f
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.WHITE)
+                    background = neonGradBtn("#0284C7", dpf(ctx, 10f))
+                    layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 35), 1f).apply { marginEnd = dp(ctx, 6) }
+                    attachPressAnim(this)
                     setOnClickListener {
                         dialogScope.launch {
                             val fetched = fetchServersFromCs3Repo(repo)
@@ -2113,10 +2657,14 @@ object MovieFoxSettingsDialog {
                 })
                 if (repo.id !in permanentIds) {
                     rowBtns.addView(Button(ctx).apply {
-                        text = "DELETE"; textSize = 10f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#FCA5A5"))
-                        background = cardBg("#2B1114", "#7F1D1D", 12f, 1)
-                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 34))
+                        text = "DELETE"
+                        textSize = 10f
+                        setTypeface(typeface, Typeface.BOLD)
+                        setTextColor(safeColor("#FCA5A5"))
+                        background = tintBadgeBg("#EF4444", dpf(ctx, 10f), 42, 120)
+                        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 35))
                         setPadding(dp(ctx, 12), 0, dp(ctx, 12), 0)
+                        attachPressAnim(this)
                         setOnClickListener {
                             cs3RepoList.remove(repo)
                             saveCs3Repos(ctx, cs3RepoList)
@@ -2139,24 +2687,31 @@ object MovieFoxSettingsDialog {
         // ── Tab 5: Health & Logs (CF Solve All + Structured Diagnostics) ─────
         val cfBox = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
-            background = cardBg("#0A1617", "#1E3A3A", 18f, 2)
-            setPadding(dp(ctx, 11), dp(ctx, 10), dp(ctx, 11), dp(ctx, 10))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
+            background = glassCardBg("#0B1D1E", "#081216", alphaColor("#10B981", 105), dpf(ctx, 16f), 2)
+            setPadding(dp(ctx, 12), dp(ctx, 11), dp(ctx, 12), dp(ctx, 11))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 9) }
         }
         val cfHeader = LinearLayout(ctx).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         cfHeader.addView(TextView(ctx).apply {
-            text = "🛡️ Cloudflare Bypass"
-            textSize = 13f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            text = "🛡️ Cloudflare Shield"
+            textSize = 13.5f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
 
         lateinit var refreshHealthPane: () -> Unit
 
         cfHeader.addView(Button(ctx).apply {
-            text = "⚡ Solve All"; textSize = 9.5f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            background = pillBg("#059669", 10f)
-            setPadding(dp(ctx, 9), 0, dp(ctx, 9), 0)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 32)).apply { marginEnd = dp(ctx, 4) }
+            text = "⚡ Solve All"
+            textSize = 9.5f
+            isAllCaps = false
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            background = neonGradBtn("#059669", dpf(ctx, 9f))
+            setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 32)).apply { marginEnd = dp(ctx, 5) }
+            attachPressAnim(this)
             setOnClickListener {
                 val cfTargets = SERVERS.filter { isServerEnabled(ctx, it.key) && !isDomainCfVerified(ctx, it.probeUrl) }
                     .ifEmpty { SERVERS.filter { isServerEnabled(ctx, it.key) } }
@@ -2167,10 +2722,15 @@ object MovieFoxSettingsDialog {
             }
         })
         cfHeader.addView(Button(ctx).apply {
-            text = "✓ Sync"; textSize = 9.5f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            background = pillBg("#2563EB", 10f)
-            setPadding(dp(ctx, 9), 0, dp(ctx, 9), 0)
+            text = "✓ Sync"
+            textSize = 9.5f
+            isAllCaps = false
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            background = neonGradBtn("#2563EB", dpf(ctx, 9f))
+            setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(ctx, 32))
+            attachPressAnim(this)
             setOnClickListener {
                 val synced = syncCookiesFromWebView(ctx)
                 refreshHealthPane()
@@ -2181,29 +2741,38 @@ object MovieFoxSettingsDialog {
 
         cfBox.addView(TextView(ctx).apply {
             text = "Auto-verifies non-CF sites & pauses only when a real Cloudflare challenge appears."
-            textSize = 9.5f; setTextColor(safeColor("#94A3B8"))
-            setPadding(0, dp(ctx, 3), 0, dp(ctx, 5))
+            textSize = 9.5f
+            setTextColor(safeColor("#8EA3B5"))
+            setPadding(0, dp(ctx, 4), 0, dp(ctx, 7))
         })
 
         val wvRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 5) }
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
         }
         wvRow.addView(TextView(ctx).apply {
             text = "Use WebView for CF challenges"
-            textSize = 11.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
+            textSize = 11.8f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
-        wvRow.addView(Switch(ctx).apply {
-            isChecked = useWebViewCf
-            setOnCheckedChangeListener { _, checked -> useWebViewCf = checked; setUseWebViewCf(ctx, checked) }
-        })
+        val cfSwitch = NeonSwitch(ctx, useWebViewCf, activeTheme.primaryHex).apply {
+            onCheckedChange = { checked -> useWebViewCf = checked; setUseWebViewCf(ctx, checked) }
+        }
+        themedSwitches.add(cfSwitch)
+        wvRow.setOnClickListener { cfSwitch.toggle() }
+        wvRow.addView(cfSwitch)
         cfBox.addView(wvRow)
 
         val cfStatusBanner = TextView(ctx).apply {
-            textSize = 10.5f; setTypeface(typeface, Typeface.BOLD); gravity = Gravity.CENTER
+            textSize = 10.5f
+            setTypeface(typeface, Typeface.BOLD)
+            gravity = Gravity.CENTER
             setPadding(dp(ctx, 10), dp(ctx, 8), dp(ctx, 10), dp(ctx, 8))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+            attachPressAnim(this)
         }
         fun refreshCfBanner() {
             val totalSrvs = SERVERS.size.coerceAtLeast(1)
@@ -2211,15 +2780,15 @@ object MovieFoxSettingsDialog {
             if (solvedSrvs >= totalSrvs) {
                 cfStatusBanner.text = "✓ All Servers Verified ($solvedSrvs/$totalSrvs)"
                 cfStatusBanner.setTextColor(safeColor("#6EE7B7"))
-                cfStatusBanner.background = cardBg("#08241C", "#10B981", 12f, 1)
+                cfStatusBanner.background = tintBadgeBg("#10B981", dpf(ctx, 10f), 42, 120)
             } else if (solvedSrvs > 0) {
                 cfStatusBanner.text = "✓ Verified ($solvedSrvs/$totalSrvs) — Tap to Verify Remaining"
                 cfStatusBanner.setTextColor(safeColor("#FDE68A"))
-                cfStatusBanner.background = cardBg("#211A0A", "#D97706", 12f, 1)
+                cfStatusBanner.background = tintBadgeBg("#D97706", dpf(ctx, 10f), 42, 120)
             } else {
                 cfStatusBanner.text = "⚡ Tap Here to Verify & Solve CF for All Servers"
                 cfStatusBanner.setTextColor(safeColor("#93C5FD"))
-                cfStatusBanner.background = cardBg("#0B1B2E", "#2563EB", 12f, 1)
+                cfStatusBanner.background = tintBadgeBg("#2563EB", dpf(ctx, 10f), 42, 120)
             }
         }
         cfStatusBanner.setOnClickListener {
@@ -2229,10 +2798,14 @@ object MovieFoxSettingsDialog {
         cfBox.addView(cfStatusBanner)
 
         cfBox.addView(Button(ctx).apply {
-            text = "Clear CF cookies"; textSize = 10.5f; isAllCaps = false; setTypeface(typeface, Typeface.BOLD)
+            text = "Clear CF cookies"
+            textSize = 10.5f
+            isAllCaps = false
+            setTypeface(typeface, Typeface.BOLD)
             setTextColor(safeColor("#FCA5A5"))
-            background = cardBg("#2B1114", "#7F1D1D", 12f, 1)
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 34))
+            background = tintBadgeBg("#EF4444", dpf(ctx, 10f), 36, 110)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 35))
+            attachPressAnim(this)
             setOnClickListener {
                 clearAllCfCookies(ctx)
                 refreshHealthPane()
@@ -2243,27 +2816,32 @@ object MovieFoxSettingsDialog {
         // Live Diagnostics Metric Strip
         val metricsRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
         }
         fun metricPill(label: String, colorHex: String, endDp: Int): Pair<LinearLayout, TextView> {
             val box = LinearLayout(ctx).apply {
-                orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
-                background = cardBg("#0E1320", "#232D42", 12f, 1)
-                setPadding(dp(ctx, 6), dp(ctx, 5), dp(ctx, 6), dp(ctx, 5))
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                background = glassCardBg("#111829", "#0B101C", alphaColor(colorHex, 80), dpf(ctx, 11f), 2)
+                setPadding(dp(ctx, 6), dp(ctx, 7), dp(ctx, 6), dp(ctx, 7))
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                     if (endDp > 0) marginEnd = dp(ctx, endDp)
                 }
             }
-            val vTv = TextView(ctx).apply { text = "0"; textSize = 11.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor(colorHex)) }
-            val lTv = TextView(ctx).apply { text = label; textSize = 7.5f; setTextColor(safeColor("#94A3B8")) }
-            box.addView(vTv); box.addView(lTv)
+            val vTv = TextView(ctx).apply { text = "0"; textSize = 12f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor(colorHex)) }
+            val lTv = TextView(ctx).apply { text = label; textSize = 7.5f; letterSpacing = 0.06f; setTypeface(typeface, Typeface.BOLD); setTextColor(safeColor("#8A98B5")) }
+            box.addView(vTv)
+            box.addView(lTv)
             return box to vTv
         }
         val (mLiveBox, mLiveTv) = metricPill("LIVE", "#34D399", 5)
         val (mToBox, mToTv) = metricPill("TIMEOUT", "#FBBF24", 5)
         val (mParseBox, mParseTv) = metricPill("PARSE ERR", "#F87171", 5)
         val (mAvgBox, mAvgTv) = metricPill("AVG MS", "#38BDF8", 0)
-        metricsRow.addView(mLiveBox); metricsRow.addView(mToBox); metricsRow.addView(mParseBox); metricsRow.addView(mAvgBox)
+        metricsRow.addView(mLiveBox)
+        metricsRow.addView(mToBox)
+        metricsRow.addView(mParseBox)
+        metricsRow.addView(mAvgBox)
 
         // Log Filter Chips
         val logFilterNames = listOf("ALL", "SEARCH", "LOADLINK", "PARSING", "TIMEOUT", "ERROR")
@@ -2274,30 +2852,36 @@ object MovieFoxSettingsDialog {
         }
         val healthCardsHolder = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         val logTv = TextView(ctx).apply {
-            textSize = 9.5f; setTextColor(safeColor("#E2E8F0"))
-            background = cardBg("#0A0E17", "#26324A", 14f, 2)
-            setPadding(dp(ctx, 10), dp(ctx, 9), dp(ctx, 10), dp(ctx, 9))
+            textSize = 9.2f
+            typeface = Typeface.MONOSPACE
+            setTextColor(safeColor("#CBD5E1"))
+            background = cardBg("#060911", "#1E2A42", dpf(ctx, 13f), 2)
+            setPadding(dp(ctx, 11), dp(ctx, 10), dp(ctx, 11), dp(ctx, 10))
         }
         fun refreshLogChips() {
             logFilterChips.forEachIndexed { idx, tv ->
                 val active = logFilterNames[idx] == selectedLogFilter
                 tv.setTextColor(if (active) Color.WHITE else safeColor("#94A3B8"))
-                tv.background = pillBg(if (active) activeTheme.primaryHex else "#141926", 10f)
+                tv.background = if (active) neonGradBtn(activeTheme.primaryHex, dpf(ctx, 9f))
+                else cardBg("#101624", "#202A40", dpf(ctx, 9f), 1)
             }
         }
         fun renderFilteredLogs() {
             val logs = getDiagnosticLogs(selectedLogFilter)
             logTv.text = if (logs.isEmpty()) {
-                "No [$selectedLogFilter] logs yet • ADB tag: $LOG_TAG"
+                "> No [$selectedLogFilter] logs yet • ADB tag: $LOG_TAG"
             } else {
                 logs.asReversed().take(80).joinToString("\n\n")
             }
         }
         logFilterNames.forEach { cat ->
             val tv = TextView(ctx).apply {
-                text = cat; textSize = 9f; setTypeface(typeface, Typeface.BOLD)
-                setPadding(dp(ctx, 9), dp(ctx, 5), dp(ctx, 9), dp(ctx, 5))
+                text = cat
+                textSize = 9f
+                setTypeface(typeface, Typeface.BOLD)
+                setPadding(dp(ctx, 10), dp(ctx, 5), dp(ctx, 10), dp(ctx, 5))
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 5) }
+                attachPressAnim(this)
                 setOnClickListener {
                     selectedLogFilter = cat
                     refreshLogChips()
@@ -2334,15 +2918,20 @@ object MovieFoxSettingsDialog {
         }
 
         val testAllBtn = Button(ctx).apply {
-            text = "TEST ALL (${SERVERS.size})"; textSize = 9.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            background = pillBg("#059669", 12f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 35), 1.25f).apply { marginEnd = dp(ctx, 5) }
+            text = "⚡ TEST ALL (${SERVERS.size})"
+            textSize = 9.5f
+            isSingleLine = true
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            background = neonGradBtn("#059669", dpf(ctx, 11f))
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 1.3f).apply { marginEnd = dp(ctx, 6) }
+            attachPressAnim(this)
             setOnClickListener {
                 text = "TESTING..."
                 isEnabled = false
                 dialogScope.launch {
                     supervisorScope { SERVERS.map { srv -> async { probeServerLive(srv) } }.awaitAll() }
-                    text = "TEST ALL (${SERVERS.size})"
+                    text = "⚡ TEST ALL (${SERVERS.size})"
                     isEnabled = true
                     refreshHealthPane()
                     applyServerFilter()
@@ -2354,12 +2943,17 @@ object MovieFoxSettingsDialog {
         healthPane.addView(metricsRow)
         healthPane.addView(LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
             addView(testAllBtn)
             addView(Button(ctx).apply {
-                text = "COPY LOGS"; textSize = 9.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                background = pillBg("#0284C7", 12f)
-                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 35), 1f).apply { marginEnd = dp(ctx, 5) }
+                text = "COPY LOGS"
+                textSize = 9.5f
+                isSingleLine = true
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(Color.WHITE)
+                background = neonGradBtn("#0284C7", dpf(ctx, 11f))
+                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 1f).apply { marginEnd = dp(ctx, 6) }
+                attachPressAnim(this)
                 setOnClickListener {
                     val report = buildString {
                         appendLine("=== MovieFox Diagnostics ($selectedLogFilter) ===")
@@ -2374,9 +2968,14 @@ object MovieFoxSettingsDialog {
                 }
             })
             addView(Button(ctx).apply {
-                text = "CLEAR"; textSize = 9.5f; isSingleLine = true; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-                background = pillBg("#334155", 12f)
-                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 35), 0.75f)
+                text = "CLEAR"
+                textSize = 9.5f
+                isSingleLine = true
+                setTypeface(typeface, Typeface.BOLD)
+                setTextColor(safeColor("#CBD5E1"))
+                background = cardBg("#1A2234", "#2D3A54", dpf(ctx, 11f), 1)
+                layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 36), 0.72f)
+                attachPressAnim(this)
                 setOnClickListener {
                     clearDiagnosticLogs()
                     serverHealthMap.clear()
@@ -2386,6 +2985,10 @@ object MovieFoxSettingsDialog {
             })
         })
         healthPane.addView(healthCardsHolder)
+
+        val logSec = makeSectionLabel(ctx, "Live Console Output", activeTheme.primaryHex)
+        themedSectionBars.add(logSec.getChildAt(0))
+        healthPane.addView(logSec)
         healthPane.addView(HorizontalScrollView(ctx).apply { isHorizontalScrollBarEnabled = false; addView(logFilterRow) })
         healthPane.addView(logTv)
         refreshHealthPane()
@@ -2395,31 +2998,49 @@ object MovieFoxSettingsDialog {
         scrollView.addView(wrapper)
 
         fun selectTab(idx: Int) {
+            activeTabIdx = idx
             if (idx == 0) {
                 serversListView.visibility = View.VISIBLE
                 actionRow.visibility = View.VISIBLE
                 chipScroll.visibility = View.VISIBLE
                 scrollView.visibility = View.GONE
+                serversListView.alpha = 0f
+                serversListView.translationY = dpf(ctx, 8f)
+                serversListView.animate().alpha(1f).translationY(0f).setDuration(150).start()
             } else {
                 serversListView.visibility = View.GONE
                 actionRow.visibility = View.GONE
                 chipScroll.visibility = View.GONE
                 scrollView.visibility = View.VISIBLE
-                scrollPanes.forEachIndexed { i, p -> p.visibility = if (i == idx - 1) View.VISIBLE else View.GONE }
+                scrollView.scrollTo(0, 0)
+                scrollPanes.forEachIndexed { i, p ->
+                    val showPane = (i == idx - 1)
+                    p.visibility = if (showPane) View.VISIBLE else View.GONE
+                    if (showPane) {
+                        p.alpha = 0f
+                        p.translationY = dpf(ctx, 8f)
+                        p.animate().alpha(1f).translationY(0f).setDuration(150).start()
+                    }
+                }
                 if (idx == 4) refreshHealthPane()
             }
             tabButtons.forEachIndexed { i, btn ->
                 if (i == idx) {
-                    btn.background = pillBg(activeTheme.primaryHex, 13f)
+                    btn.background = neonGradBtn(activeTheme.primaryHex, dpf(ctx, 11f))
                     btn.setTextColor(Color.WHITE)
                 } else {
                     btn.setBackgroundColor(Color.TRANSPARENT)
-                    btn.setTextColor(safeColor("#8B93A7"))
+                    btn.setTextColor(safeColor("#8B98B3"))
                 }
+            }
+            // Auto-scroll selected tab into view
+            tabScroll.post {
+                val targetBtn = tabButtons[idx]
+                val scrollX = (targetBtn.left - tabScroll.width / 2 + targetBtn.width / 2).coerceAtLeast(0)
+                tabScroll.smoothScrollTo(scrollX, 0)
             }
         }
         tabButtons.forEachIndexed { i, btn -> btn.setOnClickListener { selectTab(i) } }
-        selectTab(0)
 
         root.addView(serversListView)
         root.addView(scrollView)
@@ -2427,14 +3048,27 @@ object MovieFoxSettingsDialog {
         val dialog = AlertDialog.Builder(ctx).setView(root).create()
         dialog.setOnDismissListener { runCatching { dialogScope.cancel() } }
 
+        // Subtle Footer Divider
+        root.addView(View(ctx).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 1)).apply {
+                topMargin = dp(ctx, 10)
+                bottomMargin = dp(ctx, 9)
+            }
+            setBackgroundColor(safeColor("#1C263B"))
+        })
+
         val footer = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(ctx, 9) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
-        footer.addView(Button(ctx).apply {
-            text = "RESET"; textSize = 11.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            background = pillBg("#1C2333", 15f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 40), 1f).apply { marginEnd = dp(ctx, 8) }
+        val resetBtn = Button(ctx).apply {
+            text = "RESET"
+            textSize = 11.5f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(safeColor("#CBD5E1"))
+            background = cardBg("#151C2C", "#2A3652", dpf(ctx, 13f), 2)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 42), 1f).apply { marginEnd = dp(ctx, 8) }
+            attachPressAnim(this)
             setOnClickListener {
                 prefs(ctx).edit().clear().apply()
                 cachedCs3Repos = null
@@ -2444,11 +3078,15 @@ object MovieFoxSettingsDialog {
                 applyServerFilter()
                 runCatching { dialog.dismiss() }
             }
-        })
-        footer.addView(Button(ctx).apply {
-            text = "SAVE & APPLY"; textSize = 11.5f; setTypeface(typeface, Typeface.BOLD); setTextColor(Color.WHITE)
-            background = pillBg(activeTheme.primaryHex, 15f)
-            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 40), 1.3f).apply { marginStart = dp(ctx, 8) }
+        }
+        val saveApplyBtn = Button(ctx).apply {
+            text = "SAVE & APPLY"
+            textSize = 11.8f
+            letterSpacing = 0.04f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 42), 1.4f).apply { marginStart = dp(ctx, 4) }
+            attachPressAnim(this)
             setOnClickListener {
                 saveCs3Repos(ctx, cs3RepoList)
                 setSflixHost(ctx, selectedSflixHost)
@@ -2467,13 +3105,46 @@ object MovieFoxSettingsDialog {
                 safeToast(ctx, "Settings saved & applied")
                 runCatching { dialog.dismiss() }
             }
-        })
+        }
+        footer.addView(resetBtn)
+        footer.addView(saveApplyBtn)
         root.addView(footer)
+
+        // Master Live Theme Applier
+        applyThemeEverywhere = {
+            root.background = glassCardBg("#090D18", "#05070E", alphaColor(activeTheme.primaryHex, 95), dpf(ctx, 24f), 3)
+            header.background = GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                intArrayOf(safeColor(activeTheme.gradStart), safeColor(activeTheme.gradMid), safeColor(activeTheme.gradEnd))
+            ).apply {
+                cornerRadius = dpf(ctx, 18f)
+                setStroke(2, alphaColor(activeTheme.primaryHex, 175))
+            }
+            allOnBtn.background = neonGradBtn(activeTheme.primaryHex, dpf(ctx, 12f))
+            saveApplyBtn.background = neonGradBtn(activeTheme.primaryHex, dpf(ctx, 13f))
+            themedSwitches.forEach { it.updateAccent(activeTheme.primaryHex) }
+            themedPlusBtns.forEach { it.background = neonGradBtn(activeTheme.primaryHex, dpf(ctx, 9f)) }
+            themedSectionBars.forEach { it.background = pillBg(activeTheme.primaryHex, 4f) }
+            refreshCategoryChips()
+            refreshPlayerChips()
+            refreshRepoTypeChips()
+            refreshLogChips()
+            tabButtons.forEachIndexed { i, btn ->
+                if (i == activeTabIdx) {
+                    btn.background = neonGradBtn(activeTheme.primaryHex, dpf(ctx, 11f))
+                    btn.setTextColor(Color.WHITE)
+                }
+            }
+            serverAdapter.notifyDataSetChanged()
+        }
+
+        applyThemeEverywhere()
+        selectTab(0)
 
         runCatching {
             dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
             dialog.show()
-            val width = (ctx.resources.displayMetrics.widthPixels * 0.94).toInt()
+            val width = (ctx.resources.displayMetrics.widthPixels * 0.95).toInt()
             dialog.window?.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
     }
