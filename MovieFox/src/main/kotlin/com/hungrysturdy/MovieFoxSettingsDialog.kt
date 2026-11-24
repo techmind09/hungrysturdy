@@ -56,7 +56,7 @@ import java.util.zip.ZipInputStream
 object MovieFoxSettingsDialog {
 
     const val LOG_TAG = "MovieFoxDiag"
-    private const val PREFS_NAME = "moviefox_ultra_max_v33"
+    private const val PREFS_NAME = "moviefox_ultra_max_v34"
     private const val KEY_SRV_PREFIX = "mf_srv_"
     private const val KEY_EXT_PREFIX = "mf_ext_"
     private const val KEY_SRV_ORDER = "mf_srv_order_csv"
@@ -184,8 +184,8 @@ object MovieFoxSettingsDialog {
 
     val EXTRACTORS = listOf(
         ExtractorItem("xcloud", "XCloud HLS & Direct", "xcloud.tattoo • stream.xcloud1.lol • workers.dev", "HLS"),
-        ExtractorItem("hubcloud", "HubCloud & GamerXYT", "hubcloud.pw/dad/club/one • gamerxyt.com", "10Gbps"),
-        ExtractorItem("gdflix", "GDFlix & GDLink", "gdflix.* • gdlink.* • new15.gdflix.*", "R2/DL"),
+        ExtractorItem("hubcloud", "HubCloud & VCloud & GamerXYT", "hubcloud.pw/dad/club/one • vcloud.* • gamerxyt.com", "10Gbps"),
+        ExtractorItem("gdflix", "GDFlix & GDLink & FastDL", "gdflix.* • gdlink.* • fastdlserver.*", "R2/DL"),
         ExtractorItem("pixeldrain", "Pixeldrain (.com / .dev)", "pixeldrain.com • pixeldrain.dev", "FAST"),
         ExtractorItem("gdrive", "Google Drive Direct", "drive.google.com • usercontent.google.com", "GDRIVE"),
         ExtractorItem("streamtape", "StreamTape Mirrors", "streamtape.com/to/net/xyz • shavetape • strcloud", "MP4"),
@@ -200,17 +200,17 @@ object MovieFoxSettingsDialog {
         ServerItem("play4u", "Play4u", "HI/M3U8", "https://play4u.org/", "#FB923C", false, true, "Movies", "⚡ MF"),
         ServerItem("prmovies", "Prmovies", "HI/M3U8", "https://prmovies.coupons/", "#F59E0B", false, true, "Movies", "⚡ MF"),
         ServerItem("hindidrama", "HindiDrama", "K-DRA", "https://hindidrama.net/", "#EC4899", false, true, "AsianDrama", "⚡ MF"),
-        ServerItem("themoviesflix", "TheMoviesFlix", "4K/1080p", "https://themoviesflix.xin/", "#22D3EE", false, true, "Movies", "⚡ MF"),
+        ServerItem("themoviesflix", "TheMoviesFlix", "4K/1080p", "https://themoviesflix.eat/", "#22D3EE", false, true, "Movies", "⚡ MF"),
         ServerItem("dramaverse", "DramaVerse", "K-DRAMA", "https://mydverse.com/", "#A855F7", false, true, "AsianDrama", "⚡ MF"),
         ServerItem("katdrama", "KatDrama", "ASIAN", "https://katdrama.org/", "#38BDF8", false, true, "AsianDrama", "⚡ MF"),
-        ServerItem("animeworld", "AnimeWorld", "ANIME", "https://watchanimeworld.top/", "#818CF8", false, true, "AsianDrama", "⚡ MF"),
-        ServerItem("vegamovies", "VegaMovies", "DUAL/HI", "https://vegamovies.latino/", "#FACC15", false, true, "Movies", "⚡ MF"),
-        ServerItem("bollyflix", "BollyFlix", "GDFlix/HI", "https://bollyflix.frl/", "#F43F5E", false, true, "Movies", "⚡ MF"),
-        ServerItem("cinestream", "CineStream Hub", "ALL/MULTI", "https://vidfast.vc/", "#10B981", false, true, "Movies", "⚡ CS"),
+        ServerItem("animeworld", "AnimeWorld", "ANIME", "https://animesalt.cx/", "#818CF8", false, true, "AsianDrama", "⚡ MF"),
+        ServerItem("vegamovies", "VegaMovies", "FSL/PXL", "https://vegamovies11.in/", "#FACC15", false, true, "Movies", "⚡ MF"),
+        ServerItem("bollyflix", "BollyFlix", "GDFlix/HI", "https://new1.bollyflix.tours/", "#F43F5E", false, true, "Movies", "⚡ MF"),
+        ServerItem("cinestream", "CineStream Hub", "ALL/MULTI", "https://new16.hdhub4u.cl/", "#10B981", false, true, "Movies", "⚡ CS"),
         ServerItem("videasy", "Videasy", "HLS/MP4", "https://player.videasy.to/", "#38BDF8", false, true, "Movies", "⚡ CS"),
         ServerItem("vidzee", "Vidzee", "MULTI/HLS", "https://player.vidzee.wtf/", "#C084FC", false, true, "Movies", "⚡ CS"),
         ServerItem("hexa", "Hexa", "HLS/1080p", "https://hexa.su/", "#22D3EE", false, true, "Movies", "⚡ CS"),
-        ServerItem("moviebox", "MovieBox", "MULTI/HD", "https://h5-api.aoneroom.com/wefeed-h5api-bff/app/get-latest-app-pkgs?app_name=moviebox", "#FB7185", false, true, "Series", "⚡ CS")
+        ServerItem("moviebox", "MovieBox", "MULTI/HD", "https://moviebox01.com/", "#FB7185", false, true, "Series", "⚡ CS")
     )
 
     private val AVATAR_PALETTE = listOf(
