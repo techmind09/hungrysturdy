@@ -220,14 +220,14 @@ object MovieFoxSettingsDialog {
     val SERVERS: List<ServerItem>
         get() {
             appContext?.let { ctx ->
-                if (!csLoaded) prefs(ctx)
+                if (!cs3Loaded) prefs(ctx)
             }
             return BASE_SERVERS + cachedCs3Servers.toList()
         }
 
     fun getNuvioManifestServers(ctx: Context?): List<ServerItem> {
         val c = ctx ?: appContext
-        if (c != null && !csLoaded) prefs(c)
+        if (c != null && !cs3Loaded) prefs(c)
         return cachedCs3Servers.filter { it.tag.equals("NUVIO", true) || it.tag.equals("MANIFEST", true) }
     }
 
