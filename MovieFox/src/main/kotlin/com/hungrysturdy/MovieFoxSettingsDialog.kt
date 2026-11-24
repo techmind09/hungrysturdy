@@ -56,7 +56,7 @@ import java.util.zip.ZipInputStream
 object MovieFoxSettingsDialog {
 
     const val LOG_TAG = "MovieFoxDiag"
-    private const val PREFS_NAME = "moviefox_ultra_max_v30"
+    private const val PREFS_NAME = "moviefox_ultra_max_v31"
     private const val KEY_SRV_PREFIX = "mf_srv_"
     private const val KEY_EXT_PREFIX = "mf_ext_"
     private const val KEY_SRV_ORDER = "mf_srv_order_csv"
@@ -200,16 +200,16 @@ object MovieFoxSettingsDialog {
         ServerItem("play4u", "Play4u", "HI/M3U8", "https://play4u.org/", "#FB923C", false, true, "Movies", "⚡ MF"),
         ServerItem("prmovies", "Prmovies", "HI/M3U8", "https://prmovies.coupons/", "#F59E0B", false, true, "Movies", "⚡ MF"),
         ServerItem("hindidrama", "HindiDrama", "K-DRA", "https://hindidrama.net/", "#EC4899", false, true, "AsianDrama", "⚡ MF"),
-        ServerItem("themoviesflix", "TheMoviesFlix", "4K/1080p", "https://one.1moviesflix.lol/", "#22D3EE", false, true, "Movies", "⚡ MF"),
+        ServerItem("themoviesflix", "TheMoviesFlix", "4K/1080p", "https://themoviesflix.xin/", "#22D3EE", false, true, "Movies", "⚡ MF"),
         ServerItem("dramaverse", "DramaVerse", "K-DRAMA", "https://mydverse.com/", "#A855F7", false, true, "AsianDrama", "⚡ MF"),
         ServerItem("katdrama", "KatDrama", "ASIAN", "https://katdrama.org/", "#38BDF8", false, true, "AsianDrama", "⚡ MF"),
         ServerItem("animeworld", "AnimeWorld", "ANIME", "https://watchanimeworld.top/", "#818CF8", false, true, "AsianDrama", "⚡ MF"),
-        ServerItem("vegamovies", "VegaMovies", "DUAL/HI", "https://vegamovies.ps/", "#FACC15", false, true, "Movies", "⚡ MF"),
-        ServerItem("cinestream", "CineStream Hub", "ALL/MULTI", "https://api.speedracelight.com/", "#10B981", false, true, "Movies", "⚡ CS"),
-        ServerItem("videasy", "Videasy", "HLS/MP4", "https://api.speedracelight.com/", "#38BDF8", false, true, "Movies", "⚡ CS"),
-        ServerItem("vidzee", "Vidzee", "MULTI/HLS", "https://player.vidzee.wtf/", "#C084FC", false, true, "Movies", "⚡ CS"),
-        ServerItem("hexa", "Hexa", "HLS/1080p", "https://theemoviedb.hexa.su/", "#22D3EE", false, true, "Movies", "⚡ CS"),
-        ServerItem("moviebox", "MovieBox", "MULTI/HD", "https://h5-api.aoneroom.com/", "#FB7185", false, true, "Series", "⚡ CS")
+        ServerItem("vegamovies", "VegaMovies", "DUAL/HI", "https://vegamovies.latino/", "#FACC15", false, true, "Movies", "⚡ MF"),
+        ServerItem("vidfast", "VidFast", "ALL/MULTI", "https://vidfast.vc/", "#10B981", false, true, "Movies", "⚡ MF"),
+        ServerItem("videasy", "Videasy", "HLS/MP4", "https://player.videasy.to/", "#38BDF8", false, true, "Movies", "⚡ MF"),
+        ServerItem("vidzee", "Vidzee", "MULTI/HLS", "https://player.vidzee.wtf/", "#C084FC", false, true, "Movies", "⚡ MF"),
+        ServerItem("hexa", "Hexa", "HLS/1080p", "https://hexa.su/", "#22D3EE", false, true, "Movies", "⚡ MF"),
+        ServerItem("moviebox", "MovieBox", "MULTI/HD", "https://h5-api.aoneroom.com/wefeed-h5api-bff/app/get-latest-app-pkgs?app_name=moviebox", "#FB7185", false, true, "Series", "⚡ MF")
     )
 
     private val AVATAR_PALETTE = listOf(
@@ -220,14 +220,14 @@ object MovieFoxSettingsDialog {
     val SERVERS: List<ServerItem>
         get() {
             appContext?.let { ctx ->
-                if (!cs3Loaded) prefs(ctx)
+                if (!csLoaded) prefs(ctx)
             }
             return BASE_SERVERS + cachedCs3Servers.toList()
         }
 
     fun getNuvioManifestServers(ctx: Context?): List<ServerItem> {
         val c = ctx ?: appContext
-        if (c != null && !cs3Loaded) prefs(c)
+        if (c != null && !csLoaded) prefs(c)
         return cachedCs3Servers.filter { it.tag.equals("NUVIO", true) || it.tag.equals("MANIFEST", true) }
     }
 
@@ -323,7 +323,7 @@ object MovieFoxSettingsDialog {
 
     private suspend fun probeServerLive(srv: ServerItem): ServerHealthInfo = withContext(Dispatchers.IO) {
         val start = System.currentTimeMillis()
-        val tMs = (appContext?.let { getTimeoutSeconds(it) } ?: 12).coerceIn(5, 20) * 1000
+        val tMs = (appContext?.let { getTimeoutSeconds(it) } ?: 10).coerceIn(5, 15) * 1000
         try {
             val conn = (URL(srv.probeUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
@@ -807,8 +807,8 @@ object MovieFoxSettingsDialog {
     fun getConcurrency(ctx: Context): Int = prefs(ctx).getInt(KEY_CONCURRENCY, 24)
     fun setConcurrency(ctx: Context, value: Int) = prefs(ctx).edit().putInt(KEY_CONCURRENCY, value.coerceIn(2, 50)).apply()
 
-    fun getTimeoutSeconds(ctx: Context): Int = prefs(ctx).getInt(KEY_TIMEOUT_SEC, 18)
-    fun setTimeoutSeconds(ctx: Context, sec: Int) = prefs(ctx).edit().putInt(KEY_TIMEOUT_SEC, sec.coerceIn(4, 45)).apply()
+    fun getTimeoutSeconds(ctx: Context): Int = prefs(ctx).getInt(KEY_TIMEOUT_SEC, 12)
+    fun setTimeoutSeconds(ctx: Context, sec: Int) = prefs(ctx).edit().putInt(KEY_TIMEOUT_SEC, sec.coerceIn(4, 30)).apply()
 
     fun isShuffleHomeCategories(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_SHUFFLE_HOME, false)
     fun setShuffleHomeCategories(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_SHUFFLE_HOME, enabled).apply()
@@ -1014,7 +1014,6 @@ object MovieFoxSettingsDialog {
             } else if (body.startsWith("{")) {
                 val root = JSONObject(body)
 
-                // 1. Nuvio / Stremio Manifest detection
                 if (root.has("resources") || root.has("catalogs") || (root.has("id") && root.has("version") && root.has("name") && !root.has("pluginLists"))) {
                     val mName = root.optString("name").trim().ifBlank { "Nuvio Addon" }
                     val baseAddonUrl = defaultUrl.substringBefore("/manifest.json").trimEnd('/')
@@ -1035,7 +1034,6 @@ object MovieFoxSettingsDialog {
                     return nestedPluginLists
                 }
 
-                // 2. CloudStream / SkyStream repo.json -> pluginLists
                 root.optJSONArray("pluginLists")?.let { pLists ->
                     for (i in 0 until pLists.length()) {
                         val u = pLists.optString(i).trim()
@@ -1043,7 +1041,6 @@ object MovieFoxSettingsDialog {
                     }
                 }
 
-                // 3. Direct arrays inside root object
                 listOf("plugins", "items", "providers", "servers", "sources", "addons").forEach { key ->
                     root.optJSONArray(key)?.let { arr ->
                         for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { entries.add(it) }
@@ -1737,7 +1734,7 @@ object MovieFoxSettingsDialog {
         makeStepperCard(streamPane, "Parallel Workers", "Concurrent server fetch threads", currentConcurrency, 2, 4, 40, "x") {
             currentConcurrency = it; setConcurrency(ctx, it); refreshStats()
         }
-        makeStepperCard(streamPane, "Request Timeout", "Per-server connection timeout", currentTimeout, 2, 4, 45, "s") {
+        makeStepperCard(streamPane, "Request Timeout", "Per-server connection timeout", currentTimeout, 2, 4, 30, "s") {
             currentTimeout = it; setTimeoutSeconds(ctx, it)
         }
 
