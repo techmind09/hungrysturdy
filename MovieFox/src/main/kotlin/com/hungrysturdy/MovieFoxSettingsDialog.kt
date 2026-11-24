@@ -324,7 +324,7 @@ object MovieFoxSettingsDialog {
 
     private suspend fun probeServerLive(srv: ServerItem): ServerHealthInfo = withContext(Dispatchers.IO) {
         val start = System.currentTimeMillis()
-        val tMs = (appContext?.let { getTimeoutSeconds(it) } ?: 25).coerceIn(15, 45) * 1000
+        val tMs = (appContext?.let { getTimeoutSeconds(it) } ?: 25).coerceIn(10, 18) * 1000
         try {
             val conn = (URL(srv.probeUrl).openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
@@ -2323,4 +2323,5 @@ object MovieFoxSettingsDialog {
         }
     }
 }
+
 
