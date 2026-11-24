@@ -21,6 +21,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.selects.onAwait
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
@@ -382,7 +383,7 @@ class MovieFoxProvider : MainAPI() {
         url: String,
         extraHeaders: Map<String, String> = emptyMap(),
         timeoutSec: Long = currentTimeoutSec(25L),
-        retries: Int = 2,
+        retries: Int = 1,
         sourceTag: String = "HTTP",
         useCloudflareBypass: Boolean = false
     ): String? {
@@ -2363,7 +2364,7 @@ class MovieFoxProvider : MainAPI() {
         val searchHtml = safeGetText(
             "$dom/?s=${safeEncode(lc.searchQueryTitle)}",
             tmfHeaders(),
-            timeoutSec = lc.reqTimeoutSec,
+            timeoutSec = lc.reqTimeoutSec.coerceAtMost(12L),
             retries = 1,
             sourceTag = "themoviesflix",
             useCloudflareBypass = true
@@ -2484,7 +2485,7 @@ class MovieFoxProvider : MainAPI() {
                     val tsJson = safeGetText(
                         "$dom/search.php?q=${safeEncode(tsQuery)}&page=1",
                         mapOf("Referer" to "$dom/"),
-                        timeoutSec = lc.reqTimeoutSec,
+                        timeoutSec = lc.reqTimeoutSec.coerceAtMost(12L),
                         retries = 1,
                         sourceTag = "vegamovies",
                         useCloudflareBypass = true
@@ -2535,14 +2536,20 @@ class MovieFoxProvider : MainAPI() {
                 }
             }
             var winner: Pair<String, String>? = null
-            for (job in jobs) {
-                val res = runCatching { job.await() }.getOrNull()
-                if (res != null) {
-                    winner = res
+            val pending = jobs.toMutableList()
+            while (pending.isNotEmpty()) {
+                val completed = kotlinx.coroutines.selects.select<Pair<Deferred<Pair<String, String>?>, Pair<String, String>?>> {
+                    pending.forEach { job ->
+                        job.onAwait { result -> job to result }
+                    }
+                }
+                pending.remove(completed.first)
+                if (completed.second != null) {
+                    winner = completed.second
+                    pending.forEach { it.cancel() }
                     break
                 }
             }
-            jobs.forEach { if (it.isActive) it.cancel() }
             winner
         } ?: return
 
@@ -2660,7 +2667,7 @@ class MovieFoxProvider : MainAPI() {
             val searchHtml = safeGetText(
                 "$dom/search/${safeEncode(queryStr)}/page/1/",
                 mapOf("Referer" to "$dom/"),
-                timeoutSec = lc.reqTimeoutSec,
+                timeoutSec = lc.reqTimeoutSec.coerceAtMost(12L),
                 retries = 1,
                 sourceTag = "bollyflix",
                 useCloudflareBypass = true
@@ -2673,7 +2680,7 @@ class MovieFoxProvider : MainAPI() {
                 val titleHtml = safeGetText(
                     "$dom/search/${safeEncode(lc.searchQueryTitle)}/page/1/",
                     mapOf("Referer" to "$dom/"),
-                    timeoutSec = lc.reqTimeoutSec,
+                    timeoutSec = lc.reqTimeoutSec.coerceAtMost(8L),
                     retries = 1,
                     sourceTag = "bollyflix",
                     useCloudflareBypass = true
@@ -2776,7 +2783,7 @@ class MovieFoxProvider : MainAPI() {
         val tmdb = lc.candidateIds.firstOrNull()?.toIntOrNull() ?: return
         if (lc.searchQueryTitle.isBlank()) return
         val hdrs = mapOf("Accept" to "*/*", "User-Agent" to effectiveUa, "Origin" to "https://player.videasy.to", "Referer" to "https://player.videasy.to/")
-        val seedJson = safeGetText("$csVideasyApi/seed?mediaId=$tmdb", hdrs, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "videasy").orEmpty()
+        val seedJson = safeGetText("$csVideasyApi/seed?mediaId=$tmdb", hdrs, timeoutSec = lc.reqTimeoutSec.coerceAtMost(10L), retries = 1, sourceTag = "videasy").orEmpty()
         val seed = runCatching { JSONObject(seedJson).optString("seed") }.getOrNull().orEmpty()
         if (seed.isBlank()) return
 
@@ -2788,10 +2795,10 @@ class MovieFoxProvider : MainAPI() {
             } else {
                 "$csVideasyApi/$srv/sources-with-title?title=$encTitle&mediaType=tv&tmdbId=$tmdb&episodeId=${lc.episode}&seasonId=${lc.season}&imdbId=${lc.imdbId}&enc=2&seed=$seed"
             }
-            val encData = safeGetText(apiUrl, hdrs, timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "videasy").orEmpty()
+            val encData = safeGetText(apiUrl, hdrs, timeoutSec = lc.reqTimeoutSec.coerceAtMost(8L), retries = 1, sourceTag = "videasy").orEmpty()
             if (encData.isBlank()) continue
             val decRes = runCatching {
-                app.post("$csMultiDecryptApi/dec-videasy", json = mapOf("text" to encData, "id" to tmdb, "seed" to seed), timeout = lc.reqTimeoutSec)
+                app.post("$csMultiDecryptApi/dec-videasy", json = mapOf("text" to encData, "id" to tmdb, "seed" to seed), timeout = lc.reqTimeoutSec.coerceAtMost(8L))
             }.getOrNull() ?: continue
             if (!decRes.isSuccessful) continue
             val resultObj = runCatching { JSONObject(decRes.text).optJSONObject("result") }.getOrNull() ?: continue
@@ -3262,7 +3269,7 @@ class MovieFoxProvider : MainAPI() {
         emitSub: (SubtitleFile) -> Unit,
         emitLink: (ExtractorLink) -> Unit
     ) {
-        val subCapMs = (lc.reqTimeoutSec * 2000L).coerceAtLeast(45_000L)
+        val subCapMs = (lc.reqTimeoutSec * 1000L).coerceIn(10_000L, 25_000L)
         supervisorScope {
             val tasks = listOf(
                 async(Dispatchers.IO) { withTimeoutOrNull(subCapMs) { fetchFromCsVidfastAndVidcore(lc, emitSub, emitLink) } },
@@ -3276,7 +3283,7 @@ class MovieFoxProvider : MainAPI() {
     }
 
     // =========================================================================
-    // LOAD LINKS: High Timeout (75s-120s Cap) + All 15 Servers + Nuvio Manifest
+    // LOAD LINKS: Bounded per-server timeout + isolated provider execution
     // =========================================================================
     override suspend fun loadLinks(
         data: String,
@@ -3288,7 +3295,7 @@ class MovieFoxProvider : MainAPI() {
         return try {
             val ctx = ctxOrNull()
             val reqTimeoutSec = currentTimeoutSec(25L)
-            val serverCapMs = (reqTimeoutSec * 3000L).coerceIn(60_000L, 120_000L)
+            val serverCapMs = (reqTimeoutSec * 1000L).coerceIn(15_000L, 35_000L)
 
             var rawPageUrl = data
             var pageTitle = ""
@@ -3439,3 +3446,4 @@ class MovieFoxProvider : MainAPI() {
         }
     }
 }
+
