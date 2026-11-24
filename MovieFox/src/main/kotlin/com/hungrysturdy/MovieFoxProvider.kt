@@ -272,11 +272,20 @@ class MovieFoxProvider : MainAPI() {
     // Server 9: VegaMovies
     private val vegaFallbackDomains = listOf(
         "https://vegamovies.latino",
+        "https://vegamovies.mq",
         "https://vegamovies.rsvp",
         "https://vegamovies.pm"
     )
     @Volatile
     private var activeVegaBase = "https://vegamovies.latino"
+
+    // Server 10: BollyFlix
+    private val bollyFlixFallbackDomains = listOf(
+        "https://bollyflix.frl",
+        "https://bollyflix.re"
+    )
+    @Volatile
+    private var activeBollyFlixBase = "https://bollyflix.frl"
 
     private val firebaseDomainsCache = ConcurrentHashMap<String, String>()
     private val csDynamicUrlsCache = ConcurrentHashMap<String, String>()
@@ -916,7 +925,8 @@ class MovieFoxProvider : MainAPI() {
         return when {
             h.contains("pixeldrain.dev") && isExtOn("pixeldrain") -> PixeldrainDevExtractor()
             h.contains("pixeldrain") && isExtOn("pixeldrain") -> PixeldrainExtractor()
-            (h.contains("hubcloud") || h.contains("vcloud")) && isExtOn("hubcloud") -> KatHubCloudExtractor()
+            h.contains("vcloud") && isExtOn("hubcloud") -> VCloud()
+            h.contains("hubcloud") && isExtOn("hubcloud") -> KatHubCloudExtractor()
             h.contains("gamerxyt") && isExtOn("hubcloud") -> GamerXYTExtractor()
             h.contains("gdflix") && isExtOn("gdflix") -> KatGDFlixExtractor()
             h.contains("gdlink") && isExtOn("gdflix") -> GDLink()
@@ -2433,7 +2443,7 @@ class MovieFoxProvider : MainAPI() {
     }
 
     // =========================================================================
-    // SERVER 9: VEGAMOVIES (Typesense search.php JSON + HTML fallback)
+    // SERVER 9: VEGAMOVIES (V-Cloud -> FSL + Pixeldrain)
     // =========================================================================
     private suspend fun fetchFromVegaMovies(
         lc: LinkContext,
@@ -2441,8 +2451,9 @@ class MovieFoxProvider : MainAPI() {
         emitLink: (ExtractorLink) -> Unit
     ) {
         if (lc.searchQueryTitle.isBlank() && lc.imdbId.isBlank()) return
+        val csDom = getCsDynamicUrl("vegamovies", "").removeSuffix("/").takeIf { it.startsWith("http") }
         val fbDom = getFirebaseDomain("vegamovies")?.removeSuffix("/")
-        val candidates = (listOfNotNull(fbDom, activeVegaBase) + vegaFallbackDomains).distinct().take(3)
+        val candidates = (listOfNotNull(csDom, fbDom, activeVegaBase) + vegaFallbackDomains).distinct().take(3)
 
         for (dom in candidates) {
             val sStart = System.currentTimeMillis()
@@ -2464,7 +2475,7 @@ class MovieFoxProvider : MainAPI() {
                         for (i in 0 until hits.length()) {
                             val docObj = hits.optJSONObject(i)?.optJSONObject("document") ?: continue
                             val perm = docObj.optString("permalink", "").trim()
-                            val postTitle = docObj.optString("post_title", "").trim()
+                            val postTitle = docObj.optString("post_title", "").replace("Download ", "", true).trim()
                             val hitImdb = docObj.optString("imdb_id", "").trim()
                             if (perm.isNotBlank() && ((lc.imdbId.isNotBlank() && hitImdb == lc.imdbId) || titleMatchesCandidate(postTitle, lc.pageTitle))) {
                                 matchedUrls.add(normalizeUrl(perm, dom))
@@ -2474,25 +2485,29 @@ class MovieFoxProvider : MainAPI() {
                 }
             }
 
-            if (matchedUrls.isEmpty() && lc.searchQueryTitle.isNotBlank()) {
-                val searchHtml = safeGetText(
-                    "$dom/?s=${safeEncode(lc.searchQueryTitle)}",
+            if (matchedUrls.isEmpty() && lc.imdbId.isNotBlank() && lc.searchQueryTitle.isNotBlank()) {
+                val tsTitleJson = safeGetText(
+                    "$dom/search.php?q=${safeEncode(lc.searchQueryTitle)}&page=1",
                     mapOf("Referer" to "$dom/"),
                     timeoutSec = lc.reqTimeoutSec,
                     retries = 1,
                     sourceTag = "vegamovies",
                     useCloudflareBypass = true
                 ).orEmpty()
-                if (searchHtml.isNotBlank()) {
-                    val searchDoc = Jsoup.parse(searchHtml, dom)
-                    searchDoc.select("article.post a[href], .blog-posts article a[href], a.post-thumb[href], h2.entry-title a[href]")
-                        .forEach { el ->
-                            val href = el.attr("href").trim()
-                            val tRaw = el.attr("title").ifBlank { el.selectFirst("img")?.attr("alt").orEmpty() }.ifBlank { el.text() }
-                            if (href.startsWith("http") && titleMatchesCandidate(tRaw, lc.pageTitle)) {
-                                matchedUrls.add(href)
+                if (tsTitleJson.startsWith("{")) {
+                    runCatching {
+                        val hits = JSONObject(tsTitleJson).optJSONArray("hits")
+                        if (hits != null) {
+                            for (i in 0 until hits.length()) {
+                                val docObj = hits.optJSONObject(i)?.optJSONObject("document") ?: continue
+                                val perm = docObj.optString("permalink", "").trim()
+                                val postTitle = docObj.optString("post_title", "").replace("Download ", "", true).trim()
+                                if (perm.isNotBlank() && titleMatchesCandidate(postTitle, lc.pageTitle)) {
+                                    matchedUrls.add(normalizeUrl(perm, dom))
+                                }
                             }
                         }
+                    }
                 }
             }
 
@@ -2511,49 +2526,201 @@ class MovieFoxProvider : MainAPI() {
             ).orEmpty()
             if (detailHtml.isBlank()) continue
 
-            val doc = Jsoup.parse(detailHtml, matchedUrl)
-            val entry = doc.selectFirst("div.entry-content, article") ?: doc
-            val targetEp = if (lc.isTv) lc.episode else 1
-            val epRegex = Regex("""(?i)\b(?:episode|ep|e)\s*0*(\d+)\b""")
-            val qualRegex = Regex("""(?i)\b(2160p|1080p|720p|480p)\b""")
+            val document = Jsoup.parse(detailHtml, matchedUrl)
+            val vcloudTargets = linkedSetOf<String>()
 
-            var currentEp = 1
-            var currentQual = "1080p"
-            val hostTargets = linkedMapOf<String, Pair<String, Int>>()
+            if (lc.isTv) {
+                val hTags = document.select("main > h3:matches((?i)(4K|[0-9]*0p)), main > h5:matches((?i)(4K|[0-9]*0p)), h3:matches((?i)(4K|[0-9]*0p)), h4:matches((?i)(4K|[0-9]*0p))")
+                    .filter { !it.text().contains("Zip", true) }
 
-            for (el in entry.select("*")) {
-                val own = el.ownText().trim()
-                if (own.isNotEmpty() && own.length < 120 && el.tagName() != "a") {
-                    epRegex.find(own)?.groupValues?.get(1)?.toIntOrNull()?.let { if (it in 1..500) currentEp = it }
-                    qualRegex.find(own)?.groupValues?.get(1)?.let { currentQual = it }
+                for (tag in hTags) {
+                    val realSeason = Regex("""(?:Season\s*|S)0*(\d+)""", RegexOption.IGNORE_CASE)
+                        .find(tag.text())?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                    if (realSeason != 0 && realSeason != lc.season) continue
+
+                    val pTag = tag.nextElementSibling()
+                    val aTags = if (pTag != null && pTag.tagName() == "p") pTag.select("a") else tag.select("a")
+                    val unilink = aTags.firstOrNull {
+                        it.text().contains("V-Cloud", true) ||
+                            it.text().contains("Episode", true) ||
+                            it.text().contains("Download", true)
+                    } ?: aTags.firstOrNull { it.text().contains("G-Direct", true) }
+
+                    val eUrl = unilink?.attr("href")?.trim().orEmpty()
+                    if (eUrl.isBlank()) continue
+
+                    val epPageHtml = safeGetText(
+                        normalizeUrl(eUrl, dom),
+                        mapOf("Referer" to matchedUrl),
+                        timeoutSec = lc.reqTimeoutSec,
+                        retries = 1,
+                        sourceTag = "vegamovies",
+                        useCloudflareBypass = true
+                    ).orEmpty()
+                    if (epPageHtml.isBlank()) continue
+
+                    val epDoc = Jsoup.parse(epPageHtml, eUrl)
+                    val epVcloudList = epDoc.select("p > a, a[href]").mapNotNull { a ->
+                        val href = a.attr("href").trim()
+                        if (href.contains("vcloud", true) || href.contains("hubcloud", true)) href else null
+                    }.distinct()
+
+                    val targetIdx = (lc.episode - 1).coerceAtLeast(0)
+                    epVcloudList.getOrNull(targetIdx)?.let { vcloudTargets.add(it) }
                 }
-                if (el.tagName() == "a") {
-                    val href = el.attr("href").trim()
-                    val low = href.lowercase()
-                    val isHost = low.contains("hubcloud") || low.contains("gdflix") || low.contains("gdlink") ||
-                        low.contains("vegadrive") || low.contains("m-drive") || low.contains("vcloud") ||
-                        low.contains("mcloud") || low.contains("pixeldrain") || low.contains("fastdl") ||
-                        low.contains("filebee") || low.contains("goflix")
-                    if (href.startsWith("http") && isHost) {
-                        val txt = el.text().trim()
-                        val ep = epRegex.find(txt)?.groupValues?.get(1)?.toIntOrNull() ?: currentEp
-                        val qual = qualRegex.find(txt)?.groupValues?.get(1) ?: currentQual
-                        if (!lc.isTv || ep == targetEp) {
-                            hostTargets.putIfAbsent(href, qual to getQualityFromName(qual))
-                        }
+            } else {
+                val buttons = document.select("a:has(button.dwd-button)")
+                for (btn in buttons.take(5)) {
+                    val link = normalizeUrl(btn.attr("href"), dom)
+                    if (!link.startsWith("http")) continue
+                    val interHtml = safeGetText(
+                        link,
+                        mapOf("Referer" to matchedUrl),
+                        timeoutSec = lc.reqTimeoutSec,
+                        retries = 1,
+                        sourceTag = "vegamovies",
+                        useCloudflareBypass = true
+                    ).orEmpty()
+                    if (interHtml.isBlank()) continue
+
+                    val interDoc = Jsoup.parse(interHtml, link)
+                    val vcloudHref = interDoc.select("a:contains(V-Cloud), a[href*=vcloud], a[href*=hubcloud]")
+                        .firstOrNull()?.attr("href")?.trim().orEmpty()
+                    if (vcloudHref.startsWith("http")) {
+                        vcloudTargets.add(vcloudHref)
                     }
                 }
             }
 
-            for ((targetLink, qPair) in hostTargets.entries.take(5)) {
-                val (qLabel, qVal) = qPair
-                if (targetLink.contains("vegadrive.", true) || targetLink.contains("m-drive.", true)) {
-                    for (s in tmfResolveVegaDrive(targetLink, lc.reqTimeoutSec)) {
-                        dispatchEmbedOrDirect("VegaMovies", "${s.name} [$qLabel]", s.url, matchedUrl, lc, emitSub, emitLink, qVal, s.headers)
-                    }
-                } else {
-                    dispatchEmbedOrDirect("VegaMovies", qLabel, targetLink, matchedUrl, lc, emitSub, emitLink, qVal)
+            for (vLink in vcloudTargets.take(5)) {
+                dispatchEmbedOrDirect("VegaMovies", "V-Cloud", vLink, matchedUrl, lc, emitSub, emitLink)
+            }
+            break
+        }
+    }
+
+    // =========================================================================
+    // SERVER 10: BOLLYFLIX (Sidexfee bypass -> GDFlix + FastDLServer)
+    // =========================================================================
+    private suspend fun bypassBollyFlixSidexfee(id: String, timeoutSec: Long): String {
+        val raw = safeGetText("https://web.sidexfee.com/?id=$id", timeoutSec = timeoutSec, retries = 1, sourceTag = "bollyflix").orEmpty()
+        val encoded = Regex("""link":"([^"]+)""").find(raw)?.groupValues?.get(1)?.replace("\\/", "/").orEmpty()
+        if (encoded.isBlank()) return ""
+        return runCatching {
+            String(Base64.decode(encoded, Base64.DEFAULT), Charsets.UTF_8).trim()
+        }.getOrDefault("")
+    }
+
+    private suspend fun fetchFromBollyFlix(
+        lc: LinkContext,
+        emitSub: (SubtitleFile) -> Unit,
+        emitLink: (ExtractorLink) -> Unit
+    ) {
+        if (lc.searchQueryTitle.isBlank() && lc.imdbId.isBlank()) return
+        val csDom = getCsDynamicUrl("bollyflix", "").removeSuffix("/").takeIf { it.startsWith("http") }
+        val fbDom = getFirebaseDomain("bollyflix")?.removeSuffix("/")
+        val candidates = (listOfNotNull(csDom, fbDom, activeBollyFlixBase) + bollyFlixFallbackDomains).distinct().take(3)
+
+        for (dom in candidates) {
+            val sStart = System.currentTimeMillis()
+            val queryStr = lc.imdbId.ifBlank { lc.searchQueryTitle }
+            val searchHtml = safeGetText(
+                "$dom/search/${safeEncode(queryStr)}/page/1/",
+                mapOf("Referer" to "$dom/"),
+                timeoutSec = lc.reqTimeoutSec,
+                retries = 1,
+                sourceTag = "bollyflix",
+                useCloudflareBypass = true
+            ).orEmpty()
+
+            var searchDoc = if (searchHtml.isNotBlank()) Jsoup.parse(searchHtml, dom) else null
+            var articles = searchDoc?.select("div.post-cards > article, article").orEmpty()
+
+            if (articles.isEmpty() && lc.imdbId.isNotBlank() && lc.searchQueryTitle.isNotBlank()) {
+                val titleHtml = safeGetText(
+                    "$dom/search/${safeEncode(lc.searchQueryTitle)}/page/1/",
+                    mapOf("Referer" to "$dom/"),
+                    timeoutSec = lc.reqTimeoutSec,
+                    retries = 1,
+                    sourceTag = "bollyflix",
+                    useCloudflareBypass = true
+                ).orEmpty()
+                if (titleHtml.isNotBlank()) {
+                    searchDoc = Jsoup.parse(titleHtml, dom)
+                    articles = searchDoc.select("div.post-cards > article, article")
                 }
+            }
+
+            val matchedUrl = articles.firstNotNullOfOrNull { art ->
+                val a = art.selectFirst("a[href]") ?: return@firstNotNullOfOrNull null
+                val href = a.attr("href").trim()
+                val t = a.attr("title").replace("Download ", "", true).trim().ifBlank { art.text().trim() }
+                if (href.startsWith("http") && (lc.imdbId.isNotBlank() && queryStr == lc.imdbId || titleMatchesCandidate(t, lc.pageTitle))) {
+                    href
+                } else null
+            }
+            MovieFoxSettingsDialog.logSearch("bollyflix", lc.searchQueryTitle, if (matchedUrl != null) 1 else 0, System.currentTimeMillis() - sStart, dom)
+            if (matchedUrl == null) continue
+            activeBollyFlixBase = dom
+
+            val detailHtml = safeGetText(
+                matchedUrl,
+                mapOf("Referer" to "$dom/"),
+                timeoutSec = lc.reqTimeoutSec,
+                retries = 1,
+                sourceTag = "bollyflix",
+                useCloudflareBypass = true
+            ).orEmpty()
+            if (detailHtml.isBlank()) continue
+
+            val document = Jsoup.parse(detailHtml, matchedUrl)
+            val resolvedTargets = linkedSetOf<String>()
+
+            if (lc.isTv) {
+                val buttons = document.select("a.maxbutton-download-links, a.dl, a.btnn")
+                for (btn in buttons.take(6)) {
+                    val seasonText = btn.parent()?.previousElementSibling()?.text().orEmpty()
+                    val realSeason = Regex("""(?:Season\s*|S)0*(\d+)""", RegexOption.IGNORE_CASE)
+                        .find(seasonText)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+                    if (realSeason != 0 && realSeason != lc.season) continue
+
+                    var link = btn.attr("href").trim()
+                    if (link.isBlank()) continue
+                    if (!link.contains("fastdlserver", true) && link.contains("?id=")) {
+                        val id = link.substringAfterLast("id=").substringBefore("&")
+                        val bypassed = bypassBollyFlixSidexfee(id, lc.reqTimeoutSec)
+                        if (bypassed.startsWith("http")) link = bypassed
+                    }
+                    if (!link.startsWith("http")) continue
+
+                    val seasonHtml = safeGetText(link, mapOf("Referer" to matchedUrl), timeoutSec = lc.reqTimeoutSec, retries = 1, sourceTag = "bollyflix").orEmpty()
+                    if (seasonHtml.isBlank()) continue
+                    val seasonDoc = Jsoup.parse(seasonHtml, link)
+                    val epLinks = seasonDoc.select("h3 > a, article h3 a")
+                        .filter { !it.text().contains("Zip", true) }
+                        .mapNotNull { it.attr("href").trim().takeIf { h -> h.startsWith("http") } }
+
+                    val epIdx = (lc.episode - 1).coerceAtLeast(0)
+                    epLinks.getOrNull(epIdx)?.let { resolvedTargets.add(it) }
+                }
+            } else {
+                val links = document.select("a.dl, a.maxbutton-download-links")
+                for (el in links.take(6)) {
+                    var decodeUrl = el.attr("href").trim()
+                    if (decodeUrl.isBlank()) continue
+                    if (!decodeUrl.contains("fastdlserver", true) && decodeUrl.contains("?id=")) {
+                        val id = decodeUrl.substringAfterLast("id=").substringBefore("&")
+                        val bypassed = bypassBollyFlixSidexfee(id, lc.reqTimeoutSec)
+                        if (bypassed.startsWith("http")) decodeUrl = bypassed
+                    }
+                    if (decodeUrl.startsWith("http")) {
+                        resolvedTargets.add(decodeUrl)
+                    }
+                }
+            }
+
+            for (target in resolvedTargets.take(6)) {
+                dispatchEmbedOrDirect("BollyFlix", "GDFlix", target, matchedUrl, lc, emitSub, emitLink)
             }
             break
         }
@@ -3061,7 +3228,7 @@ class MovieFoxProvider : MainAPI() {
     }
 
     // =========================================================================
-    // LOAD LINKS: High Timeout (75s-120s Cap) + Telemetry + Nuvio Manifest
+    // LOAD LINKS: High Timeout (75s-120s Cap) + All 15 Servers + Nuvio Manifest
     // =========================================================================
     override suspend fun loadLinks(
         data: String,
@@ -3153,7 +3320,7 @@ class MovieFoxProvider : MainAPI() {
             val orderedKeys = (ctx?.let { MovieFoxSettingsDialog.getOrderedEnabledKeys(it) }
                 ?: listOf(
                     "sflix", "play4u", "prmovies", "hindidrama", "themoviesflix",
-                    "dramaverse", "katdrama", "animeworld", "vegamovies",
+                    "dramaverse", "katdrama", "animeworld", "vegamovies", "bollyflix",
                     "cinestream", "videasy", "vidzee", "hexa", "moviebox"
                 )).distinct()
 
@@ -3184,6 +3351,7 @@ class MovieFoxProvider : MainAPI() {
                                     "katdrama" -> fetchFromKatDrama(lc, emitSub, trackedEmitLink)
                                     "animeworld" -> fetchFromAnimeWorld(lc, emitSub, trackedEmitLink)
                                     "vegamovies" -> fetchFromVegaMovies(lc, emitSub, trackedEmitLink)
+                                    "bollyflix" -> fetchFromBollyFlix(lc, emitSub, trackedEmitLink)
                                     "cinestream" -> fetchFromCineStreamServers(lc, emitSub, trackedEmitLink)
                                     "videasy" -> fetchFromCsVideasy(lc, emitSub, trackedEmitLink)
                                     "vidzee" -> fetchFromCsVidzee(lc, emitSub, trackedEmitLink)
@@ -3223,3 +3391,4 @@ class MovieFoxProvider : MainAPI() {
         }
     }
 }
+
