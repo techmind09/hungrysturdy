@@ -1043,7 +1043,7 @@ class MovieFoxProvider : MainAPI() {
     }
 
     // =========================================================================
-    // CUSTOM NUVIO / STREMIO MANIFEST STREAM FETCHER
+    // CUSTOM & PERMANENT MANIFEST STREAM FETCHER (MovieFox 1-4 Fast Mode)
     // =========================================================================
     private suspend fun fetchFromNuvioManifest(
         srv: MovieFoxSettingsDialog.ServerItem,
@@ -1059,7 +1059,12 @@ class MovieFoxProvider : MainAPI() {
         } else {
             "$base/stream/movie/${lc.imdbId}.json"
         }
-        val raw = safeGetText(streamUrl, timeoutSec = lc.reqTimeoutSec, retries = 2, sourceTag = srv.key).orEmpty()
+        val raw = safeGetText(
+            streamUrl,
+            timeoutSec = lc.reqTimeoutSec.coerceAtMost(12L),
+            retries = 1,
+            sourceTag = srv.key
+        ).orEmpty()
         if (raw.isBlank()) return
 
         val streamsArr = runCatching { JSONObject(raw).optJSONArray("streams") }.onFailure {
@@ -3282,7 +3287,7 @@ class MovieFoxProvider : MainAPI() {
     }
 
     // =========================================================================
-    // LOAD LINKS: Bounded per-server timeout + isolated provider execution
+    // LOAD LINKS: Fast Manifests (mf_1-mf_4) + Bounded Per-Server Execution
     // =========================================================================
     override suspend fun loadLinks(
         data: String,
@@ -3294,7 +3299,7 @@ class MovieFoxProvider : MainAPI() {
         return try {
             val ctx = ctxOrNull()
             val reqTimeoutSec = currentTimeoutSec(25L)
-            val serverCapMs = (reqTimeoutSec * 1000L).coerceIn(8_000L, 15_000L)
+            val serverCapMs = (reqTimeoutSec * 1000L).coerceIn(12_000L, 30_000L)
 
             var rawPageUrl = data
             var pageTitle = ""
@@ -3373,6 +3378,7 @@ class MovieFoxProvider : MainAPI() {
 
             val orderedKeys = (ctx?.let { MovieFoxSettingsDialog.getOrderedEnabledKeys(it) }
                 ?: listOf(
+                    "mf_1", "mf_2", "mf_3", "mf_4",
                     "sflix", "play4u", "prmovies", "hindidrama", "themoviesflix",
                     "dramaverse", "katdrama", "animeworld", "vegamovies", "bollyflix",
                     "cinestream", "videasy", "vidzee", "hexa", "moviebox"
@@ -3445,3 +3451,4 @@ class MovieFoxProvider : MainAPI() {
         }
     }
 }
+
