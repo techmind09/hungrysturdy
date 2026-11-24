@@ -462,7 +462,7 @@ class SwVidMolyExtractor : BaseJWPExtractor() { override var name = "VidMoly"; o
 class VidMolyToExtractor : BaseJWPExtractor() { override var name = "VidMoly"; override var mainUrl = "https://vidmoly.to"; override val prefKey = "jwp_embeds" }
 
 // =========================================================================
-// HubCloud / GDFlix / FastDL / BuzzServer / HBPlay / GoFlix Extractors
+// HubCloud / VCloud / GDFlix / FastDL / BuzzServer / HBPlay / GoFlix
 // =========================================================================
 private val katCfKiller by lazy { CloudflareKiller() }
 
@@ -544,7 +544,120 @@ open class KatHubCloudExtractor : ExtractorApi() {
     }
 }
 
-class VCloud : KatHubCloudExtractor() { override val name = "V-Cloud"; override val mainUrl = "https://vcloud.*" }
+open class VCloud : ExtractorApi() {
+    override val name: String = "V-Cloud"
+    override val mainUrl: String = "https://vcloud.*"
+    override val requiresReferer = false
+
+    private fun extractPxlUrl(html: String): String? {
+        return Regex("""var\s+pxl\s*=\s*["']([^"']+)["']""").find(html)?.groupValues?.get(1)
+    }
+
+    private fun extractDoubleAtob(html: String): String? {
+        val b64 = Regex("""var\s+url\s*=\s*atob\s*\(\s*atob\s*\(\s*['"]([^'"]+)['"]\s*\)\s*\)""")
+            .find(html)?.groupValues?.get(1) ?: return null
+        return runCatching {
+            val first = String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8)
+            String(Base64.decode(first, Base64.DEFAULT), Charsets.UTF_8)
+        }.getOrNull()
+    }
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        if (!isExtractorAllowed("hubcloud") && !isExtractorAllowed("pixeldrain")) return
+        try {
+            var baseUrl = katGetBaseUrl(url)
+            val latestBaseUrl = if (url.contains("hubcloud", true)) {
+                katGetLatestBaseUrl(baseUrl, "hubcloud")
+            } else {
+                katGetLatestBaseUrl(baseUrl, "vcloud")
+            }
+
+            var newUrl = url
+            if (baseUrl != latestBaseUrl && latestBaseUrl.startsWith("http")) {
+                newUrl = url.replace(baseUrl, latestBaseUrl)
+                baseUrl = latestBaseUrl
+            }
+
+            val doc = app.get(newUrl, headers = katBrowserHeaders, interceptor = katCfKiller).document
+
+            var nextLink = if (newUrl.contains("/video/", true)) {
+                doc.selectFirst("div.vd > center > a")?.attr("href").orEmpty()
+            } else {
+                val scriptTag = doc.selectFirst("script:containsData(url)")?.toString().orEmpty()
+                if (newUrl.contains("vcloud", true)) {
+                    extractDoubleAtob(scriptTag).orEmpty()
+                } else {
+                    Regex("""var\s+url\s*=\s*['"]([^'"]*)['"]""").find(scriptTag)?.groupValues?.get(1).orEmpty()
+                }
+            }
+
+            if (nextLink.isBlank()) return
+            if (!nextLink.startsWith("http")) {
+                nextLink = "${baseUrl.trimEnd('/')}/${nextLink.trimStart('/')}"
+            }
+
+            val finalResp = app.get(nextLink, headers = katBrowserHeaders, referer = newUrl, interceptor = katCfKiller)
+            val document = finalResp.document
+            val htmlStr = finalResp.text
+            val header = document.select("div.card-header").text().trim()
+            val size = document.select("i#size").text().trim()
+            val quality = katGetIndexQuality(header)
+            val suffix = if (header.isNotBlank() || size.isNotBlank()) " $header [$size]".trimEnd() else ""
+
+            suspend fun emitLink(finalUrl: String, tag: String) {
+                if (!finalUrl.startsWith("http")) return
+                callback.invoke(
+                    newExtractorLink(
+                        source = "${name}$tag",
+                        name = "${name}$tag$suffix",
+                        url = finalUrl,
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.quality = quality
+                        this.referer = if (finalUrl.contains("pixeldrain", true)) "${katGetBaseUrl(finalUrl)}/" else ""
+                    }
+                )
+            }
+
+            val seen = mutableSetOf<String>()
+            for (btn in document.select("h2 a.btn, div.card-body a.btn, a.btn")) {
+                val href = btn.attr("href").trim()
+                val text = btn.text().trim()
+                if (href.isBlank()) continue
+
+                when {
+                    text.contains("FSL Server", true) && isExtractorAllowed("hubcloud") -> {
+                        if (seen.add(href)) emitLink(href, " [FSL Server]")
+                    }
+                    text.contains("FSLv2", true) && isExtractorAllowed("hubcloud") -> {
+                        if (seen.add(href)) emitLink(href, " [FSLv2 Server]")
+                    }
+                    (href.contains("pixeldra", true) || text.contains("PixelServer", true) || text.contains("Pixeldrain", true)) && isExtractorAllowed("pixeldrain") -> {
+                        val pixelRaw = extractPxlUrl(htmlStr)?.takeIf { it.startsWith("http") } ?: href
+                        if (pixelRaw.startsWith("http")) {
+                            val pBase = katGetBaseUrl(pixelRaw)
+                            val pId = pixelRaw.substringBefore("?").substringAfterLast("/")
+                            val finalUrl = if (pixelRaw.contains("download", true) || pixelRaw.contains("/api/file/", true)) {
+                                pixelRaw
+                            } else {
+                                "$pBase/api/file/$pId?download"
+                            }
+                            if (seen.add(finalUrl)) emitLink(finalUrl, " [Pixeldrain]")
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            logExtractorError(name, url, e, "VCloud getUrl failed")
+        }
+    }
+}
+
 class HubCloudDrive : KatHubCloudExtractor() { override val mainUrl = "https://hubcloud.dad" }
 class HubCloudClub : KatHubCloudExtractor() { override val mainUrl = "https://hubcloud.club" }
 class HubCloudOne : KatHubCloudExtractor() { override val mainUrl = "https://hubcloud.one" }
@@ -1872,4 +1985,3 @@ class Iqsmartgames : GDMirrorbot() {
     override var mainUrl = "https://streams.iqsmartgames.com"
     override var requiresReferer = true
 }
-
