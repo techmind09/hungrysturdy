@@ -12,6 +12,7 @@ class Plugin : Plugin() {
         registerMainAPI(HindiDramaProvider())
         registerMainAPI(Movies4uProvider())
         registerMainAPI(VzyProvider())
+        registerMainAPI(NetMirrorProvider())
 
         // HubCloud & GDFlix Extractors
         registerExtractorAPI(HubCloudExtractor())
