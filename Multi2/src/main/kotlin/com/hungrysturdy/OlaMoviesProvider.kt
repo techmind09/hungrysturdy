@@ -26,7 +26,11 @@ class OlaMoviesProvider : MainAPI() {
     override var mainUrl = "https://v6.olamovies.mov"
     private val driveBaseUrl = "https://drive.olamovies.download"
 
-    // Sflix & HindiDrama fallback server configs
+    // TMDb public key for episode list resolution via IMDb ID
+    private val tmdbApiUrl = "https://api.themoviedb.org/3"
+    private val tmdbApiKey = "439c478a771f35c05022f9feabcca01c"
+
+    // Sflix & HindiDrama server configs
     private val sflixUrl = "https://sflix.film"
     private val sflixPlayerUrl = "https://mzfi.me"
     private val sflixDomains = listOf(
@@ -91,13 +95,11 @@ class OlaMoviesProvider : MainAPI() {
     }
 
     override val mainPage = mainPageOf(
-        // Home & Sorting
         "$mainUrl/" to "Latest Uploads",
         "$mainUrl/?sort=trending" to "Trending",
         "$mainUrl/?sort=most_viewed" to "Most Viewed",
         "$mainUrl/movies/imdb-top-250-collection-download-links-google-drive" to "IMDb Top 250",
 
-        // Movies Categories
         "$mainUrl/categories/movies" to "All Movies",
         "$mainUrl/categories/hollywood" to "Hollywood Movies",
         "$mainUrl/categories/bollywood" to "Bollywood Movies",
@@ -111,7 +113,6 @@ class OlaMoviesProvider : MainAPI() {
         "$mainUrl/categories/bangla" to "Bengali Movies",
         "$mainUrl/categories/other" to "Other Movies",
 
-        // TV Series Categories
         "$mainUrl/categories/tv-series" to "All TV Series",
         "$mainUrl/categories/english-tv-series" to "English TV Series",
         "$mainUrl/categories/hindi-tv-series" to "Hindi TV Series",
@@ -122,7 +123,6 @@ class OlaMoviesProvider : MainAPI() {
         "$mainUrl/categories/bangla-tv-series" to "Bengali TV Series",
         "$mainUrl/categories/other-tv-series" to "Other TV Series",
 
-        // TV Shows Categories
         "$mainUrl/categories/tv-shows" to "All TV Shows",
         "$mainUrl/categories/hindi-tv-shows" to "Hindi TV Shows",
         "$mainUrl/categories/documentary" to "Documentary Shows",
@@ -133,7 +133,6 @@ class OlaMoviesProvider : MainAPI() {
         "$mainUrl/categories/specials-tv-shows" to "Specials",
         "$mainUrl/categories/talk-shows" to "Talk Shows",
 
-        // Collections
         "$mainUrl/tags/collection" to "All Collections",
         "$mainUrl/movies/the-marvel-cinematic-universe-movies-collection-720p-1080p-2160p-4k-bluray-x265-10bit-hevc-dual-audio-esub" to "Marvel Cinematic Universe",
         "$mainUrl/movies/dc-extended-universe-collection" to "DC Extended Universe",
@@ -175,7 +174,7 @@ class OlaMoviesProvider : MainAPI() {
             .distinctBy { it.url }
         if (cardResults.isNotEmpty()) return cardResults
 
-        val anchorResults = doc.select("main a[href*='/movies/'], main a[href*='/tv-series/'], main a[href*='/tv-shows/']")
+        return doc.select("main a[href*='/movies/'], main a[href*='/tv-series/'], main a[href*='/tv-shows/']")
             .filter { it.selectFirst("img") != null }
             .mapNotNull { anchor ->
                 val href = fixUrlNull(anchor.attr("href")) ?: return@mapNotNull null
@@ -201,8 +200,6 @@ class OlaMoviesProvider : MainAPI() {
                 }
             }
             .distinctBy { it.url }
-
-        return anchorResults
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
@@ -292,6 +289,7 @@ class OlaMoviesProvider : MainAPI() {
             .trim()
         val displayTitle = cleanReleaseTitle(fullTitle)
 
+        val imdbId = Regex("""(tt\d{6,10})""").find(html)?.groupValues?.get(1)
         val postId = extractPostId(html)
         val backdrops = if (postId != null) fetchPostBackdrops(postId, cleanUrl) else emptyList()
 
@@ -312,25 +310,24 @@ class OlaMoviesProvider : MainAPI() {
         val isSeries = cleanUrl.contains("/tv-series/") || cleanUrl.contains("/tv-shows/")
 
         return if (isSeries) {
+            val sflixMatch = findSflixSubject(pureName, year)
             val episodes = mutableListOf<Episode>()
 
-            // 1. OlaMovies ke direct episode/download links check karein
-            val downloadSection = mainDoc.selectFirst("#downloads") ?: mainDoc
-            val directEpCandidates = downloadSection.select("a[href], button[data-url], button[data-href]")
-                .mapNotNull { el ->
-                    val rawLink = el.attr("href")
-                        .ifBlank { el.attr("data-url") }
-                        .ifBlank { el.attr("data-href") }
-                    val fixed = fixUrlNull(rawLink) ?: return@mapNotNull null
-                    if (fixed.contains("/sso-login") || fixed.startsWith("#")) return@mapNotNull null
-                    val label = el.text().trim().ifBlank { el.attr("aria-label").trim() }
-                    fixed to label
-                }
-                .distinctBy { it.first }
+            // 1. TMDb API (IMDb ID ya Title se) — saare real seasons & episodes fetch karein
+            val tmdbEpisodes = fetchTmdbAllEpisodes(
+                imdbId = imdbId,
+                title = pureName,
+                year = year,
+                olaUrl = "$cleanUrl#downloads",
+                sflixMatch = sflixMatch,
+                defaultPoster = poster
+            )
+            if (tmdbEpisodes.isNotEmpty()) {
+                episodes.addAll(tmdbEpisodes)
+            }
 
-            // 2. Sflix metadata se real seasons & episode count fetch karein
-            val sflixMatch = findSflixSubject(pureName, year, isSeries = true)
-            if (sflixMatch != null && sflixMatch.seasons.isNotEmpty()) {
+            // 2. Agar TMDb se episodes nahi mile, toh Sflix seasons metadata se episodes banayein
+            if (episodes.isEmpty() && sflixMatch != null && sflixMatch.seasons.isNotEmpty()) {
                 for ((seasonNum, maxEp) in sflixMatch.seasons) {
                     val safeSeason = if (seasonNum <= 0) 1 else seasonNum
                     for (ep in 1..maxEp) {
@@ -358,8 +355,21 @@ class OlaMoviesProvider : MainAPI() {
                 }
             }
 
-            // 3. OlaMovies ke direct candidates agar mile hon
-            if (episodes.isEmpty() && directEpCandidates.isNotEmpty()) {
+            // 3. OlaMovies ke direct links check karein
+            if (episodes.isEmpty()) {
+                val downloadSection = mainDoc.selectFirst("#downloads") ?: mainDoc
+                val directEpCandidates = downloadSection.select("a[href], button[data-url], button[data-href]")
+                    .mapNotNull { el ->
+                        val rawLink = el.attr("href")
+                            .ifBlank { el.attr("data-url") }
+                            .ifBlank { el.attr("data-href") }
+                        val fixed = fixUrlNull(rawLink) ?: return@mapNotNull null
+                        if (fixed.contains("/sso-login") || fixed.startsWith("#")) return@mapNotNull null
+                        val label = el.text().trim().ifBlank { el.attr("aria-label").trim() }
+                        fixed to label
+                    }
+                    .distinctBy { it.first }
+
                 directEpCandidates.forEachIndexed { index, (epUrl, label) ->
                     val seasonNum = Regex("S(\\d{1,2})|Season\\s*(\\d{1,2})", RegexOption.IGNORE_CASE)
                         .find(label)?.groupValues?.firstOrNull { it.isNotBlank() && it.all { c -> c.isDigit() } }?.toIntOrNull() ?: 1
@@ -386,25 +396,33 @@ class OlaMoviesProvider : MainAPI() {
                 }
             }
 
-            // 4. Final fallback
+            // 4. Final fallback: Season range (e.g. [Season 1-2]) ke hisaab se episodes generate karein
             if (episodes.isEmpty()) {
-                val fallbackPayload = JSONObject().apply {
-                    put("olaUrl", "$cleanUrl#downloads")
-                    put("title", pureName)
-                    put("year", year ?: 0)
-                    put("isSeries", true)
-                    put("season", 1)
-                    put("episode", 1)
-                }.toString()
+                val seasonRangeMatch = Regex("Season\\s*(\\d+)(?:\\s*-\\s*(\\d+))?", RegexOption.IGNORE_CASE).find(fullTitle)
+                val startSeason = seasonRangeMatch?.groupValues?.get(1)?.toIntOrNull() ?: 1
+                val endSeason = seasonRangeMatch?.groupValues?.get(2)?.toIntOrNull() ?: startSeason
 
-                episodes.add(
-                    newEpisode(fallbackPayload) {
-                        this.name = "Episode 1 (All Servers)"
-                        this.season = 1
-                        this.episode = 1
-                        this.posterUrl = poster
+                for (s in startSeason..endSeason) {
+                    for (ep in 1..10) {
+                        val fallbackPayload = JSONObject().apply {
+                            put("olaUrl", "$cleanUrl#downloads")
+                            put("title", pureName)
+                            put("year", year ?: 0)
+                            put("isSeries", true)
+                            put("season", s)
+                            put("episode", ep)
+                        }.toString()
+
+                        episodes.add(
+                            newEpisode(fallbackPayload) {
+                                this.name = "Episode $ep"
+                                this.season = s
+                                this.episode = ep
+                                this.posterUrl = poster
+                            }
+                        )
                     }
-                )
+                }
             }
 
             newTvSeriesLoadResponse(displayTitle, cleanUrl, TvType.TvSeries, episodes) {
@@ -431,6 +449,95 @@ class OlaMoviesProvider : MainAPI() {
                 this.plot = description
                 this.tags = tags
             }
+        }
+    }
+
+    private suspend fun fetchTmdbAllEpisodes(
+        imdbId: String?,
+        title: String,
+        year: Int?,
+        olaUrl: String,
+        sflixMatch: SflixSubjectInfo?,
+        defaultPoster: String?
+    ): List<Episode> {
+        return try {
+            var tmdbTvId: Int? = null
+
+            // 1. Pehle IMDb ID se exact TMDb TV ID dhundhein
+            if (!imdbId.isNullOrBlank()) {
+                val findUrl = "$tmdbApiUrl/find/$imdbId?api_key=$tmdbApiKey&external_source=imdb_id"
+                val findJson = JSONObject(app.get(findUrl).text)
+                val tvResults = findJson.optJSONArray("tv_results")
+                if (tvResults != null && tvResults.length() > 0) {
+                    tmdbTvId = tvResults.getJSONObject(0).optInt("id", 0).takeIf { it > 0 }
+                }
+            }
+
+            // 2. Fallback: Title + Year se TMDb TV search
+            if (tmdbTvId == null && title.isNotBlank()) {
+                val yearParam = if (year != null && year > 1900) "&first_air_date_year=$year" else ""
+                val searchUrl = "$tmdbApiUrl/search/tv?api_key=$tmdbApiKey&query=${title.encodeUri()}$yearParam"
+                val searchJson = JSONObject(app.get(searchUrl).text)
+                val results = searchJson.optJSONArray("results")
+                if (results != null && results.length() > 0) {
+                    tmdbTvId = results.getJSONObject(0).optInt("id", 0).takeIf { it > 0 }
+                }
+            }
+
+            if (tmdbTvId == null) return emptyList()
+
+            // 3. TV show details se saare seasons list nikalna
+            val tvDetailsUrl = "$tmdbApiUrl/tv/$tmdbTvId?api_key=$tmdbApiKey"
+            val tvDetails = JSONObject(app.get(tvDetailsUrl).text)
+            val seasonsArr = tvDetails.optJSONArray("seasons") ?: return emptyList()
+
+            val allEpisodes = mutableListOf<Episode>()
+            for (i in 0 until seasonsArr.length()) {
+                val sObj = seasonsArr.getJSONObject(i)
+                val seasonNum = sObj.optInt("season_number", 0)
+                if (seasonNum <= 0) continue // Specials (Season 0) skip
+
+                val seasonUrl = "$tmdbApiUrl/tv/$tmdbTvId/season/$seasonNum?api_key=$tmdbApiKey"
+                val seasonJson = JSONObject(app.get(seasonUrl).text)
+                val epArr = seasonJson.optJSONArray("episodes") ?: continue
+
+                for (j in 0 until epArr.length()) {
+                    val epObj = epArr.getJSONObject(j)
+                    val epNum = epObj.optInt("episode_number", j + 1)
+                    val epName = epObj.optString("name").ifBlank { "Episode $epNum" }
+                    val overview = epObj.optString("overview").takeIf { it.isNotBlank() }
+                    val stillPath = epObj.optString("still_path").takeIf { it.isNotBlank() && it != "null" }
+                    val epPoster = stillPath?.let { "https://image.tmdb.org/t/p/w500$it" } ?: defaultPoster
+
+                    val epPayload = JSONObject().apply {
+                        put("olaUrl", olaUrl)
+                        put("title", title)
+                        put("year", year ?: 0)
+                        put("isSeries", true)
+                        put("season", seasonNum)
+                        put("episode", epNum)
+                        if (sflixMatch != null) {
+                            put("sflixId", sflixMatch.subjectId)
+                            put("sflixPath", sflixMatch.detailPath)
+                            put("sflixDubs", sflixMatch.dubs)
+                        }
+                    }.toString()
+
+                    allEpisodes.add(
+                        newEpisode(epPayload) {
+                            this.name = epName
+                            this.season = seasonNum
+                            this.episode = epNum
+                            this.description = overview
+                            this.posterUrl = epPoster
+                        }
+                    )
+                }
+            }
+
+            allEpisodes
+        } catch (_: Exception) {
+            emptyList()
         }
     }
 
@@ -480,7 +587,7 @@ class OlaMoviesProvider : MainAPI() {
             }
         }
 
-        // 2. Sflix Multi-Server (Original + Dubs: DASH / HLS / MP4 + Captions)
+        // 2. Sflix Multi-Server (Original + Hindi/Regional Dubs: DASH / HLS / MP4 + Captions)
         if (title.isNotBlank()) {
             val sflixFound = loadSflixServers(
                 title = title,
@@ -732,7 +839,7 @@ class OlaMoviesProvider : MainAPI() {
         "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
     )
 
-    private suspend fun findSflixSubject(title: String, year: Int?, isSeries: Boolean): SflixSubjectInfo? {
+    private suspend fun findSflixSubject(title: String, year: Int?): SflixSubjectInfo? {
         return try {
             val searchUrl = "$sflixUrl/search-result?keyword=${title.encodeUri()}"
             val searchDoc = app.get(searchUrl, headers = sflixWebHeaders).document
@@ -851,7 +958,7 @@ class OlaMoviesProvider : MainAPI() {
         val info = if (presetId.isNotBlank() && presetPath.isNotBlank()) {
             SflixSubjectInfo(presetId, presetPath, presetDubs ?: JSONArray(), emptyList())
         } else {
-            findSflixSubject(title, year, isSeries) ?: return false
+            findSflixSubject(title, year) ?: return false
         }
 
         data class ServerEntry(val label: String, val id: String, val path: String)
@@ -1177,3 +1284,4 @@ class OlaMoviesProvider : MainAPI() {
     private fun String.encodeUri(): String =
         URLEncoder.encode(this, "UTF-8")
 }
+
