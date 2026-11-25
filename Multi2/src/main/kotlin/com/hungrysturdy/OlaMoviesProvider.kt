@@ -4,6 +4,7 @@ import android.util.Base64 as AndroidBase64
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId
 import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
 import okhttp3.MediaType.Companion.toMediaType
@@ -26,7 +27,7 @@ class OlaMoviesProvider : MainAPI() {
     override var mainUrl = "https://v6.olamovies.mov"
     private val driveBaseUrl = "https://drive.olamovies.download"
 
-    // Your TMDB API Key & Bearer Read Token
+    // TMDB API Key & Bearer Read Token
     private val tmdbApiUrl = "https://api.themoviedb.org/3"
     private val tmdbApiKey = "e76d52f346700d0edf06fb2e938f98ad"
     private val tmdbBearerToken =
@@ -220,7 +221,8 @@ class OlaMoviesProvider : MainAPI() {
 
         val titleSpan = this.selectFirst("span.text-\\[13\\.5px\\]") ?: return null
         val clonedTitle = titleSpan.clone()
-        clonedTitle.select("span[aria-label*='Paid'], span[title='Ongoing']").remove()
+        // Paid, Ongoing, RE-Uploaded badges ko title se clean karein
+        clonedTitle.select("span[aria-label*='Paid'], span[title='Ongoing'], span[title*='RE-Uploaded']").remove()
         val rawTitle = clonedTitle.text().trim()
         if (rawTitle.isBlank()) return null
 
@@ -244,6 +246,7 @@ class OlaMoviesProvider : MainAPI() {
 
     private fun cleanReleaseTitle(rawTitle: String): String {
         return rawTitle
+            .replace(Regex("^(?:Paid|RE-Uploaded|RERe-uploaded|ON)\\s*", RegexOption.IGNORE_CASE), "")
             .substringBefore("720p")
             .substringBefore("1080p")
             .substringBefore("2160p")
@@ -286,30 +289,38 @@ class OlaMoviesProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val cleanUrl = url.substringBefore("#")
         val response = app.get(cleanUrl, headers = getHeaders())
-        val html = response.text
         val doc = response.document
 
-        val fullTitle = doc.selectFirst("h1")?.text()?.trim()
+        // Sidebar/Drawer/Header remove karein taaki doosre shows ke IMDb IDs mix na hon!
+        doc.select("header, nav, aside, footer").remove()
+        val mainDoc = doc.selectFirst("main") ?: doc
+        val mainHtml = mainDoc.html()
+
+        val fullTitle = mainDoc.selectFirst("h1")?.text()?.trim()
             ?: cleanUrl.substringAfterLast("/").replace("-", " ")
         val year = Regex("\\((\\d{4})\\)").find(fullTitle)?.groupValues?.get(1)?.toIntOrNull()
-        val pureName = cleanReleaseTitle(fullTitle)
+        val displayTitle = cleanReleaseTitle(fullTitle)
+        val pureName = displayTitle
             .replace(Regex("\\(\\d{4}\\)"), "")
             .trim()
-        val displayTitle = cleanReleaseTitle(fullTitle)
 
-        val imdbId = Regex("""(tt\d{6,10})""").find(html)?.groupValues?.get(1)
-        val postId = extractPostId(html)
+        // Sirf main content (aur imdb link) se isi show ka exact IMDb ID nikalein
+        val imdbId = mainDoc.selectFirst("a[href*='imdb.com/title/tt']")?.attr("href")
+            ?.let { Regex("""(tt\d{6,10})""").find(it)?.groupValues?.get(1) }
+            ?: Regex("""/posters/(tt\d{6,10})/""").find(mainHtml)?.groupValues?.get(1)
+            ?: Regex("""(tt\d{6,10})""").find(mainHtml)?.groupValues?.get(1)
+
+        val postId = extractPostId(mainHtml)
         val backdrops = if (postId != null) fetchPostBackdrops(postId, cleanUrl) else emptyList()
 
         val rawImg = doc.selectFirst("meta[property='og:image']")?.attr("content")
-            ?: doc.selectFirst("main img")?.attr("src") ?: ""
+            ?: mainDoc.selectFirst("img")?.attr("src") ?: ""
         val poster = extractRealImageUrl(rawImg) ?: backdrops.firstOrNull()
         val background = backdrops.firstOrNull() ?: poster
 
         val description = doc.selectFirst("meta[name='description']")?.attr("content")
-            ?: doc.select("main p").firstOrNull { it.text().length > 60 }?.text()
+            ?: mainDoc.select("p").firstOrNull { it.text().length > 60 }?.text()
 
-        val mainDoc = doc.selectFirst("main") ?: doc
         val tags = mainDoc.select("a[href*='/tags/'], a[href*='/categories/']")
             .map { it.text().trim() }
             .filter { it.isNotBlank() && !it.contains("All ") && it.length < 25 }
@@ -321,7 +332,7 @@ class OlaMoviesProvider : MainAPI() {
             val sflixMatch = findSflixSubject(pureName, year)
             val episodes = mutableListOf<Episode>()
 
-            // 1. TMDB API (Bearer Token + API Key) se saare real seasons & episodes fetch karein
+            // 1. TMDB API se exact is show ke saare real seasons & episodes fetch karein
             val tmdbEpisodes = fetchTmdbAllEpisodes(
                 imdbId = imdbId,
                 title = pureName,
@@ -439,6 +450,7 @@ class OlaMoviesProvider : MainAPI() {
                 this.year = year
                 this.plot = description
                 this.tags = tags
+                addImdbId(imdbId)
             }
         } else {
             val moviePayload = JSONObject().apply {
@@ -456,6 +468,7 @@ class OlaMoviesProvider : MainAPI() {
                 this.year = year
                 this.plot = description
                 this.tags = tags
+                addImdbId(imdbId)
             }
         }
     }
@@ -472,7 +485,7 @@ class OlaMoviesProvider : MainAPI() {
             var tmdbTvId: Int? = null
             val headers = getTmdbHeaders()
 
-            // 1. IMDb ID se exact TMDB TV ID dhundhein
+            // 1. Exact IMDb ID se TMDB TV ID dhundhein
             if (!imdbId.isNullOrBlank()) {
                 val findUrl = "$tmdbApiUrl/find/$imdbId?api_key=$tmdbApiKey&external_source=imdb_id"
                 val findJson = JSONObject(app.get(findUrl, headers = headers).text)
@@ -482,23 +495,23 @@ class OlaMoviesProvider : MainAPI() {
                 }
             }
 
-            // 2. Title + Year se TMDB TV search
+            // 2. Title + Year se TMDB TV search (exact title match ko priority dein)
             if (tmdbTvId == null && title.isNotBlank() && year != null && year > 1900) {
                 val searchUrl = "$tmdbApiUrl/search/tv?api_key=$tmdbApiKey&query=${title.encodeUri()}&first_air_date_year=$year"
                 val searchJson = JSONObject(app.get(searchUrl, headers = headers).text)
                 val results = searchJson.optJSONArray("results")
                 if (results != null && results.length() > 0) {
-                    tmdbTvId = results.getJSONObject(0).optInt("id", 0).takeIf { it > 0 }
+                    tmdbTvId = pickBestTmdbTvMatch(results, title, year)
                 }
             }
 
-            // 3. Title without Year se TMDB TV search (agar year mismatch ho)
+            // 3. Title without Year se TMDB TV search
             if (tmdbTvId == null && title.isNotBlank()) {
                 val searchUrl = "$tmdbApiUrl/search/tv?api_key=$tmdbApiKey&query=${title.encodeUri()}"
                 val searchJson = JSONObject(app.get(searchUrl, headers = headers).text)
                 val results = searchJson.optJSONArray("results")
                 if (results != null && results.length() > 0) {
-                    tmdbTvId = results.getJSONObject(0).optInt("id", 0).takeIf { it > 0 }
+                    tmdbTvId = pickBestTmdbTvMatch(results, title, year)
                 }
             }
 
@@ -557,6 +570,34 @@ class OlaMoviesProvider : MainAPI() {
         } catch (_: Exception) {
             emptyList()
         }
+    }
+
+    private fun pickBestTmdbTvMatch(results: JSONArray, targetTitle: String, targetYear: Int?): Int? {
+        var bestId: Int? = null
+        var bestScore = -1
+        for (i in 0 until results.length()) {
+            val item = results.optJSONObject(i) ?: continue
+            val id = item.optInt("id", 0)
+            if (id <= 0) continue
+            val name = item.optString("name")
+            val origName = item.optString("original_name")
+            val firstAirYear = item.optString("first_air_date").take(4).toIntOrNull()
+
+            var score = 0
+            if (name.equals(targetTitle, ignoreCase = true) || origName.equals(targetTitle, ignoreCase = true)) {
+                score += 10
+            } else if (name.contains(targetTitle, ignoreCase = true)) {
+                score += 5
+            }
+            if (targetYear != null && firstAirYear == targetYear) {
+                score += 8
+            }
+            if (score > bestScore) {
+                bestScore = score
+                bestId = id
+            }
+        }
+        return bestId
     }
 
     private fun extractPostId(html: String): String? {
@@ -711,8 +752,9 @@ class OlaMoviesProvider : MainAPI() {
 
         val response = app.get(cleanData, headers = getHeaders())
         val doc = response.document
-        val downloadSection = doc.selectFirst("#downloads") ?: doc
-        val htmlText = downloadSection.html() + "\n" + doc.select("script").joinToString("\n") { it.html() }
+        doc.select("header, nav, aside, footer").remove()
+        val downloadSection = doc.selectFirst("#downloads") ?: doc.selectFirst("main") ?: doc
+        val htmlText = downloadSection.html()
 
         val urlRegex = Regex("""https?://[^\s"'\\<>]+""")
         val allUrls = urlRegex.findAll(htmlText)
@@ -735,7 +777,9 @@ class OlaMoviesProvider : MainAPI() {
                     !target.contains("youtube.com") &&
                     !target.contains("olam18plus") &&
                     !target.contains("rarbgdump") &&
-                    !target.contains("graph.org") -> {
+                    !target.contains("graph.org") &&
+                    !target.contains("imdb.com") &&
+                    !target.contains("themoviedb.org") -> {
                     loadExtractor(target, cleanData, subtitleCallback, callback)
                     found = true
                 }
