@@ -23,26 +23,13 @@ class NetMirrorProvider : MainAPI() {
 
     override val mainPage = mainPageOf(
         "filter:title_not%5B%5D=1&title_not%5B%5D=2&title_not%5B%5D=3&title_not%5B%5D=4&title_not%5B%5D=5&title_not%5B%5D=6&title_not%5B%5D=7&title_not%5B%5D=8&cn_multi%5B%5D=1&cn_multi%5B%5D=3&cn_multi%5B%5D=4&cn_multi%5B%5D=5&cn_multi%5B%5D=6&cn_multi%5B%5D=7&cn_multi%5B%5D=8&items_per_page=7&cache=home|related:2026" to "Trending Now",
-        "filter:dubbing=Hindi&sort_by=date&items_per_page=20|related:%5BHindi%5D" to "Latest Hindi",
-        "filter:lang=Telugu&sort_by=date&items_per_page=20|related:%5BTelugu%5D" to "Latest Telugu",
-        "filter:lang=Tamil&sort_by=date&items_per_page=20|related:%5BTamil%5D" to "Latest Tamil",
-        "filter:dubbing=Hindi&type=movie&sort_by=date&items_per_page=20|related:Hindi" to "Latest Hindi Dub",
-        "filter:lang=Kannada&sort_by=date&items_per_page=20|related:%5BKannada%5D" to "Latest Kannada",
-        "filter:lang=Malayalam&sort_by=date&items_per_page=20|related:%5BMalayalam%5D" to "Latest Malayalam",
-        "filter:sort_by=created&items_per_page=20|related:2026" to "Newly Added",
-        "filter:type=tv&dubbing=Hindi&sort_by=date&items_per_page=20|related:S1" to "Latest TV Shows",
-        "filter:type=movie&sort_by=date&items_per_page=20|related:2026" to "Trending in Cinema",
-        "filter:category=South+Indian&sort_by=date&items_per_page=20|related:%5BHindi%5D" to "South Indian",
-        "filter:category=Bollywood&sort_by=date&items_per_page=20|related:Hindi" to "Bollywood",
-        "filter:category=Hollywood&sort_by=date&items_per_page=20|related:English" to "Hollywood",
-        "filter:category=Reality-TV&sort_by=date&items_per_page=20|related:S1" to "Reality-TV",
-        "filter:category=Indian+Drama&sort_by=date&items_per_page=20|related:S1" to "Indian Drama",
-        "filter:category=K-Drama&sort_by=date&items_per_page=20|related:S1" to "K-Drama",
-        "filter:category=C-Drama&sort_by=date&items_per_page=20|related:S1" to "C-Drama",
-        "filter:category=Western+TV&sort_by=date&items_per_page=20|related:S1" to "Western TV",
-        "filter:category=Turkish+Drama&sort_by=date&items_per_page=20|related:S1" to "Turkish Drama",
-        "filter:type=tv&sort_by=rating&items_per_page=20|related:S1" to "Top Rated IMDb Series",
-        "filter:type=movie&sort_by=rating&items_per_page=20|related:Hindi" to "Movies"
+        "related:Hindi|filter:dubbing=Hindi&sort_by=date&items_per_page=20" to "Latest Hindi",
+        "related:Telugu|filter:lang=Telugu&sort_by=date&items_per_page=20" to "Latest Telugu",
+        "related:Tamil|filter:lang=Tamil&sort_by=date&items_per_page=20" to "Latest Tamil",
+        "related:Kannada|filter:lang=Kannada&sort_by=date&items_per_page=20" to "Latest Kannada",
+        "related:Malayalam|filter:lang=Malayalam&sort_by=date&items_per_page=20" to "Latest Malayalam",
+        "related:S1|filter:type=tv&sort_by=date&items_per_page=20" to "Latest TV Shows",
+        "filter:sort_by=created&items_per_page=20|related:2026" to "Newly Added"
     )
 
     private val apiHeaders = mapOf(
@@ -50,6 +37,21 @@ class NetMirrorProvider : MainAPI() {
         "Origin" to mainUrl,
         "Accept" to "application/json, text/plain, */*"
     )
+
+    private val clickWatchScript = """
+        (function() {
+            setTimeout(function() {
+                var els = document.querySelectorAll('button, a, div, span');
+                for (var i = 0; i < els.length; i++) {
+                    var txt = (els[i].innerText || els[i].textContent || '').trim().toLowerCase();
+                    if (txt.indexOf('watch & download') !== -1 || txt === 'watch & download' || txt.indexOf('multi-lang') !== -1) {
+                        els[i].click();
+                        break;
+                    }
+                }
+            }, 1200);
+        })();
+    """.trimIndent()
 
     private suspend fun resolveApiBaseUrl(forceRefresh: Boolean = false): String {
         if (!forceRefresh) return cachedApiUrl
@@ -97,7 +99,7 @@ class NetMirrorProvider : MainAPI() {
                     "/api/movies/filter?page=$apiPage&$query"
                 }
                 src.startsWith("related:") -> {
-                    val term = src.removePrefix("related:")
+                    val term = URLEncoder.encode(src.removePrefix("related:").trim(), "UTF-8")
                     "/api/related/$term?page=$apiPage"
                 }
                 else -> "/api/movies/filter?page=$apiPage&$src"
@@ -302,11 +304,15 @@ class NetMirrorProvider : MainAPI() {
             interceptUrl = Regex("""(watchbox\.php|external\.php|\.mp4|\.m3u8)"""),
             additionalUrls = listOf(Regex("""(watchbox\.php|external\.php|\.mp4|\.m3u8)""")),
             useOkhttp = false,
-            timeout = 18_000L
+            timeout = 15_000L,
+            script = clickWatchScript
         )
 
-        val intercepted = app.get(data, headers = apiHeaders, interceptor = pageResolver)
-        val interceptedUrl = applySeasonEpisode(intercepted.url, requestedSeason, requestedEpisode)
+        val intercepted = runCatching {
+            app.get(data, headers = apiHeaders, interceptor = pageResolver)
+        }.getOrNull()
+
+        val interceptedUrl = applySeasonEpisode(intercepted?.url.orEmpty(), requestedSeason, requestedEpisode)
 
         if (interceptedUrl.contains("watchbox.php") || interceptedUrl.contains("external.php")) {
             val serverLabel = if (interceptedUrl.contains("external.php")) {
@@ -320,6 +326,36 @@ class NetMirrorProvider : MainAPI() {
             foundAny = true
         }
 
+        // Agar WebView se direct player URL nahi mila, to rendered HTML mein player/stream URL dhundhein
+        val bodyHtml = intercepted?.text.orEmpty()
+        if (!foundAny && bodyHtml.isNotBlank()) {
+            val playerMatches = Regex("""https?://[^"'\s<>]+(?:watchbox\.php|external\.php)[^"'\s<>]*""")
+                .findAll(bodyHtml)
+                .map { it.value.replace("\\/", "/").replace("&amp;", "&") }
+                .distinct()
+                .toList()
+
+            for (rawP in playerMatches) {
+                val pUrl = applySeasonEpisode(rawP, requestedSeason, requestedEpisode)
+                val label = if (pUrl.contains("external.php")) "NetMirror - Multi-Lang" else "NetMirror - Watchbox"
+                if (extractFromPlayerUrl(pUrl, label, callback)) {
+                    foundAny = true
+                }
+            }
+
+            if (!foundAny) {
+                val streamMatches = Regex("""["'](https?://[^"']+\.(?:mp4|m3u8)[^"']*)["']""")
+                    .findAll(bodyHtml)
+                    .map { it.groupValues[1].replace("\\/", "/") }
+                    .distinct()
+                    .toList()
+                for (sUrl in streamMatches) {
+                    emitStreamLink(sUrl, "NetMirror", data, callback)
+                    foundAny = true
+                }
+            }
+        }
+
         return foundAny
     }
 
@@ -328,7 +364,7 @@ class NetMirrorProvider : MainAPI() {
         season: String?,
         episode: String?
     ): String {
-        if (season.isNullOrBlank() && episode.isNullOrBlank()) return url
+        if (url.isBlank() || (season.isNullOrBlank() && episode.isNullOrBlank())) return url
         var updated = url
         if (!season.isNullOrBlank()) {
             updated = if (updated.contains(Regex("""([?&])se=\d+"""))) {
@@ -361,7 +397,7 @@ class NetMirrorProvider : MainAPI() {
             "Origin" to mainUrl
         )
 
-        val html = app.get(playerUrl, headers = playerHeaders).text
+        val html = runCatching { app.get(playerUrl, headers = playerHeaders).text }.getOrDefault("")
         val streamRegex = Regex("""["'](https?://[^"']+\.(?:mp4|m3u8)[^"']*)["']""")
         val matches = streamRegex.findAll(html)
             .map { it.groupValues[1].replace("\\/", "/") }
@@ -380,12 +416,16 @@ class NetMirrorProvider : MainAPI() {
             interceptUrl = Regex("""(\.mp4|\.m3u8|/playlist|/master)"""),
             additionalUrls = listOf(Regex("""(\.mp4|\.m3u8)""")),
             useOkhttp = false,
-            timeout = 15_000L
+            timeout = 12_000L
         )
 
-        val mediaRes = app.get(playerUrl, headers = playerHeaders, interceptor = mediaResolver)
-        if (mediaRes.url.contains(".mp4") || mediaRes.url.contains(".m3u8")) {
-            emitStreamLink(mediaRes.url, serverName, playerUrl, callback)
+        val mediaRes = runCatching {
+            app.get(playerUrl, headers = playerHeaders, interceptor = mediaResolver)
+        }.getOrNull()
+
+        val resolvedMediaUrl = mediaRes?.url.orEmpty()
+        if (resolvedMediaUrl.contains(".mp4") || resolvedMediaUrl.contains(".m3u8")) {
+            emitStreamLink(resolvedMediaUrl, serverName, playerUrl, callback)
             return true
         }
 
@@ -443,7 +483,9 @@ class NetMirrorProvider : MainAPI() {
             cleaned.startsWith("/") -> "https://image.tmdb.org/t/p/w500$cleaned"
             else -> "$cachedApiUrl/$cleaned"
         }
-        return fullUrl.replace("_UY300_", "_UY1000_")
+        return fullUrl
+            .replace("_UY300_", "_UY1000_")
+            .replace("x-oss-process=image/resize%2Cw_300", "x-oss-process=image/resize%2Cw_800")
     }
 
     private fun JsonNode.toSearchResponse(): SearchResponse? {
