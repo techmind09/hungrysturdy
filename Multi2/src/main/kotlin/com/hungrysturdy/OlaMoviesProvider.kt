@@ -109,8 +109,7 @@ class OlaMoviesProvider : MainAPI() {
     private fun parseQuality(text: String): SearchQuality? {
         return when {
             text.contains("2160p", true) || text.contains("4K", true) -> SearchQuality.UHD
-            text.contains("1080p", true) -> SearchQuality.FullHD
-            text.contains("720p", true) || text.contains("1280x", true) -> SearchQuality.HD
+            text.contains("1080p", true) || text.contains("720p", true) || text.contains("1280x", true) -> SearchQuality.HD
             else -> null
         }
     }
@@ -234,24 +233,20 @@ class OlaMoviesProvider : MainAPI() {
         var found = false
         val cleanData = data.substringBefore("#")
 
-        // 1. Agar direct video-downloads.googleusercontent.com ya direct media URL mila hai
         if (isDirectVideoUrl(cleanData)) {
             emitDirectVideo(cleanData, "OM Direct", "$driveBaseUrl/", callback)
             return true
         }
 
-        // 2. Agar data drive.olamovies.download/file/<id> hai toh uske andar se direct/mirror URLs nikalna
         if (cleanData.contains("drive.olamovies.download")) {
             return resolveDrivePage(cleanData, subtitleCallback, callback)
         }
 
-        // 3. Agar data koi aur external hoster link hai
         if (!cleanData.startsWith(mainUrl)) {
             loadExtractor(cleanData, "$mainUrl/", subtitleCallback, callback)
             return true
         }
 
-        // 4. Detail page (#downloads) se drive.olamovies.download ya hoster links nikalna
         val response = app.get(cleanData, headers = getHeaders())
         if (response.url.contains("/sso-login")) return false
 
@@ -301,14 +296,12 @@ class OlaMoviesProvider : MainAPI() {
         val res = app.get(driveUrl, headers = getHeaders(referer = "$mainUrl/"))
         val body = res.text
 
-        // Direct video-downloads.googleusercontent.com ya .mp4/.mkv links scan karna
         val directRegex = Regex("""https?://video-downloads\.googleusercontent\.com/[^\s"'\\<>]+|https?://[^\s"'\\<>]+\.(?:mp4|mkv|m3u8)(?:\?[^\s"'\\<>]*)?""", RegexOption.IGNORE_CASE)
         directRegex.findAll(body).map { it.value }.distinct().forEach { streamUrl ->
             emitDirectVideo(streamUrl, "OM Drive", driveUrl, callback)
             found = true
         }
 
-        // Already generated mirror links (vikingfile, pixeldrain, gdflix, buzzheavier, gofile, etc.)
         val mirrorRegex = Regex("""https?://(?:[^\s"'\\<>]*(?:vikingfile|pixeldrain|gdflix|buzzheavier|gofile|hubcloud|gdlink|workers\.dev)[^\s"'\\<>]*)""", RegexOption.IGNORE_CASE)
         mirrorRegex.findAll(body).map { it.value }.distinct().forEach { mirrorUrl ->
             loadExtractor(mirrorUrl, driveUrl, subtitleCallback, callback)
@@ -355,3 +348,4 @@ class OlaMoviesProvider : MainAPI() {
     private fun String.encodeUri(): String =
         java.net.URLEncoder.encode(this, "UTF-8")
 }
+
