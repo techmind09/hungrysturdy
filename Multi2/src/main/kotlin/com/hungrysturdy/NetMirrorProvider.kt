@@ -171,7 +171,6 @@ class NetMirrorProvider : MainAPI() {
 
         val plot = detailNode?.firstText("dis", "overview", "description", "plot", "story")?.trim('"')
         val voteAvg = detailNode?.firstText("vote_average", "rating")
-        val trailerUrl = detailNode?.firstText("trailer")?.replace("\\/", "/")
 
         val castList = detailNode?.get("stafflist")?.takeIf { it.isArray }?.mapNotNull { staff ->
             val actorName = staff.firstText("name") ?: return@mapNotNull null
@@ -199,8 +198,7 @@ class NetMirrorProvider : MainAPI() {
                 this.year = year
                 this.plot = plot
                 this.score = Score.from10(voteAvg)
-                if (!castList.isNullOrEmpty()) addActors(castList)
-                if (!trailerUrl.isNullOrBlank()) addTrailer(trailerUrl)
+                if (!castList.isNullOrEmpty()) this.actors = castList
             }
         } else {
             newMovieLoadResponse(
@@ -213,8 +211,7 @@ class NetMirrorProvider : MainAPI() {
                 this.year = year
                 this.plot = plot
                 this.score = Score.from10(voteAvg)
-                if (!castList.isNullOrEmpty()) addActors(castList)
-                if (!trailerUrl.isNullOrBlank()) addTrailer(trailerUrl)
+                if (!castList.isNullOrEmpty()) this.actors = castList
             }
         }
     }
@@ -468,3 +465,4 @@ class NetMirrorProvider : MainAPI() {
         }
     }
 }
+
