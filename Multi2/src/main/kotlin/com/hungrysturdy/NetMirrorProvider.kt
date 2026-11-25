@@ -22,9 +22,11 @@ class NetMirrorProvider : MainAPI() {
     private var cachedApiUrl: String = "https://api2.imdb4.shop"
 
     override val mainPage = mainPageOf(
-        "title_not%5B%5D=1&title_not%5B%5D=2&title_not%5B%5D=3&title_not%5B%5D=4&title_not%5B%5D=5&title_not%5B%5D=6&title_not%5B%5D=7&title_not%5B%5D=8&cn_multi%5B%5D=1&cn_multi%5B%5D=3&cn_multi%5B%5D=4&cn_multi%5B%5D=5&cn_multi%5B%5D=6&cn_multi%5B%5D=7&cn_multi%5B%5D=8&cache=home" to "Trending Now",
-        "media_type=movie" to "Latest Movies",
-        "media_type=tv" to "Latest TV Series"
+        "filter:title_not%5B%5D=1&title_not%5B%5D=2&title_not%5B%5D=3&title_not%5B%5D=4&title_not%5B%5D=5&title_not%5B%5D=6&title_not%5B%5D=7&title_not%5B%5D=8&cn_multi%5B%5D=1&cn_multi%5B%5D=3&cn_multi%5B%5D=4&cn_multi%5B%5D=5&cn_multi%5B%5D=6&cn_multi%5B%5D=7&cn_multi%5B%5D=8&items_per_page=7&cache=home|related:2026" to "Trending Now",
+        "filter:type=movie&sort=date&items_per_page=20|related:%5BHindi%5D" to "Hindi Movies & Dubs",
+        "filter:type=tv&sort=date&items_per_page=20|related:S1" to "TV & Web Series",
+        "related:%5BTamil%5D" to "Tamil",
+        "related:%5BTelugu%5D" to "Telugu"
     )
 
     private val apiHeaders = mapOf(
@@ -33,7 +35,6 @@ class NetMirrorProvider : MainAPI() {
         "Accept" to "application/json, text/plain, */*"
     )
 
-    // Agar api2.imdb4.shop future mein rotate ho, to netmirror.gold ke JS bundle se naya API domain nikal lega
     private suspend fun resolveApiBaseUrl(forceRefresh: Boolean = false): String {
         if (!forceRefresh) return cachedApiUrl
         val found = runCatching {
@@ -61,7 +62,6 @@ class NetMirrorProvider : MainAPI() {
             return firstTry
         }
 
-        // Domain rotate hone par fresh domain fetch karke retry karein
         val refreshedBase = resolveApiBaseUrl(true)
         return app.get("$refreshedBase$pathAndQuery", headers = apiHeaders).text
     }
@@ -71,20 +71,37 @@ class NetMirrorProvider : MainAPI() {
         request: MainPageRequest
     ): HomePageResponse {
         val apiPage = (page - 1).coerceAtLeast(0)
-        val rawText = apiGet("/api/movies/filter?page=$apiPage&${request.data}&items_per_page=20")
+        val sources = request.data.split("|")
+        var items: List<SearchResponse> = emptyList()
 
-        val root = runCatching { mapper.readTree(rawText) }.getOrNull()
-        val items = root?.let { extractResults(it) }
-            ?.mapNotNull { it.toSearchResponse() }
-            ?: emptyList()
+        for (src in sources) {
+            val endpoint = when {
+                src.startsWith("filter:") -> {
+                    val query = src.removePrefix("filter:")
+                    "/api/movies/filter?page=$apiPage&$query"
+                }
+                src.startsWith("related:") -> {
+                    val term = src.removePrefix("related:")
+                    "/api/related/$term?page=$apiPage"
+                }
+                else -> "/api/movies/filter?page=$apiPage&$src"
+            }
 
-        if (items.isEmpty() && page == 1) {
-            throw ErrorLoadingException("Parse failed. Sample JSON: ${rawText.take(220)}")
+            val rawText = runCatching { apiGet(endpoint) }.getOrDefault("")
+            val root = runCatching { mapper.readTree(rawText) }.getOrNull()
+            val parsed = root?.let { extractResults(it) }
+                ?.mapNotNull { it.toSearchResponse() }
+                ?: emptyList()
+
+            if (parsed.isNotEmpty()) {
+                items = parsed
+                break
+            }
         }
 
         return newHomePageResponse(
             list = HomePageList(request.name, items),
-            hasNext = items.size >= 7
+            hasNext = items.isNotEmpty()
         )
     }
 
@@ -92,10 +109,9 @@ class NetMirrorProvider : MainAPI() {
         val cleanQuery = query.trim()
         if (cleanQuery.isEmpty()) return emptyList()
 
-        // Primary: NetMirror ka exact search/related endpoint (/api/related/Ramayana?page=0)
-        val pathEncoded = URLEncoder.encode(cleanQuery, "UTF-8").replace("+", "%20")
+        val encoded = URLEncoder.encode(cleanQuery, "UTF-8")
         val relatedRaw = runCatching {
-            apiGet("/api/related/$pathEncoded?page=0")
+            apiGet("/api/related/$encoded?page=0")
         }.getOrDefault("")
 
         val relatedRoot = runCatching { mapper.readTree(relatedRaw) }.getOrNull()
@@ -105,10 +121,8 @@ class NetMirrorProvider : MainAPI() {
 
         if (relatedItems.isNotEmpty()) return relatedItems
 
-        // Fallback: filter search
-        val queryEncoded = URLEncoder.encode(cleanQuery, "UTF-8")
         val filterRaw = runCatching {
-            apiGet("/api/movies/filter?page=0&search=$queryEncoded&items_per_page=20")
+            apiGet("/api/movies/filter?page=0&search=$encoded&items_per_page=20")
         }.getOrDefault("")
 
         val filterRoot = runCatching { mapper.readTree(filterRaw) }.getOrNull() ?: return emptyList()
@@ -124,6 +138,7 @@ class NetMirrorProvider : MainAPI() {
         val candidateEndpoints = listOf(
             "/api/movies/$nid",
             "/api/movie/$nid",
+            "/api/tv/$nid",
             "/api/detail/$nid"
         )
 
@@ -137,13 +152,8 @@ class NetMirrorProvider : MainAPI() {
         }
 
         val root = runCatching { mapper.readTree(rawText) }.getOrNull()
-        val detailNode = when {
-            root == null -> null
-            root.has("data") && root["data"].isObject -> root["data"]
-            root.has("movie") && root["movie"].isObject -> root["movie"]
-            root.has("result") && root["result"].isObject -> root["result"]
-            else -> root
-        }
+        val detailNode = root?.get("results")?.takeIf { it.isArray && it.size() > 0 }?.get(0)
+            ?: root
 
         val title = detailNode?.firstText("title", "name", "movie_title", "original_title")
             ?.trim()
@@ -151,57 +161,101 @@ class NetMirrorProvider : MainAPI() {
 
         val poster = fixImageUrl(
             detailNode?.firstText(
-                "poster_path", "poster", "backdrop_path", "backdrop", "image", "img", "thumbnail"
+                "backdrop_path", "poster_path", "poster", "backdrop", "image", "img", "thumbnail"
             )
         )
 
-        val year = detailNode?.firstText("release_date", "year", "release_year")
-            ?.take(4)
-            ?.toIntOrNull()
+        val year = detailNode?.firstText("release_date", "year", "release_year")?.let { dateStr ->
+            Regex("""\b(19|20)\d{2}\b""").find(dateStr)?.value?.toIntOrNull()
+        }
 
-        val plot = detailNode?.firstText("overview", "description", "plot", "story")
+        val plot = detailNode?.firstText("dis", "overview", "description", "plot", "story")?.trim('"')
+        val voteAvg = detailNode?.firstText("vote_average", "rating")
+        val trailerUrl = detailNode?.firstText("trailer")?.replace("\\/", "/")
 
-        // Agar detail JSON mein signed watchbox.php / external.php URLs hon to directly extract karein
-        val signedPlayerRegex = Regex("""https?://[^"'\s]+(?:watchbox\.php|external\.php)[^"'\s]*""")
-        val directPlayerUrls = signedPlayerRegex.findAll(rawText)
-            .map { it.value.replace("\\/", "/") }
-            .distinct()
-            .toList()
+        val castList = detailNode?.get("stafflist")?.takeIf { it.isArray }?.mapNotNull { staff ->
+            val actorName = staff.firstText("name") ?: return@mapNotNull null
+            val role = staff.firstText("character")
+            val avatar = fixImageUrl(staff.firstText("avatarUrl", "avatar", "image"))
+            ActorData(Actor(actorName, avatar), roleString = role)
+        }
 
-        return if (isSeries) {
-            val epArray = detailNode?.get("episodes")?.takeIf { it.isArray }?.toList() ?: emptyList()
-            val episodes = epArray.mapIndexed { idx, ep ->
-                val sNum = ep.firstText("season", "season_number")?.toIntOrNull() ?: 1
-                val eNum = ep.firstText("episode", "episode_number")?.toIntOrNull() ?: (idx + 1)
-                val epTitle = ep.firstText("title", "name")?.trim() ?: "Episode $eNum"
-                val epStill = fixImageUrl(ep.firstText("still_path", "still", "backdrop_path", "image"))
+        val hasSeasons = detailNode?.get("season")?.let { it.isArray && it.size() > 0 } == true
 
-                newEpisode(data = "$cleanUrl?s=$sNum&e=$eNum") {
-                    this.name = epTitle
-                    this.season = sNum
-                    this.episode = eNum
-                    this.posterUrl = epStill ?: poster
-                }
+        return if (isSeries || hasSeasons) {
+            val episodes = parseEpisodes(detailNode, cleanUrl, poster).ifEmpty {
+                listOf(
+                    newEpisode(data = "$cleanUrl?s=1&e=1") {
+                        this.name = "Episode 1"
+                        this.season = 1
+                        this.episode = 1
+                        this.posterUrl = poster
+                    }
+                )
             }
 
             newTvSeriesLoadResponse(title, cleanUrl, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = plot
+                this.score = Score.from10(voteAvg)
+                if (!castList.isNullOrEmpty()) addActors(castList)
+                if (!trailerUrl.isNullOrBlank()) addTrailer(trailerUrl)
             }
         } else {
-            val movieData = directPlayerUrls.takeIf { it.isNotEmpty() }?.joinToString("|") ?: cleanUrl
             newMovieLoadResponse(
                 name = title,
                 url = cleanUrl,
                 type = TvType.Movie,
-                dataUrl = movieData
+                dataUrl = cleanUrl
             ) {
                 this.posterUrl = poster
                 this.year = year
                 this.plot = plot
+                this.score = Score.from10(voteAvg)
+                if (!castList.isNullOrEmpty()) addActors(castList)
+                if (!trailerUrl.isNullOrBlank()) addTrailer(trailerUrl)
             }
         }
+    }
+
+    private fun parseEpisodes(
+        detailNode: JsonNode?,
+        cleanUrl: String,
+        defaultPoster: String?
+    ): List<Episode> {
+        if (detailNode == null) return emptyList()
+        val episodeList = mutableListOf<Episode>()
+
+        val seasonsNode = detailNode.get("season")?.takeIf { it.isArray }
+        if (seasonsNode != null) {
+            for (seasonObj in seasonsNode) {
+                val sNum = seasonObj.firstText("se", "season", "season_number")?.toIntOrNull() ?: continue
+                val epCount = seasonObj.firstText("ep", "episodes", "episode_count")?.toIntOrNull() ?: 0
+                val allEpRaw = seasonObj.firstText("allEp").orEmpty()
+
+                val epNumbers = if (allEpRaw.isNotBlank()) {
+                    allEpRaw.split(",")
+                        .mapNotNull { it.trim().toIntOrNull() }
+                        .ifEmpty { (1..epCount).toList() }
+                } else {
+                    (1..epCount).toList()
+                }
+
+                for (eNum in epNumbers) {
+                    episodeList.add(
+                        newEpisode(data = "$cleanUrl?s=$sNum&e=$eNum") {
+                            this.name = "Episode $eNum"
+                            this.season = sNum
+                            this.episode = eNum
+                            this.posterUrl = defaultPoster
+                        }
+                    )
+                }
+            }
+        }
+
+        return episodeList
     }
 
     override suspend fun loadLinks(
@@ -212,10 +266,13 @@ class NetMirrorProvider : MainAPI() {
     ): Boolean {
         var foundAny = false
 
-        // Case 1: Signed watchbox.php / external.php URLs direct mile hon
+        val requestedSeason = Regex("""[?&]s=(\d+)""").find(data)?.groupValues?.get(1)
+        val requestedEpisode = Regex("""[?&]e=(\d+)""").find(data)?.groupValues?.get(1)
+
         if (data.contains("watchbox.php") || data.contains("external.php")) {
             val urls = data.split("|").map { it.trim() }.filter { it.isNotEmpty() }
-            for (playerUrl in urls) {
+            for (rawPlayerUrl in urls) {
+                val playerUrl = applySeasonEpisode(rawPlayerUrl, requestedSeason, requestedEpisode)
                 val serverLabel = if (playerUrl.contains("external.php")) {
                     "NetMirror - Multi-Lang"
                 } else {
@@ -228,7 +285,6 @@ class NetMirrorProvider : MainAPI() {
             return foundAny
         }
 
-        // Case 2: NetMirror page (/movie/126904) se signed player URL ya direct stream intercept karein
         val pageResolver = WebViewResolver(
             interceptUrl = Regex("""(watchbox\.php|external\.php|\.mp4|\.m3u8)"""),
             additionalUrls = listOf(Regex("""(watchbox\.php|external\.php|\.mp4|\.m3u8)""")),
@@ -237,7 +293,7 @@ class NetMirrorProvider : MainAPI() {
         )
 
         val intercepted = app.get(data, headers = apiHeaders, interceptor = pageResolver)
-        val interceptedUrl = intercepted.url
+        val interceptedUrl = applySeasonEpisode(intercepted.url, requestedSeason, requestedEpisode)
 
         if (interceptedUrl.contains("watchbox.php") || interceptedUrl.contains("external.php")) {
             val serverLabel = if (interceptedUrl.contains("external.php")) {
@@ -254,6 +310,34 @@ class NetMirrorProvider : MainAPI() {
         return foundAny
     }
 
+    private fun applySeasonEpisode(
+        url: String,
+        season: String?,
+        episode: String?
+    ): String {
+        if (season.isNullOrBlank() && episode.isNullOrBlank()) return url
+        var updated = url
+        if (!season.isNullOrBlank()) {
+            updated = if (updated.contains(Regex("""([?&])se=\d+"""))) {
+                updated.replace(Regex("""([?&])se=\d+"""), "$1se=$season")
+            } else if (updated.contains("watchbox.php") || updated.contains("external.php")) {
+                "$updated&se=$season"
+            } else {
+                updated
+            }
+        }
+        if (!episode.isNullOrBlank()) {
+            updated = if (updated.contains(Regex("""([?&])ep=\d+"""))) {
+                updated.replace(Regex("""([?&])ep=\d+"""), "$1ep=$episode")
+            } else if (updated.contains("watchbox.php") || updated.contains("external.php")) {
+                "$updated&ep=$episode"
+            } else {
+                updated
+            }
+        }
+        return updated
+    }
+
     private suspend fun extractFromPlayerUrl(
         playerUrl: String,
         serverName: String,
@@ -264,7 +348,6 @@ class NetMirrorProvider : MainAPI() {
             "Origin" to mainUrl
         )
 
-        // Step 1: Fast regex check for direct .mp4 / .m3u8 links
         val html = app.get(playerUrl, headers = playerHeaders).text
         val streamRegex = Regex("""["'](https?://[^"']+\.(?:mp4|m3u8)[^"']*)["']""")
         val matches = streamRegex.findAll(html)
@@ -280,7 +363,6 @@ class NetMirrorProvider : MainAPI() {
             return true
         }
 
-        // Step 2: WebViewResolver fallback for JS-loaded streams
         val mediaResolver = WebViewResolver(
             interceptUrl = Regex("""(\.mp4|\.m3u8|/playlist|/master)"""),
             additionalUrls = listOf(Regex("""(\.mp4|\.m3u8)""")),
@@ -317,7 +399,6 @@ class NetMirrorProvider : MainAPI() {
         )
     }
 
-    // --- JSON Parsing Helpers ---
     private fun extractResults(node: JsonNode): List<JsonNode> {
         if (node.isArray) return node.toList()
         if (node.isObject) {
@@ -343,12 +424,13 @@ class NetMirrorProvider : MainAPI() {
     private fun fixImageUrl(raw: String?): String? {
         if (raw.isNullOrBlank()) return null
         val cleaned = raw.replace("\\/", "/").trim()
-        return when {
+        val fullUrl = when {
             cleaned.startsWith("http") -> cleaned
             cleaned.startsWith("//") -> "https:$cleaned"
             cleaned.startsWith("/") -> "https://image.tmdb.org/t/p/w500$cleaned"
             else -> "$cachedApiUrl/$cleaned"
         }
+        return fullUrl.replace("_UY300_", "_UY1000_")
     }
 
     private fun JsonNode.toSearchResponse(): SearchResponse? {
@@ -358,9 +440,14 @@ class NetMirrorProvider : MainAPI() {
             "poster_path", "poster", "backdrop_path", "backdrop", "image", "img", "thumbnail"
         )
         val mediaType = firstText("media_type", "type", "content_type")
-        val releaseYear = firstText("release_date", "year")?.take(4)?.toIntOrNull()
+        val releaseYear = firstText("release_date", "year")?.let { dateStr ->
+            Regex("""\b(19|20)\d{2}\b""").find(dateStr)?.value?.toIntOrNull()
+        }
+        val voteAvg = firstText("vote_average", "rating")
+        val hasSeasonArray = this.get("season")?.let { it.isArray && it.size() > 0 } == true
 
-        val isTv = mediaType.equals("tv", ignoreCase = true) ||
+        val isTv = hasSeasonArray ||
+                mediaType.equals("tv", ignoreCase = true) ||
                 mediaType.equals("series", ignoreCase = true) ||
                 !firstText("first_air_date").isNullOrBlank()
 
@@ -370,13 +457,14 @@ class NetMirrorProvider : MainAPI() {
             newTvSeriesSearchResponse(itemTitle, detailUrl, TvType.TvSeries) {
                 this.posterUrl = fixImageUrl(rawImage)
                 this.year = releaseYear
+                this.score = Score.from10(voteAvg)
             }
         } else {
             newMovieSearchResponse(itemTitle, detailUrl, TvType.Movie) {
                 this.posterUrl = fixImageUrl(rawImage)
                 this.year = releaseYear
+                this.score = Score.from10(voteAvg)
             }
         }
     }
 }
-
