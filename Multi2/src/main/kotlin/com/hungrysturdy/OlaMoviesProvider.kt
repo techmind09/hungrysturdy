@@ -26,9 +26,11 @@ class OlaMoviesProvider : MainAPI() {
     override var mainUrl = "https://v6.olamovies.mov"
     private val driveBaseUrl = "https://drive.olamovies.download"
 
-    // TMDb public key for episode list resolution via IMDb ID
+    // Your TMDB API Key & Bearer Read Token
     private val tmdbApiUrl = "https://api.themoviedb.org/3"
-    private val tmdbApiKey = "439c478a771f35c05022f9feabcca01c"
+    private val tmdbApiKey = "e76d52f346700d0edf06fb2e938f98ad"
+    private val tmdbBearerToken =
+        "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJlNzZkNTJmMzQ2NzAwZDBlZGYwNmZiMmU5MzhmOThhZCIsIm5iZiI6MTc3NzkwNzk4NS4xNiwic3ViIjoiNjlmOGI5MTEzODdlMWExNWY3MzI3MWQxIiwic2NvcGVzIjpbImFwaV9yZWFkIl0sInZlcnNpb24iOjF9.xKkhmPxRCBvBPok8br1xxjIMEHfkAO_jQZQ5nBkX2Cc"
 
     // Sflix & HindiDrama server configs
     private val sflixUrl = "https://sflix.film"
@@ -93,6 +95,12 @@ class OlaMoviesProvider : MainAPI() {
         }
         return headers
     }
+
+    private fun getTmdbHeaders(): Map<String, String> = mapOf(
+        "Authorization" to "Bearer $tmdbBearerToken",
+        "Accept" to "application/json",
+        "User-Agent" to webUserAgent
+    )
 
     override val mainPage = mainPageOf(
         "$mainUrl/" to "Latest Uploads",
@@ -313,7 +321,7 @@ class OlaMoviesProvider : MainAPI() {
             val sflixMatch = findSflixSubject(pureName, year)
             val episodes = mutableListOf<Episode>()
 
-            // 1. TMDb API (IMDb ID ya Title se) — saare real seasons & episodes fetch karein
+            // 1. TMDB API (Bearer Token + API Key) se saare real seasons & episodes fetch karein
             val tmdbEpisodes = fetchTmdbAllEpisodes(
                 imdbId = imdbId,
                 title = pureName,
@@ -326,7 +334,7 @@ class OlaMoviesProvider : MainAPI() {
                 episodes.addAll(tmdbEpisodes)
             }
 
-            // 2. Agar TMDb se episodes nahi mile, toh Sflix seasons metadata se episodes banayein
+            // 2. Agar TMDB se episodes na milein toh Sflix seasons metadata se episodes banayein
             if (episodes.isEmpty() && sflixMatch != null && sflixMatch.seasons.isNotEmpty()) {
                 for ((seasonNum, maxEp) in sflixMatch.seasons) {
                     val safeSeason = if (seasonNum <= 0) 1 else seasonNum
@@ -396,14 +404,14 @@ class OlaMoviesProvider : MainAPI() {
                 }
             }
 
-            // 4. Final fallback: Season range (e.g. [Season 1-2]) ke hisaab se episodes generate karein
+            // 4. Final fallback: Season range ke hisaab se episodes generate karein
             if (episodes.isEmpty()) {
                 val seasonRangeMatch = Regex("Season\\s*(\\d+)(?:\\s*-\\s*(\\d+))?", RegexOption.IGNORE_CASE).find(fullTitle)
                 val startSeason = seasonRangeMatch?.groupValues?.get(1)?.toIntOrNull() ?: 1
                 val endSeason = seasonRangeMatch?.groupValues?.get(2)?.toIntOrNull() ?: startSeason
 
                 for (s in startSeason..endSeason) {
-                    for (ep in 1..10) {
+                    for (ep in 1..12) {
                         val fallbackPayload = JSONObject().apply {
                             put("olaUrl", "$cleanUrl#downloads")
                             put("title", pureName)
@@ -462,22 +470,32 @@ class OlaMoviesProvider : MainAPI() {
     ): List<Episode> {
         return try {
             var tmdbTvId: Int? = null
+            val headers = getTmdbHeaders()
 
-            // 1. Pehle IMDb ID se exact TMDb TV ID dhundhein
+            // 1. IMDb ID se exact TMDB TV ID dhundhein
             if (!imdbId.isNullOrBlank()) {
                 val findUrl = "$tmdbApiUrl/find/$imdbId?api_key=$tmdbApiKey&external_source=imdb_id"
-                val findJson = JSONObject(app.get(findUrl).text)
+                val findJson = JSONObject(app.get(findUrl, headers = headers).text)
                 val tvResults = findJson.optJSONArray("tv_results")
                 if (tvResults != null && tvResults.length() > 0) {
                     tmdbTvId = tvResults.getJSONObject(0).optInt("id", 0).takeIf { it > 0 }
                 }
             }
 
-            // 2. Fallback: Title + Year se TMDb TV search
+            // 2. Title + Year se TMDB TV search
+            if (tmdbTvId == null && title.isNotBlank() && year != null && year > 1900) {
+                val searchUrl = "$tmdbApiUrl/search/tv?api_key=$tmdbApiKey&query=${title.encodeUri()}&first_air_date_year=$year"
+                val searchJson = JSONObject(app.get(searchUrl, headers = headers).text)
+                val results = searchJson.optJSONArray("results")
+                if (results != null && results.length() > 0) {
+                    tmdbTvId = results.getJSONObject(0).optInt("id", 0).takeIf { it > 0 }
+                }
+            }
+
+            // 3. Title without Year se TMDB TV search (agar year mismatch ho)
             if (tmdbTvId == null && title.isNotBlank()) {
-                val yearParam = if (year != null && year > 1900) "&first_air_date_year=$year" else ""
-                val searchUrl = "$tmdbApiUrl/search/tv?api_key=$tmdbApiKey&query=${title.encodeUri()}$yearParam"
-                val searchJson = JSONObject(app.get(searchUrl).text)
+                val searchUrl = "$tmdbApiUrl/search/tv?api_key=$tmdbApiKey&query=${title.encodeUri()}"
+                val searchJson = JSONObject(app.get(searchUrl, headers = headers).text)
                 val results = searchJson.optJSONArray("results")
                 if (results != null && results.length() > 0) {
                     tmdbTvId = results.getJSONObject(0).optInt("id", 0).takeIf { it > 0 }
@@ -486,19 +504,19 @@ class OlaMoviesProvider : MainAPI() {
 
             if (tmdbTvId == null) return emptyList()
 
-            // 3. TV show details se saare seasons list nikalna
+            // 4. TV show details se saare seasons list nikalna
             val tvDetailsUrl = "$tmdbApiUrl/tv/$tmdbTvId?api_key=$tmdbApiKey"
-            val tvDetails = JSONObject(app.get(tvDetailsUrl).text)
+            val tvDetails = JSONObject(app.get(tvDetailsUrl, headers = headers).text)
             val seasonsArr = tvDetails.optJSONArray("seasons") ?: return emptyList()
 
             val allEpisodes = mutableListOf<Episode>()
             for (i in 0 until seasonsArr.length()) {
                 val sObj = seasonsArr.getJSONObject(i)
                 val seasonNum = sObj.optInt("season_number", 0)
-                if (seasonNum <= 0) continue // Specials (Season 0) skip
+                if (seasonNum <= 0) continue
 
                 val seasonUrl = "$tmdbApiUrl/tv/$tmdbTvId/season/$seasonNum?api_key=$tmdbApiKey"
-                val seasonJson = JSONObject(app.get(seasonUrl).text)
+                val seasonJson = JSONObject(app.get(seasonUrl, headers = headers).text)
                 val epArr = seasonJson.optJSONArray("episodes") ?: continue
 
                 for (j in 0 until epArr.length()) {
