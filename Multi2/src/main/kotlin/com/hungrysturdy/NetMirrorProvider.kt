@@ -23,10 +23,26 @@ class NetMirrorProvider : MainAPI() {
 
     override val mainPage = mainPageOf(
         "filter:title_not%5B%5D=1&title_not%5B%5D=2&title_not%5B%5D=3&title_not%5B%5D=4&title_not%5B%5D=5&title_not%5B%5D=6&title_not%5B%5D=7&title_not%5B%5D=8&cn_multi%5B%5D=1&cn_multi%5B%5D=3&cn_multi%5B%5D=4&cn_multi%5B%5D=5&cn_multi%5B%5D=6&cn_multi%5B%5D=7&cn_multi%5B%5D=8&items_per_page=7&cache=home|related:2026" to "Trending Now",
-        "filter:type=movie&sort=date&items_per_page=20|related:%5BHindi%5D" to "Hindi Movies & Dubs",
-        "filter:type=tv&sort=date&items_per_page=20|related:S1" to "TV & Web Series",
-        "related:%5BTamil%5D" to "Tamil",
-        "related:%5BTelugu%5D" to "Telugu"
+        "filter:dubbing=Hindi&sort_by=date&items_per_page=20|related:%5BHindi%5D" to "Latest Hindi",
+        "filter:lang=Telugu&sort_by=date&items_per_page=20|related:%5BTelugu%5D" to "Latest Telugu",
+        "filter:lang=Tamil&sort_by=date&items_per_page=20|related:%5BTamil%5D" to "Latest Tamil",
+        "filter:dubbing=Hindi&type=movie&sort_by=date&items_per_page=20|related:Hindi" to "Latest Hindi Dub",
+        "filter:lang=Kannada&sort_by=date&items_per_page=20|related:%5BKannada%5D" to "Latest Kannada",
+        "filter:lang=Malayalam&sort_by=date&items_per_page=20|related:%5BMalayalam%5D" to "Latest Malayalam",
+        "filter:sort_by=created&items_per_page=20|related:2026" to "Newly Added",
+        "filter:type=tv&dubbing=Hindi&sort_by=date&items_per_page=20|related:S1" to "Latest TV Shows",
+        "filter:type=movie&sort_by=date&items_per_page=20|related:2026" to "Trending in Cinema",
+        "filter:category=South+Indian&sort_by=date&items_per_page=20|related:%5BHindi%5D" to "South Indian",
+        "filter:category=Bollywood&sort_by=date&items_per_page=20|related:Hindi" to "Bollywood",
+        "filter:category=Hollywood&sort_by=date&items_per_page=20|related:English" to "Hollywood",
+        "filter:category=Reality-TV&sort_by=date&items_per_page=20|related:S1" to "Reality-TV",
+        "filter:category=Indian+Drama&sort_by=date&items_per_page=20|related:S1" to "Indian Drama",
+        "filter:category=K-Drama&sort_by=date&items_per_page=20|related:S1" to "K-Drama",
+        "filter:category=C-Drama&sort_by=date&items_per_page=20|related:S1" to "C-Drama",
+        "filter:category=Western+TV&sort_by=date&items_per_page=20|related:S1" to "Western TV",
+        "filter:category=Turkish+Drama&sort_by=date&items_per_page=20|related:S1" to "Turkish Drama",
+        "filter:type=tv&sort_by=rating&items_per_page=20|related:S1" to "Top Rated IMDb Series",
+        "filter:type=movie&sort_by=rating&items_per_page=20|related:Hindi" to "Movies"
     )
 
     private val apiHeaders = mapOf(
