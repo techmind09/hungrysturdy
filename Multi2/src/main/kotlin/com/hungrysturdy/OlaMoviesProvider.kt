@@ -1,9 +1,14 @@
 package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URLDecoder
+import java.net.URLEncoder
 
 class OlaMoviesProvider : MainAPI() {
     override var mainUrl = "https://v6.olamovies.mov"
@@ -18,20 +23,24 @@ class OlaMoviesProvider : MainAPI() {
         TvType.TvSeries
     )
 
-    // Logged-in session cookie (v6.olamovies.mov aur drive.olamovies.download ke liye)
-    private var authCookie: String = ""
+    // Optional: Agar manual cookie dena ho toh yahan dal sakte hain, warna WebView session use hoga
+    private var mainCookie: String = ""
+    private var driveCookie: String = ""
 
-    fun setCookie(cookie: String) {
-        authCookie = cookie.trim()
+    fun setCookies(v6Cookie: String, omDriveCookie: String) {
+        mainCookie = v6Cookie.trim()
+        driveCookie = omDriveCookie.trim()
     }
 
-    private fun getHeaders(referer: String = "$mainUrl/"): Map<String, String> {
+    private fun getHeaders(referer: String = "$mainUrl/", isDrive: Boolean = false): Map<String, String> {
         val headers = mutableMapOf(
             "User-Agent" to "Mozilla/5.0 (Linux; Android 15; Infinix X6851) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36",
+            "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Referer" to referer
         )
-        if (authCookie.isNotBlank()) {
-            headers["Cookie"] = authCookie
+        val cookieToUse = if (isDrive) driveCookie else mainCookie
+        if (cookieToUse.isNotBlank()) {
+            headers["Cookie"] = cookieToUse
         }
         return headers
     }
@@ -53,9 +62,8 @@ class OlaMoviesProvider : MainAPI() {
         val separator = if (request.data.contains("?")) "&" else "?"
         val url = if (page == 1) request.data else "${request.data}${separator}page=$page"
 
-        val doc = app.get(url, headers = getHeaders()).document
-        val items = doc.select("div[data-listing-results] div.group\\/card > a, div.grid > div.group\\/card > a")
-            .mapNotNull { it.toSearchResult() }
+        val res = app.get(url, headers = getHeaders())
+        val items = parseListingResponse(res.text)
 
         return newHomePageResponse(
             list = HomePageList(
@@ -65,6 +73,62 @@ class OlaMoviesProvider : MainAPI() {
             ),
             hasNext = items.isNotEmpty()
         )
+    }
+
+    private fun parseListingResponse(body: String): List<SearchResponse> {
+        val doc = Jsoup.parse(body, mainUrl)
+
+        val cardResults = doc.select("div[data-listing-results] div.group\\/card > a, div.grid > div.group\\/card > a")
+            .mapNotNull { it.toSearchResult() }
+        if (cardResults.isNotEmpty()) return cardResults
+
+        val anchorResults = doc.select("a[href*='/movies/'], a[href*='/tv-series/'], a[href*='/tv-shows/']")
+            .mapNotNull { anchor ->
+                val href = fixUrlNull(anchor.attr("href")) ?: return@mapNotNull null
+                val rawTitle = anchor.text().trim()
+                    .replace(Regex("^Paid\\s*", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("^ON\\s*", RegexOption.IGNORE_CASE), "")
+                    .trim()
+                if (rawTitle.length < 3) return@mapNotNull null
+
+                val cleanTitle = cleanReleaseTitle(rawTitle)
+                val imgSrc = anchor.selectFirst("img")?.attr("src") ?: ""
+                val poster = extractRealImageUrl(imgSrc)
+                val isSeries = href.contains("/tv-series/") || href.contains("/tv-shows/")
+
+                if (isSeries) {
+                    newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) {
+                        this.posterUrl = poster
+                        this.quality = parseQuality(rawTitle)
+                    }
+                } else {
+                    newMovieSearchResponse(cleanTitle, href, TvType.Movie) {
+                        this.posterUrl = poster
+                        this.quality = parseQuality(rawTitle)
+                    }
+                }
+            }
+            .distinctBy { it.url }
+        if (anchorResults.isNotEmpty()) return anchorResults
+
+        val slugRegex = Regex("""/(?:movies|tv-series|tv-shows)/[a-zA-Z0-9-]+""")
+        return slugRegex.findAll(body)
+            .map { it.value }
+            .distinct()
+            .take(40)
+            .mapNotNull { path ->
+                val fullUrl = fixUrlNull("$mainUrl$path") ?: return@mapNotNull null
+                val readableTitle = path.substringAfterLast("/")
+                    .replace("-", " ")
+                    .replaceFirstChar { c -> c.uppercase() }
+                val isSeries = path.startsWith("/tv-series/") || path.startsWith("/tv-shows/")
+                if (isSeries) {
+                    newTvSeriesSearchResponse(readableTitle, fullUrl, TvType.TvSeries)
+                } else {
+                    newMovieSearchResponse(readableTitle, fullUrl, TvType.Movie)
+                }
+            }
+            .toList()
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
@@ -77,20 +141,11 @@ class OlaMoviesProvider : MainAPI() {
         val rawTitle = clonedTitle.text().trim()
         if (rawTitle.isBlank()) return null
 
-        val cleanTitle = rawTitle
-            .substringBefore("720p")
-            .substringBefore("1080p")
-            .substringBefore("2160p")
-            .replace(Regex("^\\[Season.*?\\]\\s*", RegexOption.IGNORE_CASE), "")
-            .trim()
-            .ifEmpty { rawTitle }
-
+        val cleanTitle = cleanReleaseTitle(rawTitle)
         val imgSrc = this.selectFirst("img")?.attr("src") ?: ""
         val posterUrl = extractRealImageUrl(imgSrc)
-
         val qualityBadges = this.select("span.top-2\\.5.left-2\\.5 span").text()
         val quality = parseQuality("$qualityBadges $rawTitle")
-
         val isSeries = href.contains("/tv-series/") || href.contains("/tv-shows/")
 
         return if (isSeries) {
@@ -104,6 +159,16 @@ class OlaMoviesProvider : MainAPI() {
                 this.quality = quality
             }
         }
+    }
+
+    private fun cleanReleaseTitle(rawTitle: String): String {
+        return rawTitle
+            .substringBefore("720p")
+            .substringBefore("1080p")
+            .substringBefore("2160p")
+            .replace(Regex("^\\[Season.*?\\]\\s*", RegexOption.IGNORE_CASE), "")
+            .trim()
+            .ifEmpty { rawTitle }
     }
 
     private fun parseQuality(text: String): SearchQuality? {
@@ -130,33 +195,28 @@ class OlaMoviesProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val searchUrl = "$mainUrl/search?q=${query.encodeUri()}"
-        val doc = app.get(searchUrl, headers = getHeaders()).document
-        return doc.select("div.group\\/card > a").mapNotNull { it.toSearchResult() }
+        val res = app.get(searchUrl, headers = getHeaders())
+        return parseListingResponse(res.text)
     }
 
     override suspend fun load(url: String): LoadResponse? {
         val cleanUrl = url.substringBefore("#")
         val response = app.get(cleanUrl, headers = getHeaders())
-
-        if (response.url.contains("/sso-login")) {
-            throw ErrorLoadingException("Login cookie required for OlaMovies.")
-        }
-
+        val html = response.text
         val doc = response.document
-        val fullTitle = doc.selectFirst("h1")?.text()?.trim() ?: return null
-        val title = fullTitle
-            .substringBefore("720p")
-            .substringBefore("1080p")
-            .substringBefore("2160p")
-            .replace(Regex("^\\[Season.*?\\]\\s*", RegexOption.IGNORE_CASE), "")
-            .trim()
-            .ifEmpty { fullTitle }
 
+        val fullTitle = doc.selectFirst("h1")?.text()?.trim()
+            ?: cleanUrl.substringAfterLast("/").replace("-", " ")
+        val title = cleanReleaseTitle(fullTitle)
         val year = Regex("\\((\\d{4})\\)").find(fullTitle)?.groupValues?.get(1)?.toIntOrNull()
+
+        val postId = extractPostId(html)
+        val backdrops = if (postId != null) fetchPostBackdrops(postId, cleanUrl) else emptyList()
 
         val rawImg = doc.selectFirst("meta[property='og:image']")?.attr("content")
             ?: doc.selectFirst("main img")?.attr("src") ?: ""
-        val poster = extractRealImageUrl(rawImg)
+        val poster = extractRealImageUrl(rawImg) ?: backdrops.firstOrNull()
+        val background = backdrops.firstOrNull() ?: poster
 
         val description = doc.selectFirst("meta[name='description']")?.attr("content")
             ?: doc.select("p").firstOrNull { it.text().length > 60 }?.text()
@@ -210,6 +270,7 @@ class OlaMoviesProvider : MainAPI() {
 
             newTvSeriesLoadResponse(title, cleanUrl, TvType.TvSeries, episodes) {
                 this.posterUrl = poster
+                this.backgroundPosterUrl = background
                 this.year = year
                 this.plot = description
                 this.tags = tags
@@ -217,10 +278,31 @@ class OlaMoviesProvider : MainAPI() {
         } else {
             newMovieLoadResponse(title, cleanUrl, TvType.Movie, "$cleanUrl#downloads") {
                 this.posterUrl = poster
+                this.backgroundPosterUrl = background
                 this.year = year
                 this.plot = description
                 this.tags = tags
             }
+        }
+    }
+
+    private fun extractPostId(html: String): String? {
+        return Regex("""/api/posts/(\d+)/""").find(html)?.groupValues?.get(1)
+            ?: Regex(""""postId"\s*:\s*"?(\d+)"?""").find(html)?.groupValues?.get(1)
+    }
+
+    private suspend fun fetchPostBackdrops(postId: String, referer: String): List<String> {
+        if (postId.isBlank()) return emptyList()
+        return try {
+            val apiUrl = "$mainUrl/api/posts/$postId/backdrops"
+            val jsonText = app.get(apiUrl, headers = getHeaders(referer)).text
+            Regex("""https?://[^\s"'\\<>]+?\.(?:jpg|jpeg|png|webp)(?:\?[^\s"'\\<>]*)?""", RegexOption.IGNORE_CASE)
+                .findAll(jsonText)
+                .map { it.value.replace("\\/", "/") }
+                .distinct()
+                .toList()
+        } catch (_: Exception) {
+            emptyList()
         }
     }
 
@@ -233,32 +315,68 @@ class OlaMoviesProvider : MainAPI() {
         var found = false
         val cleanData = data.substringBefore("#")
 
+        // 1. Direct stream URL
         if (isDirectVideoUrl(cleanData)) {
             emitDirectVideo(cleanData, "OM Direct", "$driveBaseUrl/", callback)
             return true
         }
 
+        // 2. Drive page direct hit
         if (cleanData.contains("drive.olamovies.download")) {
             return resolveDrivePage(cleanData, subtitleCallback, callback)
         }
 
+        // 3. External hoster link
         if (!cleanData.startsWith(mainUrl)) {
             loadExtractor(cleanData, "$mainUrl/", subtitleCallback, callback)
             return true
         }
 
-        val response = app.get(cleanData, headers = getHeaders())
-        if (response.url.contains("/sso-login")) return false
+        // 4. WebViewResolver se drive.olamovies.download ya direct video link intercept karna
+        val interceptedUrl = try {
+            val resolver = WebViewResolver(
+                interceptUrl = Regex("""drive\.olamovies\.download/file/|video-downloads\.googleusercontent\.com/|\.(?:mp4|mkv|m3u8)"""),
+                additionalUrls = listOf(
+                    Regex("""drive\.olamovies\.download/file/"""),
+                    Regex("""video-downloads\.googleusercontent\.com/""")
+                ),
+                useOkhttp = false,
+                timeout = 15_000L
+            )
+            app.get(
+                url = data,
+                headers = getHeaders(),
+                interceptor = resolver
+            ).url
+        } catch (_: Exception) {
+            ""
+        }
 
+        if (interceptedUrl.isNotBlank()) {
+            when {
+                isDirectVideoUrl(interceptedUrl) -> {
+                    emitDirectVideo(interceptedUrl, "OM WebView", data, callback)
+                    found = true
+                }
+                interceptedUrl.contains("drive.olamovies.download") -> {
+                    if (resolveDrivePage(interceptedUrl, subtitleCallback, callback)) {
+                        found = true
+                    }
+                }
+            }
+        }
+
+        // 5. Fallback HTML & script regex scan
+        val response = app.get(cleanData, headers = getHeaders())
         val doc = response.document
         val downloadSection = doc.selectFirst("#downloads") ?: doc
         val htmlText = downloadSection.html() + "\n" + doc.select("script").joinToString("\n") { it.html() }
 
-        val allUrls = mutableSetOf<String>()
-        downloadSection.select("a[href]").mapNotNull { fixUrlNull(it.attr("href")) }.forEach { allUrls.add(it) }
-
         val urlRegex = Regex("""https?://[^\s"'\\<>]+""")
-        urlRegex.findAll(htmlText).map { it.value.trimEnd('.', ',', ';', ')') }.forEach { allUrls.add(it) }
+        val allUrls = urlRegex.findAll(htmlText)
+            .map { it.value.trimEnd('.', ',', ';', ')').replace("\\/", "/") }
+            .distinct()
+            .toList()
 
         for (target in allUrls) {
             when {
@@ -266,7 +384,7 @@ class OlaMoviesProvider : MainAPI() {
                     emitDirectVideo(target, "OM Direct", cleanData, callback)
                     found = true
                 }
-                target.contains("drive.olamovies.download") -> {
+                target.contains("drive.olamovies.download/file/") -> {
                     if (resolveDrivePage(target, subtitleCallback, callback)) {
                         found = true
                     }
@@ -293,22 +411,83 @@ class OlaMoviesProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         var found = false
-        val res = app.get(driveUrl, headers = getHeaders(referer = "$mainUrl/"))
+        val res = app.get(driveUrl, headers = getHeaders(referer = "$mainUrl/", isDrive = true))
         val body = res.text
 
-        val directRegex = Regex("""https?://video-downloads\.googleusercontent\.com/[^\s"'\\<>]+|https?://[^\s"'\\<>]+\.(?:mp4|mkv|m3u8)(?:\?[^\s"'\\<>]*)?""", RegexOption.IGNORE_CASE)
-        directRegex.findAll(body).map { it.value }.distinct().forEach { streamUrl ->
+        // /api/file/cloud/progress try karna
+        val fileId = driveUrl.substringAfter("/file/").substringBefore("?").substringBefore("#").trim()
+        val fileName = Regex(""""fileName"\s*:\s*"([^"]+)"""").find(body)?.groupValues?.get(1) ?: ""
+        val fileSize = Regex(""""fileSize"\s*:\s*([0-9.]+)""").find(body)?.groupValues?.get(1)?.toDoubleOrNull() ?: 0.0
+
+        if (fileId.isNotBlank()) {
+            try {
+                val payload = """{"fileId":"$fileId","fileSize":$fileSize,"fileName":"$fileName"}"""
+                val progressRes = app.post(
+                    "$driveBaseUrl/api/file/cloud/progress",
+                    headers = getHeaders(referer = driveUrl, isDrive = true) + mapOf(
+                        "Content-Type" to "application/json",
+                        "Origin" to driveBaseUrl
+                    ),
+                    requestBody = payload.toRequestBody("application/json".toMediaType())
+                ).text
+
+                extractDirectUrls(progressRes).forEach { streamUrl ->
+                    emitDirectVideo(streamUrl, "OM Fast Cloud", driveUrl, callback)
+                    found = true
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        // WebViewResolver fallback for drive.olamovies.download
+        if (!found) {
+            try {
+                val driveResolver = WebViewResolver(
+                    interceptUrl = Regex("""video-downloads\.googleusercontent\.com/|\.(?:mp4|mkv|m3u8)"""),
+                    useOkhttp = false,
+                    timeout = 15_000L
+                )
+                val resolvedStream = app.get(
+                    url = driveUrl,
+                    headers = getHeaders(referer = "$mainUrl/", isDrive = true),
+                    interceptor = driveResolver
+                ).url
+
+                if (isDirectVideoUrl(resolvedStream)) {
+                    emitDirectVideo(resolvedStream, "OM Drive WebView", driveUrl, callback)
+                    found = true
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        // Direct ya mirror links in page source
+        extractDirectUrls(body).forEach { streamUrl ->
             emitDirectVideo(streamUrl, "OM Drive", driveUrl, callback)
             found = true
         }
 
-        val mirrorRegex = Regex("""https?://(?:[^\s"'\\<>]*(?:vikingfile|pixeldrain|gdflix|buzzheavier|gofile|hubcloud|gdlink|workers\.dev)[^\s"'\\<>]*)""", RegexOption.IGNORE_CASE)
-        mirrorRegex.findAll(body).map { it.value }.distinct().forEach { mirrorUrl ->
+        val mirrorRegex = Regex(
+            """https?://(?:[^\s"'\\<>]*(?:vikingfile|pixeldrain|gdflix|buzzheavier|gofile|hubcloud|gdlink|workers\.dev)[^\s"'\\<>]*)""",
+            RegexOption.IGNORE_CASE
+        )
+        mirrorRegex.findAll(body).map { it.value.replace("\\/", "/") }.distinct().forEach { mirrorUrl ->
             loadExtractor(mirrorUrl, driveUrl, subtitleCallback, callback)
             found = true
         }
 
         return found
+    }
+
+    private fun extractDirectUrls(text: String): List<String> {
+        val directRegex = Regex(
+            """https?://video-downloads\.googleusercontent\.com/[^\s"'\\<>]+|https?://[^\s"'\\<>]+\.(?:mp4|mkv|m3u8)(?:\?[^\s"'\\<>]*)?""",
+            RegexOption.IGNORE_CASE
+        )
+        return directRegex.findAll(text)
+            .map { it.value.replace("\\/", "/") }
+            .distinct()
+            .toList()
     }
 
     private suspend fun emitDirectVideo(
@@ -333,7 +512,7 @@ class OlaMoviesProvider : MainAPI() {
         ) {
             this.referer = referer
             this.quality = quality
-            this.headers = getHeaders(referer = referer)
+            this.headers = getHeaders(referer = referer, isDrive = true)
         }
         callback(link)
     }
@@ -346,6 +525,6 @@ class OlaMoviesProvider : MainAPI() {
     }
 
     private fun String.encodeUri(): String =
-        java.net.URLEncoder.encode(this, "UTF-8")
+        URLEncoder.encode(this, "UTF-8")
 }
 
