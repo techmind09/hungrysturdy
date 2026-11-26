@@ -1,6 +1,8 @@
 package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.LoadResponse.Companion.addScore
+import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
 import org.jsoup.nodes.Element
 
@@ -134,7 +136,6 @@ class CinevoodProvider : MainAPI() {
             it.toSearchResult()
         }
 
-        // Matches the .mfx-download-group cards shown in the post layout
         val downloadGroups = document.select("div.mfx-download-group")
         val isSeries = rawTitle.contains(
             Regex("""(Season\s*\d+|S\d{1,2}|Series|Tv-Show|Episode)""", RegexOption.IGNORE_CASE)
@@ -240,7 +241,6 @@ class CinevoodProvider : MainAPI() {
     ) {
         if (depth > 3 || url.isBlank()) return
 
-        // 1. Direct video file / Googleusercontent stream check
         if (url.contains("video-downloads.googleusercontent.com") ||
             url.matches(Regex(""".*\.(mkv|mp4|m3u8)(\?.*)?$""", RegexOption.IGNORE_CASE))
         ) {
@@ -257,16 +257,14 @@ class CinevoodProvider : MainAPI() {
             return
         }
 
-        // 2. Try built-in CloudStream extractors (PixelDrain, HubCloud, etc.)
         if (loadExtractor(url, referer, subtitleCallback, callback)) return
 
-        // 3. Parse intermediate host pages (mCloud & FastDL) from provided HTML samples
         try {
             val res = app.get(url, referer = referer)
             val doc = res.document
             val currentUrl = res.url
 
-            // Case A: FastDL Server page (cinev.html) -> div.vd a#vd
+            // FastDL Server page -> div.vd a#vd
             val fastDlAnchor = doc.selectFirst("div.vd a#vd[href], a#vd[href]")
             if (fastDlAnchor != null) {
                 val directHref = fixUrlNull(fastDlAnchor.attr("href"))
@@ -289,7 +287,7 @@ class CinevoodProvider : MainAPI() {
                 }
             }
 
-            // Case B: mCloud / HubCloud mirror page (cine (1).html / cine.html / dom (1).html)
+            // mCloud / HubCloud mirror page -> div.mirrors-container a[href]
             val mirrorLinks = doc.select("div.mirrors-container a[href]")
             if (mirrorLinks.isNotEmpty()) {
                 val fileTitle = doc.selectFirst("div.card-header")?.text()?.trim() ?: qualityLabel
@@ -298,7 +296,7 @@ class CinevoodProvider : MainAPI() {
                 mirrorLinks.forEach { aTag ->
                     val btnLabel = aTag.text().trim()
                     val minuteBase = aTag.attr("data-minute-base-url")
-                    var targetHref = if (minuteBase.isNotBlank()) {
+                    val targetHref = if (minuteBase.isNotBlank()) {
                         val mins = java.util.Calendar.getInstance().get(java.util.Calendar.MINUTE)
                         "${minuteBase}1$mins"
                     } else {
@@ -308,7 +306,6 @@ class CinevoodProvider : MainAPI() {
                     if (targetHref.isBlank() || targetHref == url) return@forEach
 
                     when {
-                        // FSL Server (Cloudflare R2 direct download)
                         targetHref.contains(".r2.dev") || btnLabel.contains("FSL", ignoreCase = true) -> {
                             callback.invoke(
                                 newExtractorLink(
@@ -321,7 +318,6 @@ class CinevoodProvider : MainAPI() {
                                 }
                             )
                         }
-                        // Server : 10Gbps (gpdl2.hubcloud.mov -> FastDL wrapper)
                         targetHref.contains("gpdl") || targetHref.contains("hubcloud") ||
                         btnLabel.contains("10Gbps", ignoreCase = true) -> {
                             resolveLink(
@@ -333,7 +329,6 @@ class CinevoodProvider : MainAPI() {
                                 depth = depth + 1
                             )
                         }
-                        // PixelServer : 2 (pixeldrain.dev) or other mirrors
                         else -> {
                             val normalizedUrl = targetHref.replace("pixeldrain.dev", "pixeldrain.com")
                             if (!loadExtractor(normalizedUrl, currentUrl, subtitleCallback, callback)) {
@@ -352,7 +347,6 @@ class CinevoodProvider : MainAPI() {
                 return
             }
 
-            // 4. Generic fallback for any other redirector/shortener page
             doc.select("a[href], iframe[src]").forEach { el ->
                 val target = fixUrlNull(
                     if (el.tagName() == "iframe") el.attr("src") else el.attr("href")
@@ -368,3 +362,4 @@ class CinevoodProvider : MainAPI() {
         }
     }
 }
+
