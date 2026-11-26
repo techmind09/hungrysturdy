@@ -146,7 +146,6 @@ class SkymoviesHD : MainAPI() {
             t.contains("Story", ignoreCase = true) || t.contains("Plot", ignoreCase = true) || t.length > 150
         }?.text()?.trim()
 
-        // Extract all download/redirect links along with their anchor text for episode/quality parsing
         val linkElements = document.select("a[href]").filter { a ->
             val href = a.attr("href")
             href.contains("howblogs") ||
@@ -162,7 +161,6 @@ class SkymoviesHD : MainAPI() {
                 linkElements.any { Regex("""(Ep|Episode)\s*\d+""", RegexOption.IGNORE_CASE).containsMatchIn(it.text()) }
 
         return if (isSeries) {
-            // Group links by episode number if multiple episodes exist on the same page
             val episodesMap = LinkedHashMap<Int, MutableList<Pair<String, String>>>()
             linkElements.forEachIndexed { index, a ->
                 val text = a.text().trim()
@@ -268,8 +266,9 @@ class SkymoviesHD : MainAPI() {
     ) {
         val doc1 = app.get(hubCloudUrl, referer = referer).document
         val fileName = doc1.selectFirst("div.card-header, title")?.text()?.trim() ?: labelHint
-        val detectedQuality = getQualityFromString("$fileName $labelHint").takeIf { it != Qualities.Unknown.value }
-            ?: Qualities.P1080.value
+
+        val searchQuality = getQualityFromString("$fileName $labelHint")
+        val detectedQuality: Int = searchQuality?.value ?: Qualities.P1080.value
 
         val generatedUrl = doc1.selectFirst("a#download")?.attr("href") ?: return
         val doc2 = app.get(generatedUrl, referer = hubCloudUrl).document
@@ -318,3 +317,4 @@ class SkymoviesHD : MainAPI() {
         }
     }
 }
+
