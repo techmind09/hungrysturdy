@@ -1,6 +1,7 @@
 package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
+import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addScore
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
@@ -99,16 +100,28 @@ class CinevoodProvider : MainAPI() {
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
-        val rawTitle = document.selectFirst("h1.entry-title, .mfx-main-title")?.text()?.trim()
+        val rawTitle = document.selectFirst("h1.entry-title")?.text()?.trim()
+            ?: document.selectFirst(".mfx-main-title")?.text()?.trim()
             ?: return null
 
-        val title = rawTitle
-            .replace(Regex("""^Download\s+""", RegexOption.IGNORE_CASE), "")
-            .substringBefore(" (20")
-            .substringBefore(" (19")
-            .substringBefore(" (Season")
-            .trim()
-            .ifEmpty { rawTitle }
+        // Parse structured info from .mfx-info-box ul li
+        val infoMap = mutableMapOf<String, String>()
+        document.select("div.mfx-info-box li").forEach { li ->
+            val label = li.selectFirst("strong")?.text()?.replace(":", "")?.trim()?.lowercase()
+            if (!label.isNullOrBlank()) {
+                val value = li.text().substringAfter(":").trim()
+                infoMap[label] = value
+            }
+        }
+
+        val title = infoMap["movie name"]?.takeIf { it.isNotBlank() }
+            ?: rawTitle
+                .replace(Regex("""^Download\s+""", RegexOption.IGNORE_CASE), "")
+                .substringBefore(" (20")
+                .substringBefore(" (19")
+                .substringBefore(" (Season")
+                .trim()
+                .ifEmpty { rawTitle }
 
         val poster = fixUrlNull(
             document.selectFirst("meta[property=og:image]")?.attr("content")
@@ -118,19 +131,26 @@ class CinevoodProvider : MainAPI() {
         val plot = document.selectFirst("div.mfx-plot-box")?.text()?.trim()
             ?: document.selectFirst("meta[property=og:description]")?.attr("content")
 
-        val year = Regex("""\((\d{4})\)""").find(rawTitle)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        val year = infoMap["release year"]?.toIntOrNull()
+            ?: Regex("""\((\d{4})\)""").find(rawTitle)?.groupValues?.getOrNull(1)?.toIntOrNull()
+
+        val duration = infoMap["runtime"]?.let {
+            Regex("""(\d+)""").find(it)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        }
 
         val rating = document.selectFirst("div.mfx-imdb")?.text()
             ?.let { Regex("""(\d+\.\d+)""").find(it)?.groupValues?.getOrNull(1) }
 
-        val tags = document.select("div.mfx-info-box a, span.thecategory a, a[rel=tag]")
-            .map { it.text().trim() }
-            .filter { it.isNotEmpty() }
-            .distinct()
+        val tags = infoMap["genres"]?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() }
+            ?: document.select("a[rel=tag]").map { it.text().trim() }.filter { it.isNotEmpty() }.distinct()
 
-        val trailer = document.selectFirst("div.mfx-yt-lazy")?.attr("data-id")
-            ?.let { "https://www.youtube.com/watch?v=$it" }
-            ?: document.selectFirst("iframe[src*=youtube]")?.attr("src")
+        val actors = infoMap["cast"]?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
+
+        // cine7.html uses data-yt-id="f_bKjZeJBBI"
+        val trailer = document.selectFirst("div.mfx-yt-lazy")?.let { el ->
+            val ytId = el.attr("data-yt-id").ifBlank { el.attr("data-id") }
+            if (ytId.isNotBlank()) "https://www.youtube.com/watch?v=$ytId" else null
+        } ?: document.selectFirst("iframe[src*=youtube]")?.attr("src")
 
         val recommendations = document.select("div.related-posts article.latestpost").mapNotNull {
             it.toSearchResult()
@@ -146,7 +166,7 @@ class CinevoodProvider : MainAPI() {
             downloadGroups.forEachIndexed { index, group ->
                 val groupTitle = group.selectFirst(".mfx-quality-title")?.text()?.trim()
                     ?: "Link Group ${index + 1}"
-                val links = group.select("a.mfx-download-link, a[href]")
+                val links = group.select("a.mfx-download-link[href], a[href]")
                     .mapNotNull { fixUrlNull(it.attr("href")) }
                     .filter { it.startsWith("http") && !it.contains(mainUrl) }
                     .distinct()
@@ -173,6 +193,7 @@ class CinevoodProvider : MainAPI() {
                 this.plot = plot
                 this.tags = tags
                 this.recommendations = recommendations
+                addActors(actors)
                 addScore(rating)
                 addTrailer(trailer)
             }
@@ -180,7 +201,7 @@ class CinevoodProvider : MainAPI() {
             val allLinks = mutableListOf<String>()
             downloadGroups.forEach { group ->
                 val qualityLabel = group.selectFirst(".mfx-quality-title")?.text()?.trim() ?: ""
-                group.select("a.mfx-download-link, a[href]").forEach { aTag ->
+                group.select("a.mfx-download-link[href], a[href]").forEach { aTag ->
                     val link = fixUrlNull(aTag.attr("href"))
                     if (!link.isNullOrBlank() && link.startsWith("http") && !link.contains(mainUrl)) {
                         allLinks.add("$qualityLabel###$link")
@@ -206,7 +227,9 @@ class CinevoodProvider : MainAPI() {
                 this.year = year
                 this.plot = plot
                 this.tags = tags
+                this.duration = duration
                 this.recommendations = recommendations
+                addActors(actors)
                 addScore(rating)
                 addTrailer(trailer)
             }
@@ -239,8 +262,9 @@ class CinevoodProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit,
         depth: Int
     ) {
-        if (depth > 3 || url.isBlank()) return
+        if (depth > 4 || url.isBlank()) return
 
+        // 1. Direct video file / Googleusercontent stream check
         if (url.contains("video-downloads.googleusercontent.com") ||
             url.matches(Regex(""".*\.(mkv|mp4|m3u8)(\?.*)?$""", RegexOption.IGNORE_CASE))
         ) {
@@ -257,18 +281,21 @@ class CinevoodProvider : MainAPI() {
             return
         }
 
+        // 2. Try built-in CloudStream extractors
         if (loadExtractor(url, referer, subtitleCallback, callback)) return
 
+        // 3. Fetch intermediate page (handles mobilejsr.best -> mcloud.best -> FastDL)
         try {
             val res = app.get(url, referer = referer)
             val doc = res.document
             val currentUrl = res.url
+            val htmlText = res.text
 
-            // FastDL Server page -> div.vd a#vd
+            // Case A: FastDL Server page -> div.vd a#vd
             val fastDlAnchor = doc.selectFirst("div.vd a#vd[href], a#vd[href]")
             if (fastDlAnchor != null) {
                 val directHref = fixUrlNull(fastDlAnchor.attr("href"))
-                if (!directHref.isNullOrBlank() && directHref != url) {
+                if (!directHref.isNullOrBlank() && directHref != currentUrl) {
                     val serverTitle = doc.title().ifBlank { "FastDL" }
                     callback.invoke(
                         newExtractorLink(
@@ -287,7 +314,7 @@ class CinevoodProvider : MainAPI() {
                 }
             }
 
-            // mCloud / HubCloud mirror page -> div.mirrors-container a[href]
+            // Case B: mCloud / HubCloud mirror page -> div.mirrors-container a[href]
             val mirrorLinks = doc.select("div.mirrors-container a[href]")
             if (mirrorLinks.isNotEmpty()) {
                 val fileTitle = doc.selectFirst("div.card-header")?.text()?.trim() ?: qualityLabel
@@ -303,7 +330,7 @@ class CinevoodProvider : MainAPI() {
                         fixUrlNull(aTag.attr("href")) ?: ""
                     }
 
-                    if (targetHref.isBlank() || targetHref == url) return@forEach
+                    if (targetHref.isBlank() || targetHref == currentUrl) return@forEach
 
                     when {
                         targetHref.contains(".r2.dev") || btnLabel.contains("FSL", ignoreCase = true) -> {
@@ -347,15 +374,49 @@ class CinevoodProvider : MainAPI() {
                 return
             }
 
+            // Case C: Intermediate shortener / gateway page (e.g. mobilejsr.best/genxfm...)
+            // Check meta-refresh or JS window.location redirect first
+            val metaRedirect = doc.selectFirst("meta[http-equiv=refresh]")?.attr("content")
+                ?.substringAfter("url=", "")?.trim()?.trim('\'', '"')
+            val jsRedirect = Regex("""(?:window\.location(?:\.href)?|location\.replace)\s*(?:=|\()\s*['"](https?://[^'"]+)['"]""")
+                .find(htmlText)?.groupValues?.getOrNull(1)
+            val mcloudMatch = Regex("""https?://(?:mcloud|hubcloud)\.[a-z]+/[^\s"'<>]+""")
+                .find(htmlText)?.value
+
+            val nextHop = listOfNotNull(metaRedirect, jsRedirect, mcloudMatch)
+                .firstOrNull { it.startsWith("http") && it != currentUrl }
+
+            if (nextHop != null) {
+                resolveLink(
+                    url = nextHop,
+                    qualityLabel = qualityLabel,
+                    referer = currentUrl,
+                    subtitleCallback = subtitleCallback,
+                    callback = callback,
+                    depth = depth + 1
+                )
+                return
+            }
+
+            // Case D: Fallback to candidate anchors/iframes on gateway pages
             doc.select("a[href], iframe[src]").forEach { el ->
                 val target = fixUrlNull(
                     if (el.tagName() == "iframe") el.attr("src") else el.attr("href")
                 )
-                if (!target.isNullOrBlank() && target != url && target.startsWith("http") &&
+                if (!target.isNullOrBlank() && target != currentUrl && target.startsWith("http") &&
                     !target.contains("telegram") && !target.contains("t.me") &&
                     !target.contains("whatsapp")
                 ) {
-                    loadExtractor(target, currentUrl, subtitleCallback, callback)
+                    if (!loadExtractor(target, currentUrl, subtitleCallback, callback)) {
+                        resolveLink(
+                            url = target,
+                            qualityLabel = qualityLabel,
+                            referer = currentUrl,
+                            subtitleCallback = subtitleCallback,
+                            callback = callback,
+                            depth = depth + 1
+                        )
+                    }
                 }
             }
         } catch (_: Exception) {
