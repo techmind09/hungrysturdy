@@ -14,6 +14,8 @@ class Plugin : Plugin() {
         registerMainAPI(DramaVerseProvider())
         registerMainAPI(GokuHDProvider())
         registerMainAPI(ToonPlayProvider())
+        registerMainAPI(SkymoviesHD())
+
 
         // Extractors Registration
         registerExtractorAPI(GokuHDExtractor())
