@@ -47,7 +47,8 @@ class SkymoviesHD : MainAPI() {
     private fun cleanTitle(title: String): String {
         return title
             .replace(Regex("""\s*\(\d{4}\).*"""), { m ->
-                m.value.substringBefore(")") + ")"
+                val yearPart = m.value.substringBefore(")") + ")"
+                yearPart
             })
             .substringBefore(" 2160p")
             .substringBefore(" 1080p")
@@ -81,7 +82,7 @@ class SkymoviesHD : MainAPI() {
             s.contains("favicon") ||
             s.contains("snvhost") ||
             s.contains("banner") ||
-            (s.contains("ad") && (s.contains("adangle") || s.contains("vitalickitten") || s.contains("doubleclick")))
+            s.contains("ad") && (s.contains("adangle") || s.contains("vitalickitten") || s.contains("doubleclick"))
     }
 
     private fun Element.getPoster(): String? {
@@ -106,6 +107,7 @@ class SkymoviesHD : MainAPI() {
             src?.let { fixUrl(it) }
         }
 
+        // Prefer known movie poster hosts first, then any remaining valid image
         return candidates.firstOrNull { u ->
             u.contains("tmdb", true) ||
                 u.contains("imdb", true) ||
@@ -187,8 +189,10 @@ class SkymoviesHD : MainAPI() {
             }
         }
 
+        // Remove duplicate quality cards for the same title
         val uniqueResults = rawList.distinctBy { it.name.lowercase() }
 
+        // Fetch posters for items missing a poster (like category pages)
         val withPosters = uniqueResults.amap { item ->
             if (item.posterUrl == null) {
                 val poster = fetchPosterFromDetail(item.url)
@@ -231,22 +235,6 @@ class SkymoviesHD : MainAPI() {
         }
     }
 
-    private fun isSupportedHost(href: String): Boolean {
-        return href.contains("howblogs", true) ||
-            href.contains("drivehub", true) ||
-            href.contains("hubdrive", true) ||
-            href.contains("hubcloud", true) ||
-            href.contains("mcloud", true) ||
-            href.contains("vegadrive", true) ||
-            href.contains("dotflix", true) ||
-            href.contains("gdflix", true) ||
-            href.contains("gdlink", true) ||
-            href.contains("goflix", true) ||
-            href.contains("pixeldrain", true) ||
-            href.contains("fuckingfast", true) ||
-            href.contains("hbplay", true)
-    }
-
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
@@ -266,6 +254,7 @@ class SkymoviesHD : MainAPI() {
 
         val poster = extractDetailPoster(document)
 
+        // Ignore category list / navigation / copyright blocks in plot
         val plot = document.select("div.Let, div.Fmvideo, .description, .story, p")
             .filter { el -> el.select("select, option, form").isEmpty() }
             .map { it.text().trim() }
@@ -279,7 +268,11 @@ class SkymoviesHD : MainAPI() {
             }
 
         val linkElements = document.select("a[href]").filter { a ->
-            isSupportedHost(a.attr("href"))
+            val href = a.attr("href")
+            href.contains("howblogs", true) ||
+                href.contains("drivehub", true) ||
+                href.contains("hubdrive", true) ||
+                href.contains("hubcloud", true)
         }
 
         val series = isSeries(rawTitle) ||
@@ -338,7 +331,11 @@ class SkymoviesHD : MainAPI() {
                 link.contains("howblogs", true) -> {
                     val doc = app.get(link).document
                     doc.select("a[href]").mapNotNull { it.attr("href") }
-                        .filter { isSupportedHost(it) }
+                        .filter {
+                            it.contains("drivehub", true) ||
+                                it.contains("hubdrive", true) ||
+                                it.contains("hubcloud", true)
+                        }
                         .distinct()
                         .forEach { targetUrl ->
                             resolveIntermediateHost(targetUrl, link, labelHint, subtitleCallback, callback)
@@ -360,71 +357,89 @@ class SkymoviesHD : MainAPI() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        val quality = getQualityFromName(labelHint)
-
         when {
             url.contains("drivehub", true) || url.contains("hubdrive", true) -> {
                 val doc = app.get(url, referer = referer).document
                 val fileTitle = doc.selectFirst("h6.text-primary, title")?.text() ?: labelHint
-                val nextTargets = doc.select("a[href]")
-                    .map { it.attr("href") }
-                    .filter {
-                        it.contains("hubcloud", true) ||
-                            it.contains("mcloud", true) ||
-                            it.contains("vegadrive", true) ||
-                            it.contains("dotflix", true) ||
-                            it.contains("gdflix", true)
-                    }
-                    .distinct()
-
-                if (nextTargets.isNotEmpty()) {
-                    nextTargets.forEach { target ->
-                        resolveIntermediateHost(target, url, fileTitle, subtitleCallback, callback)
-                    }
-                } else {
-                    loadExtractor(url, referer, subtitleCallback, callback)
+                val hubCloudUrl = doc.selectFirst("a[href*='hubcloud']")?.attr("href")
+                if (!hubCloudUrl.isNullOrBlank()) {
+                    extractHubCloud(hubCloudUrl, url, fileTitle, subtitleCallback, callback)
                 }
             }
-
             url.contains("hubcloud", true) -> {
-                KatServerLogic.extractHubCloudServers(url, referer, subtitleCallback, callback)
+                extractHubCloud(url, referer, labelHint, subtitleCallback, callback)
             }
-
-            url.contains("mcloud", true) -> {
-                KatServerLogic.extractMCloudServers(url, referer, subtitleCallback, callback)
-            }
-
-            url.contains("vegadrive", true) -> {
-                KatServerLogic.extractVegaDriveServers(url, referer, subtitleCallback, callback)
-            }
-
-            url.contains("dotflix", true) -> {
-                KatServerLogic.extractDotflixServers(url, referer, subtitleCallback, callback)
-            }
-
-            url.contains("gdflix", true) || url.contains("gdlink", true) -> {
-                KatServerLogic.extractGdFlixServers("GDFlix", url, referer, subtitleCallback, callback)
-            }
-
-            url.contains("goflix", true) -> {
-                KatServerLogic.extractGoFlixMirror(url, quality, subtitleCallback, callback)
-            }
-
-            url.contains("pixeldrain", true) -> {
-                KatServerLogic.extractPixelDrain(url, quality, callback)
-            }
-
-            url.contains("fuckingfast", true) -> {
-                KatServerLogic.extractFuckingFast(url, quality, callback)
-            }
-
-            url.contains("hbplay", true) -> {
-                KatServerLogic.extractHbPlay(url, quality, callback)
-            }
-
             else -> {
                 loadExtractor(url, referer, subtitleCallback, callback)
             }
         }
     }
+
+    private suspend fun extractHubCloud(
+        hubCloudUrl: String,
+        referer: String,
+        labelHint: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val doc1 = app.get(hubCloudUrl, referer = referer).document
+        val fileName = doc1.selectFirst("div.card-header, title")?.text()?.trim() ?: labelHint
+        val detectedQuality = getQualityFromName("$fileName $labelHint")
+
+        val generatedUrl = doc1.selectFirst("a#download")?.attr("href") ?: return
+        val doc2 = app.get(generatedUrl, referer = hubCloudUrl).document
+
+        doc2.selectFirst("a#fsl")?.attr("href")?.let { fslLink ->
+            if (fslLink.isNotBlank()) {
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = "$name - FSL Server",
+                        url = fslLink,
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = generatedUrl
+                        this.quality = detectedQuality
+                    }
+                )
+            }
+        }
+
+        doc2.selectFirst("a#pxl-1, a[href*='pixeldrain']")?.attr("href")?.let { pxlUrl ->
+            val fileId = pxlUrl.substringAfterLast("/").substringBefore("?")
+            if (fileId.isNotBlank()) {
+                callback.invoke(
+                    newExtractorLink(
+                        source = name,
+                        name = "$name - PixelDrain",
+                        url = "https://pixeldrain.com/api/file/$fileId",
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = pxlUrl
+                        this.quality = detectedQuality
+                    }
+                )
+            }
+        }
+
+        doc2.select("a[href*='pixel.hubcloud'], a[href*='fuckingfast']").forEach { a ->
+            val serverUrl = a.attr("href")
+            if (serverUrl.isNotBlank()) {
+                loadExtractor(serverUrl, generatedUrl, subtitleCallback, callback)
+            }
+        }
+    }
+
+    private fun getQualityFromName(str: String): Int {
+        return when {
+            str.contains("2160p", true) || str.contains("4k", true) -> Qualities.P2160.value
+            str.contains("1440p", true) || str.contains("2k", true) -> Qualities.P1440.value
+            str.contains("1080p", true) -> Qualities.P1080.value
+            str.contains("720p", true) -> Qualities.P720.value
+            str.contains("480p", true) -> Qualities.P480.value
+            str.contains("360p", true) -> Qualities.P360.value
+            else -> Qualities.P1080.value
+        }
+    }
 }
+
