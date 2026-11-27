@@ -3,13 +3,19 @@ package com.hungrysturdy
 import android.util.Base64
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.newSubtitleFile
 import com.lagradost.cloudstream3.utils.ExtractorApi
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.JsUnpacker
 import com.lagradost.cloudstream3.utils.Qualities
+import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 import java.net.URI
+import java.util.Calendar
 
 open class BaseJWPExtractor : ExtractorApi() {
     override var name = "BaseJWP"
@@ -140,12 +146,342 @@ open class BaseJWPExtractor : ExtractorApi() {
             .filter { emittedSubs.add(it) }
             .forEach { subUrl ->
                 subtitleCallback.invoke(
-                    SubtitleFile(
+                    newSubtitleFile(
                         lang = "Hindi / English",
                         url = subUrl
                     )
                 )
             }
+    }
+}
+
+// ==========================================
+// mCloud Extractor (FSL Minute Token, PixelServer, 10Gbps)
+// ==========================================
+open class MCloudExtractor : ExtractorApi() {
+    override var name = "mCloud"
+    override var mainUrl = "https://mcloud.best"
+    override val requiresReferer = false
+
+    private val browserHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    )
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val cleanInput = url.replace("&amp;", "&").trim()
+        val resp = app.get(cleanInput, referer = referer, headers = browserHeaders)
+        val doc = resp.document
+        val currentUrl = resp.url.ifBlank { cleanInput }
+        val emitted = mutableSetOf<String>()
+
+        // 1. FSL Server (data-minute-base-url + '1' + MM)
+        val fslEl = doc.selectFirst("#fsl[data-minute-base-url], [data-minute-base-url]")
+        val minuteBaseUrl = fslEl?.attr("data-minute-base-url")?.trim().orEmpty()
+        if (minuteBaseUrl.isNotEmpty()) {
+            val minuteStr = Calendar.getInstance().get(Calendar.MINUTE).toString().padStart(2, '0')
+            val fslUrl = (minuteBaseUrl + "1" + minuteStr).replace("&amp;", "&").trim()
+            if (fslUrl.startsWith("http") && emitted.add(fslUrl)) {
+                callback.invoke(
+                    newExtractorLink(
+                        source = this.name,
+                        name = "mCloud [FSL Server]",
+                        url = fslUrl,
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = ""
+                        this.quality = Qualities.P1080.value
+                    }
+                )
+            }
+        }
+
+        // 2. PixelServer, 10Gbps Server & Mirrors
+        doc.select("a[href]").forEach { a ->
+            val href = a.attr("abs:href").ifBlank { a.attr("href") }.replace("&amp;", "&").trim()
+            if (!href.startsWith("http") || href.contains("t.me") || href.contains("telegram")) return@forEach
+
+            val label = a.text().trim()
+            val lowerHref = href.lowercase()
+            val lowerLabel = label.lowercase()
+
+            when {
+                lowerHref.contains("pixeldrain") || lowerLabel.contains("pixelserver") -> {
+                    if (emitted.add(href)) {
+                        loadExtractor(href, currentUrl, subtitleCallback, callback)
+                    }
+                }
+                lowerHref.contains("hubcloud") || lowerLabel.contains("10gbps") || lowerLabel.contains("server") -> {
+                    if (emitted.add(href)) {
+                        callback.invoke(
+                            newExtractorLink(
+                                source = this.name,
+                                name = "mCloud [${label.ifBlank { "10Gbps Server" }}]",
+                                url = href,
+                                type = ExtractorLinkType.VIDEO
+                            ) {
+                                this.referer = currentUrl
+                                this.quality = Qualities.P1080.value
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// Vega Drive Extractor (Vegadrop, Transferit, Gofile, Buzzheavier, VikingFile)
+// ==========================================
+open class VegaDriveExtractor : ExtractorApi() {
+    override var name = "VegaDrive"
+    override var mainUrl = "https://one.vegadrive.me"
+    override val requiresReferer = false
+
+    private val browserHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    )
+
+    private fun getOrigin(targetUrl: String): String {
+        return try {
+            val uri = URI(targetUrl)
+            "${uri.scheme}://${uri.host}"
+        } catch (_: Exception) {
+            mainUrl
+        }
+    }
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val cleanInput = url.replace("&amp;", "&").trim()
+        val resp = app.get(cleanInput, referer = referer, headers = browserHeaders)
+        val html = resp.text
+        val doc = resp.document
+        val currentUrl = resp.url.ifBlank { cleanInput }
+        val origin = getOrigin(currentUrl)
+        val emitted = mutableSetOf<String>()
+
+        // 1. Check /api/file/<id> endpoint if available
+        val fileId = Regex("""/api/file/([A-Za-z0-9_-]+)""").find(html)?.groupValues?.get(1)
+        if (!fileId.isNullOrBlank()) {
+            runCatching {
+                val apiText = app.get("$origin/api/file/$fileId", referer = currentUrl, headers = browserHeaders).text.trim()
+                if (apiText.startsWith("{")) {
+                    val obj = JSONObject(apiText)
+                    val direct = obj.optString("downloadUrl")
+                        .ifBlank { obj.optString("url") }
+                        .ifBlank { obj.optString("link") }
+                        .replace("\\/", "/")
+                        .trim()
+                    if (direct.isNotBlank() && direct != "null") {
+                        val resolved = if (direct.startsWith("http")) direct else "$origin${if (direct.startsWith("/")) "" else "/"}$direct"
+                        if (emitted.add(resolved)) {
+                            callback.invoke(
+                                newExtractorLink(
+                                    source = this.name,
+                                    name = "VegaDrive [API Direct]",
+                                    url = resolved,
+                                    type = ExtractorLinkType.VIDEO
+                                ) {
+                                    this.referer = currentUrl
+                                    this.quality = Qualities.P1080.value
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Parse Vegadrop & mirror buttons
+        val mirrorKeywords = listOf(
+            "skydrop" to "Vegadrop 10Gbps Direct",
+            "transferit" to "Transferit",
+            "gofile" to "Gofile",
+            "buzzheavier" to "Buzzheavier",
+            "vikingfile" to "VikingFile"
+        )
+
+        doc.select("a[href]").forEach { a ->
+            val rawHref = a.attr("abs:href").ifBlank { a.attr("href") }.replace("&amp;", "&").trim()
+            if (rawHref.isBlank() || rawHref.startsWith("javascript:", true) || rawHref.startsWith("#")) return@forEach
+
+            val resolvedHref = if (rawHref.startsWith("http")) {
+                rawHref
+            } else {
+                "$origin${if (rawHref.startsWith("/")) "" else "/"}$rawHref"
+            }
+
+            if (resolvedHref.contains("t.me") || resolvedHref.contains("telegram")) return@forEach
+
+            val label = a.text().trim()
+            val lowerHref = resolvedHref.lowercase()
+            val lowerLabel = label.lowercase()
+
+            val matched = mirrorKeywords.firstOrNull { (key, _) ->
+                lowerHref.contains("/$key") || lowerHref.contains(key) || lowerLabel.contains(key)
+            }
+
+            if (matched != null && emitted.add(resolvedHref)) {
+                val mirrorTitle = label.ifBlank { matched.second }
+                if (matched.first == "gofile" || lowerHref.contains("gofile.io")) {
+                    loadExtractor(resolvedHref, currentUrl, subtitleCallback, callback)
+                } else {
+                    callback.invoke(
+                        newExtractorLink(
+                            source = this.name,
+                            name = "VegaDrive [$mirrorTitle]",
+                            url = resolvedHref,
+                            type = ExtractorLinkType.VIDEO
+                        ) {
+                            this.referer = currentUrl
+                            this.quality = Qualities.P1080.value
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// DOTFLIX Extractor (POST /api/extract-download + sharingCode & proof)
+// ==========================================
+open class DotflixExtractor : ExtractorApi() {
+    override var name = "DOTFLIX"
+    override var mainUrl = "https://dt.dotflix.website"
+    override val requiresReferer = false
+
+    private val browserHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    )
+
+    private fun getOrigin(targetUrl: String): String {
+        return try {
+            val uri = URI(targetUrl)
+            "${uri.scheme}://${uri.host}"
+        } catch (_: Exception) {
+            mainUrl
+        }
+    }
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val cleanInput = url.replace("&amp;", "&").trim()
+        val resp = app.get(cleanInput, referer = referer, headers = browserHeaders)
+        val html = resp.text
+        val doc = resp.document
+        val currentUrl = resp.url.ifBlank { cleanInput }
+        val origin = getOrigin(currentUrl)
+        val emitted = mutableSetOf<String>()
+
+        val sharingCode = Regex("""sharingCode\s*[:=]\s*["']([a-fA-F0-9]+)["']""")
+            .find(html)?.groupValues?.get(1)
+            ?: doc.selectFirst("input[name=sharingCode], [data-sharing-code]")
+                ?.let { it.attr("value").ifBlank { it.attr("data-sharing-code") } }
+            ?: ""
+
+        val proof = Regex("""[?&]proof=([A-Za-z0-9_%-]+)""").find(currentUrl)?.groupValues?.get(1)
+            ?: Regex("""proof\s*[:=]\s*["']([A-Za-z0-9_%-]+)["']""").find(html)?.groupValues?.get(1)
+
+        if (sharingCode.isNotBlank()) {
+            val endpoint = if (!proof.isNullOrBlank()) {
+                "$origin/api/extract-download?proof=$proof"
+            } else {
+                "$origin/api/extract-download"
+            }
+
+            val payload = JSONObject().apply {
+                put("sharingCode", sharingCode)
+            }.toString()
+
+            val body = payload.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
+            val apiHeaders = browserHeaders + mapOf(
+                "Content-Type" to "application/json",
+                "Accept" to "application/json, text/plain, */*",
+                "Origin" to origin
+            )
+
+            runCatching {
+                val apiText = app.post(
+                    url = endpoint,
+                    headers = apiHeaders,
+                    referer = currentUrl,
+                    requestBody = body
+                ).text.trim()
+
+                if (apiText.startsWith("{")) {
+                    val obj = JSONObject(apiText)
+                    val direct = obj.optString("downloadUrl")
+                        .ifBlank { obj.optString("url") }
+                        .ifBlank { obj.optString("link") }
+                        .replace("\\/", "/")
+                        .trim()
+
+                    if (direct.isNotBlank() && direct != "null") {
+                        val resolved = if (direct.startsWith("http")) direct else "$origin${if (direct.startsWith("/")) "" else "/"}$direct"
+                        if (emitted.add(resolved)) {
+                            if (resolved.contains("pixeldrain")) {
+                                loadExtractor(resolved, currentUrl, subtitleCallback, callback)
+                            } else {
+                                callback.invoke(
+                                    newExtractorLink(
+                                        source = this.name,
+                                        name = "DOTFLIX [Direct]",
+                                        url = resolved,
+                                        type = ExtractorLinkType.VIDEO
+                                    ) {
+                                        this.referer = currentUrl
+                                        this.quality = Qualities.P1080.value
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    val mirrors = obj.optJSONArray("mirrors") ?: obj.optJSONArray("servers")
+                    if (mirrors != null) {
+                        for (i in 0 until mirrors.length()) {
+                            val item = mirrors.optJSONObject(i)
+                            val mUrl = item?.optString("url").orEmpty().replace("\\/", "/").trim()
+                            if (mUrl.isNotBlank() && mUrl != "null") {
+                                val resolvedM = if (mUrl.startsWith("http")) mUrl else "$origin${if (mUrl.startsWith("/")) "" else "/"}$mUrl"
+                                if (emitted.add(resolvedM)) {
+                                    val mName = item?.optString("name").orEmpty().ifBlank { "Mirror ${i + 1}" }
+                                    callback.invoke(
+                                        newExtractorLink(
+                                            source = this.name,
+                                            name = "DOTFLIX [$mName]",
+                                            url = resolvedM,
+                                            type = ExtractorLinkType.VIDEO
+                                        ) {
+                                            this.referer = currentUrl
+                                            this.quality = Qualities.P1080.value
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -402,3 +738,4 @@ class LPlayGoExtractor : BaseJWPExtractor() { override var name = "LPlayGo"; ove
 class VidMolyExtractor : BaseJWPExtractor() { override var name = "VidMoly"; override var mainUrl = "https://vidmoly.me" }
 class SwVidMolyExtractor : BaseJWPExtractor() { override var name = "VidMoly"; override var mainUrl = "https://sw.vidmoly.me" }
 class VidMolyToExtractor : BaseJWPExtractor() { override var name = "VidMoly"; override var mainUrl = "https://vidmoly.to" }
+
