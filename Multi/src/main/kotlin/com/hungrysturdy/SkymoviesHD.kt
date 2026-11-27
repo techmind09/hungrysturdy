@@ -267,8 +267,8 @@ class SkymoviesHD : MainAPI() {
         val doc1 = app.get(hubCloudUrl, referer = referer).document
         val fileName = doc1.selectFirst("div.card-header, title")?.text()?.trim() ?: labelHint
 
-        val searchQuality = getQualityFromString("$fileName $labelHint")
-        val detectedQuality: Int = searchQuality?.value ?: Qualities.P1080.value
+        val detectedQuality: Int = getIndexQuality("$fileName $labelHint").takeIf { it != Qualities.Unknown.value }
+            ?: Qualities.P1080.value
 
         val generatedUrl = doc1.selectFirst("a#download")?.attr("href") ?: return
         val doc2 = app.get(generatedUrl, referer = hubCloudUrl).document
