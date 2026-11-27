@@ -1,6 +1,7 @@
 package com.hungrysturdy
 
 import android.content.Context
+import android.util.Base64
 import com.hungrysturdy.donation.DonationDialogFragment
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
@@ -173,9 +174,7 @@ class DramaVerseProvider : MainAPI() {
 
     private fun isEpisodePageUrl(url: String): Boolean {
         val lower = url.lowercase()
-        return lower.contains("blogspot.com/p/") ||
-            lower.contains("mydverse0") ||
-            lower.contains("sohojgyan")
+        return lower.contains("blogspot.com") || lower.contains("mydverse0")
     }
 
     private fun isIgnoredOrAdUrl(href: String): Boolean {
@@ -213,24 +212,29 @@ class DramaVerseProvider : MainAPI() {
     }
 
     // ---------------------------------------------------------
-    // REDIRECT RESOLVER
+    // REDIRECT & SAFELINK RESOLVER
     // ---------------------------------------------------------
 
     private suspend fun resolveIntermediateUrl(url: String): String {
-        if (isXCloudHlsUrl(url)) return url
+        if (isXCloudHlsUrl(url) || isEpisodePageUrl(url)) return url
 
         var current = url
         var attempts = 0
+        var sessionCookies = emptyMap<String, String>()
 
-        while (attempts < 6) {
+        while (attempts < 8) {
             attempts++
             try {
                 val resp = app.get(
                     current,
                     headers = defaultHeaders,
+                    referer = "$mainUrl/",
+                    cookies = sessionCookies,
                     allowRedirects = false
                 )
+                sessionCookies = sessionCookies + resp.cookies
 
+                // 1. Standard HTTP 301/302 Redirect
                 val location = resp.headers["location"] ?: resp.headers["Location"]
                 if (!location.isNullOrEmpty()) {
                     val next = resolveRelativeUrl(current, location)
@@ -246,6 +250,38 @@ class DramaVerseProvider : MainAPI() {
                     return current
                 }
 
+                // 2. Direct Blogspot / Episode page URL anywhere in HTML or scripts
+                val blogspotMatch = Regex(
+                    """https?://[a-zA-Z0-9.-]*blogspot\.com/p/[^\s"'<>\\]+""",
+                    RegexOption.IGNORE_CASE
+                ).find(html)?.value?.replace("\\/", "/")?.replace("&amp;", "&")
+
+                if (!blogspotMatch.isNullOrEmpty()) {
+                    return blogspotMatch
+                }
+
+                // 3. Base64 encoded URLs (common in Safelink / Sohojgyan)
+                val b64Regex = Regex("""atob\(\s*["']([A-Za-z0-9+/=]{16,})["']\s*\)""")
+                var decodedFound: String? = null
+                for (m in b64Regex.findAll(html)) {
+                    try {
+                        val decoded = String(
+                            Base64.decode(m.groupValues[1], Base64.DEFAULT)
+                        ).trim()
+                        if (decoded.startsWith("http") && !isIgnoredOrAdUrl(decoded)) {
+                            decodedFound = decoded
+                            break
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
+                if (!decodedFound.isNullOrEmpty() && decodedFound != current) {
+                    current = decodedFound
+                    if (isXCloudHlsUrl(current) || isEpisodePageUrl(current)) return current
+                    continue
+                }
+
+                // 4. Meta Refresh Redirect
                 val metaMatch = Regex(
                     """content\s*=\s*["'][0-9]+;\s*url=([^"']+)["']""",
                     RegexOption.IGNORE_CASE
@@ -260,8 +296,9 @@ class DramaVerseProvider : MainAPI() {
                     }
                 }
 
+                // 5. JS Location Redirect
                 val jsMatch = Regex(
-                    """(?:window\.location|location\.href|location\.replace)\s*(?:=|\()\s*["'](https?://[^"']+)["']""",
+                    """(?:window\.location(?:\.href)?|location\.href|location\.replace)\s*(?:=|\()\s*["'](https?://[^"']+)["']""",
                     RegexOption.IGNORE_CASE
                 ).find(html)?.groupValues?.get(1)
 
@@ -269,6 +306,37 @@ class DramaVerseProvider : MainAPI() {
                     current = resolveRelativeUrl(current, jsMatch)
                     if (isXCloudHlsUrl(current) || isEpisodePageUrl(current)) return current
                     continue
+                }
+
+                // 6. Auto-submit POST Form (Safelink step)
+                val form = resp.document.selectFirst("form[action]")
+                if (form != null) {
+                    val action = resolveRelativeUrl(current, form.attr("action").ifEmpty { current })
+                    val formData = form.select("input[name]").associate {
+                        it.attr("name") to it.attr("value")
+                    }
+                    if (formData.isNotEmpty()) {
+                        val postResp = app.post(
+                            action,
+                            headers = defaultHeaders,
+                            referer = current,
+                            cookies = sessionCookies,
+                            data = formData,
+                            allowRedirects = false
+                        )
+                        sessionCookies = sessionCookies + postResp.cookies
+                        val postLoc = postResp.headers["location"] ?: postResp.headers["Location"]
+                        if (!postLoc.isNullOrEmpty()) {
+                            current = resolveRelativeUrl(action, postLoc)
+                            if (isXCloudHlsUrl(current) || isEpisodePageUrl(current)) return current
+                            continue
+                        }
+                        val postBlogspot = Regex(
+                            """https?://[a-zA-Z0-9.-]*blogspot\.com/p/[^\s"'<>\\]+""",
+                            RegexOption.IGNORE_CASE
+                        ).find(postResp.text)?.value?.replace("\\/", "/")?.replace("&amp;", "&")
+                        if (!postBlogspot.isNullOrEmpty()) return postBlogspot
+                    }
                 }
 
                 break
@@ -428,16 +496,14 @@ class DramaVerseProvider : MainAPI() {
 
         // Case 2: Main site post page -> scan ALL candidate buttons/links in content
         if (episodeMap.isEmpty()) {
-            val candidateUrls = linkedSetOf<Pair<String, String>>() // url to label
+            val candidateUrls = linkedSetOf<Pair<String, String>>()
 
-            // Scan all links inside content area
             document.select(".entry-content a[href], .post-body a[href], article a[href], a.btn-slide, a.button").forEach { el ->
                 val href = el.absUrl("href").ifEmpty {
                     resolveRelativeUrl(url, el.attr("href"))
                 }
                 val label = el.text().trim()
                 if (href.isNotEmpty() && href != url && !isIgnoredOrAdUrl(href)) {
-                    // Ignore navigation/menu links to other posts on mydverse.com unless they look like download/watch redirects
                     val isInternalPost = href.startsWith(mainUrl) &&
                         !href.contains("?") &&
                         !href.contains("go") &&
@@ -450,7 +516,6 @@ class DramaVerseProvider : MainAPI() {
                 }
             }
 
-            // Also scan raw HTML for hidden blogspot / sohojgyan / xcloud URLs (e.g. inside JS/onclick)
             val rawLinkRegex = Regex(
                 """https?://[a-zA-Z0-9.-]*(?:blogspot\.com|sohojgyan\.[a-z]+|xcloud\.[a-z]+|xcloud\d*\.[a-z]+|pixeldrain\.[a-z]+|drive\.google\.com)/[^\s"'<>\\]+""",
                 RegexOption.IGNORE_CASE
@@ -470,7 +535,7 @@ class DramaVerseProvider : MainAPI() {
             for ((candUrl, candLabel) in candidateUrls) {
                 val resolved = resolveIntermediateUrl(candUrl)
 
-                if (isEpisodePageUrl(resolved) || isEpisodePageUrl(candUrl)) {
+                if (isEpisodePageUrl(resolved) || isEpisodePageUrl(candUrl) || candUrl.contains("sohojgyan", ignoreCase = true)) {
                     val scraped = scrapeEpisodeLinksFromIntermediate(resolved, url)
                     if (scraped.isNotEmpty()) {
                         for ((epNum, epHref) in scraped) {
