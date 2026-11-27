@@ -144,7 +144,8 @@ class DramaVerseProvider : MainAPI() {
     }
 
     private fun isXCloudHost(url: String): Boolean {
-        return url.lowercase().contains("xcloud")
+        val lower = url.lowercase()
+        return lower.contains("xcloud") || lower.contains("xcloud1.space")
     }
 
     private fun isXCloudHlsUrl(url: String): Boolean {
@@ -156,7 +157,7 @@ class DramaVerseProvider : MainAPI() {
 
     private fun isSupportedHostUrl(url: String): Boolean {
         val lower = url.lowercase()
-        return lower.contains("xcloud") ||
+        return isXCloudHost(lower) ||
             lower.contains("pixeldrain") ||
             lower.contains("drive.google.com") ||
             lower.contains("docs.google.com") ||
@@ -416,7 +417,7 @@ class DramaVerseProvider : MainAPI() {
             }
         }
 
-        // 3. Raw Regex Fallback
+        // 3. Raw Regex Fallback (including xcloud1.space & other hosts)
         if (results.isEmpty()) {
             val hostRegex = Regex(
                 """https?://(?:[a-zA-Z0-9-]+\.)*(?:xcloud\.[a-z]{2,}|xcloud\d*\.[a-z]{2,}|pixeldrain\.[a-z]{2,}|drive\.google\.com|docs\.google\.com|gdflix\.[a-z]{2,}|gdtot\.[a-z]{2,}|filepress\.[a-z]{2,}|hubcloud\.[a-z]{2,}|hubdrive\.[a-z]{2,}|workers\.dev)/[^\s"'<>]+""",
