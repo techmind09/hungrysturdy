@@ -33,6 +33,7 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -166,6 +167,41 @@ private data class AwZephyrixVideo(
 )
 
 class MovieFoxProvider : MainAPI() {
+
+    companion object {
+        private const val PREFS_LANG_NAME = "moviefox_lang_filter_v1"
+        private const val KEY_LANG_FILTER = "mf_selected_lang_filter"
+
+        val SUPPORTED_LANGUAGE_FILTERS = listOf("ALL", "HI", "EN", "SOUTH", "ASIAN")
+
+        @Volatile
+        private var cachedLangFilter: String? = null
+
+        fun getPreferredLanguage(ctx: Context?): String {
+            cachedLangFilter?.let { return it }
+            val c = ctx ?: MovieFoxSettingsDialog.currentContext() ?: CloudStreamApp.context ?: return "ALL"
+            val raw = runCatching {
+                c.getSharedPreferences(PREFS_LANG_NAME, Context.MODE_PRIVATE)
+                    .getString(KEY_LANG_FILTER, "ALL")
+            }.getOrNull()?.uppercase(Locale.getDefault()) ?: "ALL"
+            val valid = if (raw in SUPPORTED_LANGUAGE_FILTERS) raw else "ALL"
+            cachedLangFilter = valid
+            return valid
+        }
+
+        fun setPreferredLanguage(ctx: Context?, langCode: String) {
+            val upper = langCode.trim().uppercase(Locale.getDefault())
+            val valid = if (upper in SUPPORTED_LANGUAGE_FILTERS) upper else "ALL"
+            cachedLangFilter = valid
+            val c = ctx ?: MovieFoxSettingsDialog.currentContext() ?: CloudStreamApp.context ?: return
+            runCatching {
+                c.getSharedPreferences(PREFS_LANG_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString(KEY_LANG_FILTER, valid)
+                    .apply()
+            }
+        }
+    }
 
     override var mainUrl = "https://moviefox.pro"
     override var name = "MovieFox"
@@ -342,6 +378,47 @@ class MovieFoxProvider : MainAPI() {
 
     private fun ctxOrNull(): Context? =
         MovieFoxSettingsDialog.currentContext() ?: CloudStreamApp.context
+
+    private fun activeLanguageFilter(): String {
+        val ctx = ctxOrNull()
+        if (ctx != null && MovieFoxSettingsDialog.isHindiOnly(ctx)) return "HI"
+        return getPreferredLanguage(ctx)
+    }
+
+    private fun applyLanguageQueryParam(url: String, langCode: String): String {
+        if (langCode == "ALL") return url
+        val sep = if (url.contains("?")) "&" else "?"
+        val param = when (langCode) {
+            "HI" -> "lang=hi"
+            "EN" -> "lang=en"
+            "SOUTH" -> "lang=ta,te,ml,kn"
+            "ASIAN" -> "lang=ko,ja,zh"
+            else -> return url
+        }
+        return "$url$sep$param"
+    }
+
+    private fun matchesLanguageFilter(text: String, langFilter: String): Boolean {
+        if (langFilter == "ALL") return true
+        val low = text.lowercase(Locale.getDefault())
+        if (low.contains("multi") || low.contains("dual") || low.contains("all audio")) return true
+
+        val hasHindi = Regex("""\b(hindi|hin|hi|bollywood|hindidubbed)\b""").containsMatchIn(low)
+        val hasEnglish = Regex("""\b(english|eng|en|hollywood)\b""").containsMatchIn(low)
+        val hasSouth = Regex("""\b(tamil|telugu|malayalam|kannada|south|tam|tel|mal|kan)\b""").containsMatchIn(low)
+        val hasAsian = Regex("""\b(korean|japanese|chinese|anime|kdrama|cdrama|kor|jpn|chi|zh|ja|ko)\b""").containsMatchIn(low)
+
+        val anyExplicitTag = hasHindi || hasEnglish || hasSouth || hasAsian
+        if (!anyExplicitTag) return true
+
+        return when (langFilter) {
+            "HI" -> hasHindi
+            "EN" -> hasEnglish
+            "SOUTH" -> hasSouth
+            "ASIAN" -> hasAsian
+            else -> true
+        }
+    }
 
     private fun mutexFor(url: String): Mutex {
         val host = runCatching { URI(url).host ?: mainUrl }.getOrDefault(mainUrl)
@@ -533,16 +610,23 @@ class MovieFoxProvider : MainAPI() {
         }.toString()
     }
 
-    private suspend fun fetchTmdbFallbackHomeItems(requestUrl: String, page: Int): List<SearchResponse> {
+    private suspend fun fetchTmdbFallbackHomeItems(requestUrl: String, page: Int, langFilter: String = "ALL"): List<SearchResponse> {
         val low = requestUrl.lowercase()
         val isTv = low.contains("/tv") || low.contains("/anime") || low.contains("/dramas/")
+        val langOverrideParam = when (langFilter) {
+            "HI" -> "&with_original_language=hi"
+            "EN" -> "&with_original_language=en"
+            "SOUTH" -> "&with_original_language=ta|te|ml|kn"
+            "ASIAN" -> "&with_original_language=ko|ja|zh"
+            else -> ""
+        }
         val endpoint = when {
-            low.contains("/trending") -> "$tmdbBaseUrl/trending/all/day?api_key=$tmdbApiKey&page=$page"
-            low.contains("list=top_rated") && isTv -> "$tmdbBaseUrl/tv/top_rated?api_key=$tmdbApiKey&page=$page"
-            low.contains("list=top_rated") -> "$tmdbBaseUrl/movie/top_rated?api_key=$tmdbApiKey&page=$page"
-            low.contains("list=now_playing") -> "$tmdbBaseUrl/movie/now_playing?api_key=$tmdbApiKey&page=$page"
-            low.contains("list=upcoming") -> "$tmdbBaseUrl/movie/upcoming?api_key=$tmdbApiKey&page=$page"
-            low.contains("list=airing_today") -> "$tmdbBaseUrl/tv/airing_today?api_key=$tmdbApiKey&page=$page"
+            low.contains("/trending") -> "$tmdbBaseUrl/trending/all/day?api_key=$tmdbApiKey&page=$page$langOverrideParam"
+            low.contains("list=top_rated") && isTv -> "$tmdbBaseUrl/tv/top_rated?api_key=$tmdbApiKey&page=$page$langOverrideParam"
+            low.contains("list=top_rated") -> "$tmdbBaseUrl/movie/top_rated?api_key=$tmdbApiKey&page=$page$langOverrideParam"
+            low.contains("list=now_playing") -> "$tmdbBaseUrl/movie/now_playing?api_key=$tmdbApiKey&page=$page$langOverrideParam"
+            low.contains("list=upcoming") -> "$tmdbBaseUrl/movie/upcoming?api_key=$tmdbApiKey&page=$page$langOverrideParam"
+            low.contains("list=airing_today") -> "$tmdbBaseUrl/tv/airing_today?api_key=$tmdbApiKey&page=$page$langOverrideParam"
             low.contains("/anime") -> "$tmdbBaseUrl/discover/tv?api_key=$tmdbApiKey&with_genres=16&with_original_language=ja&sort_by=popularity.desc&page=$page"
             low.contains("/dramas/korean") -> "$tmdbBaseUrl/discover/tv?api_key=$tmdbApiKey&with_original_language=ko&sort_by=popularity.desc&page=$page"
             low.contains("/dramas/chinese") -> "$tmdbBaseUrl/discover/tv?api_key=$tmdbApiKey&with_original_language=zh&sort_by=popularity.desc&page=$page"
@@ -550,11 +634,11 @@ class MovieFoxProvider : MainAPI() {
             low.contains("region=in") -> "$tmdbBaseUrl/discover/movie?api_key=$tmdbApiKey&region=IN&with_original_language=hi&sort_by=popularity.desc&page=$page"
             low.contains("lang=ta,te,ml,kn") -> "$tmdbBaseUrl/discover/movie?api_key=$tmdbApiKey&with_original_language=ta|te|ml|kn&sort_by=popularity.desc&page=$page"
             low.contains("lang=en") -> "$tmdbBaseUrl/discover/movie?api_key=$tmdbApiKey&with_original_language=en&sort_by=popularity.desc&page=$page"
-            low.contains("genre=action") -> "$tmdbBaseUrl/discover/movie?api_key=$tmdbApiKey&with_genres=28,53&sort_by=popularity.desc&page=$page"
-            low.contains("genre=horror") -> "$tmdbBaseUrl/discover/movie?api_key=$tmdbApiKey&with_genres=27,9648&sort_by=popularity.desc&page=$page"
-            low.contains("genre=romance") -> "$tmdbBaseUrl/discover/movie?api_key=$tmdbApiKey&with_genres=10749&sort_by=popularity.desc&page=$page"
-            isTv -> "$tmdbBaseUrl/tv/popular?api_key=$tmdbApiKey&page=$page"
-            else -> "$tmdbBaseUrl/movie/popular?api_key=$tmdbApiKey&page=$page"
+            low.contains("genre=action") -> "$tmdbBaseUrl/discover/movie?api_key=$tmdbApiKey&with_genres=28,53&sort_by=popularity.desc&page=$page$langOverrideParam"
+            low.contains("genre=horror") -> "$tmdbBaseUrl/discover/movie?api_key=$tmdbApiKey&with_genres=27,9648&sort_by=popularity.desc&page=$page$langOverrideParam"
+            low.contains("genre=romance") -> "$tmdbBaseUrl/discover/movie?api_key=$tmdbApiKey&with_genres=10749&sort_by=popularity.desc&page=$page$langOverrideParam"
+            isTv -> "$tmdbBaseUrl/tv/popular?api_key=$tmdbApiKey&page=$page$langOverrideParam"
+            else -> "$tmdbBaseUrl/movie/popular?api_key=$tmdbApiKey&page=$page$langOverrideParam"
         }
 
         val raw = safeGetText(endpoint, timeoutSec = currentTimeoutSec(25L), sourceTag = "TMDB").orEmpty()
@@ -600,12 +684,14 @@ class MovieFoxProvider : MainAPI() {
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
         val ctx = ctxOrNull()
+        val langFilter = activeLanguageFilter()
         val timeoutSec = currentTimeoutSec(25L)
+        val baseWithLang = applyLanguageQueryParam(request.data, langFilter)
         val targetUrl = if (page > 1) {
-            val sep = if (request.data.contains("?")) "&" else "?"
-            "${request.data}${sep}page=$page"
+            val sep = if (baseWithLang.contains("?")) "&" else "?"
+            "${baseWithLang}${sep}page=$page"
         } else {
-            request.data
+            baseWithLang
         }
 
         val rawHtml = safeGetText(targetUrl, timeoutSec = timeoutSec, sourceTag = "moviefox").orEmpty()
@@ -622,7 +708,7 @@ class MovieFoxProvider : MainAPI() {
         }
 
         if (items.isEmpty()) {
-            items = fetchTmdbFallbackHomeItems(request.data, page)
+            items = fetchTmdbFallbackHomeItems(request.data, page, langFilter)
         }
 
         if (ctx != null && MovieFoxSettingsDialog.isShuffleHomeCategories(ctx)) {
@@ -682,9 +768,11 @@ class MovieFoxProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val searchStart = System.currentTimeMillis()
+        val langFilter = activeLanguageFilter()
         val timeoutSec = currentTimeoutSec(25L)
         val encoded = safeEncode(query)
-        val html = safeGetText("$mainUrl/search?q=$encoded", timeoutSec = timeoutSec, sourceTag = "moviefox").orEmpty()
+        val searchUrl = applyLanguageQueryParam("$mainUrl/search?q=$encoded", langFilter)
+        val html = safeGetText(searchUrl, timeoutSec = timeoutSec, sourceTag = "moviefox").orEmpty()
         if (html.isNotBlank()) {
             val document = Jsoup.parse(html, mainUrl)
             val elements = document.select(
@@ -861,6 +949,7 @@ class MovieFoxProvider : MainAPI() {
         val baseHeaders: Map<String, String>,
         val reqTimeoutSec: Long,
         val downloadOnly: Boolean,
+        val langFilter: String,
         val allow4k: Boolean,
         val allow1080: Boolean,
         val allow720: Boolean,
@@ -3298,6 +3387,7 @@ class MovieFoxProvider : MainAPI() {
         val loadStartMs = System.currentTimeMillis()
         return try {
             val ctx = ctxOrNull()
+            val langFilter = activeLanguageFilter()
             val reqTimeoutSec = currentTimeoutSec(25L)
             val serverCapMs = (reqTimeoutSec * 1000L).coerceIn(12_000L, 30_000L)
 
@@ -3346,6 +3436,7 @@ class MovieFoxProvider : MainAPI() {
                 baseHeaders = directHeaders(mainUrl, mapOf("Referer" to watchUrl)),
                 reqTimeoutSec = reqTimeoutSec,
                 downloadOnly = ctx?.let { MovieFoxSettingsDialog.isDownloadOnly(it) } ?: false,
+                langFilter = langFilter,
                 allow4k = ctx?.let { MovieFoxSettingsDialog.isQuality4kEnabled(it) } ?: true,
                 allow1080 = ctx?.let { MovieFoxSettingsDialog.isQuality1080Enabled(it) } ?: true,
                 allow720 = ctx?.let { MovieFoxSettingsDialog.isQuality720Enabled(it) } ?: true,
@@ -3366,7 +3457,8 @@ class MovieFoxProvider : MainAPI() {
                     val isStream = link.type == ExtractorLinkType.M3U8 || link.type == ExtractorLinkType.DASH
                     val allowedMode = !(lc.downloadOnly && isStream)
                     val allowedQual = isQualityAllowed(lc, link.quality, link.name)
-                    if (allowedMode && (allowedQual || isStream)) {
+                    val allowedLang = matchesLanguageFilter("${link.name} ${link.source}", lc.langFilter)
+                    if (allowedMode && (allowedQual || isStream) && allowedLang) {
                         synchronized(emitLock) {
                             foundFlag.set(true)
                             totalEmitted.incrementAndGet()
@@ -3440,7 +3532,7 @@ class MovieFoxProvider : MainAPI() {
                 lc.pageTitle.ifBlank { cleanPageUrl },
                 totalEmitted.get(),
                 totalMs,
-                "servers=${orderedKeys.size}"
+                "servers=${orderedKeys.size}, lang=$langFilter"
             )
             foundFlag.get()
         } catch (e: CancellationException) {
