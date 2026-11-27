@@ -214,6 +214,7 @@ class DramaVerseProvider : MainAPI() {
                 lower.contains("google.com") &&
                     !lower.contains("drive.google.com") &&
                     !lower.contains("docs.google.com") &&
+                    !lower.contains("drive.usercontent.google.com") &&
                     !lower.contains("googleusercontent.com")
             )
     }
@@ -300,7 +301,6 @@ class DramaVerseProvider : MainAPI() {
     private suspend fun resolveIntermediateUrl(url: String): String {
         if (isXCloudHlsUrl(url) || isEpisodePageUrl(url)) return url
 
-        // Direct ?code= check if already present
         extractCodeParam(url)?.let { code ->
             decodeSafelinkByCode(code, url)?.let { decoded ->
                 return resolveIntermediateUrl(decoded)
@@ -347,7 +347,6 @@ class DramaVerseProvider : MainAPI() {
                     return current
                 }
 
-                // Check if page/script contains a safelink code or /api/decode/
                 val inlineCode = Regex("""[?&]code=([A-Za-z0-9_-]+)""").find(html)?.groupValues?.getOrNull(1)
                     ?: Regex("""safelink_code["']?\s*[,:]\s*["']([A-Za-z0-9_-]+)["']""").find(html)?.groupValues?.getOrNull(1)
                 if (!inlineCode.isNullOrBlank()) {
@@ -910,82 +909,67 @@ class DramaVerseProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         var found = false
+        val emitted = mutableSetOf<String>()
 
         val fileId = Regex("""(?:/d/|id=)([a-zA-Z0-9_-]{15,})""")
             .find(url)?.groupValues?.get(1)
 
         if (!fileId.isNullOrEmpty()) {
-            val directConfirmUrl =
+            val gdriveHeaders = mapOf(
+                "User-Agent" to defaultHeaders["User-Agent"].orEmpty(),
+                "Referer" to "https://drive.google.com/",
+                "Accept" to "*/*"
+            )
+
+            val candidateUrls = listOf(
+                "https://drive.usercontent.google.com/u/0/uc?id=$fileId&export=download",
                 "https://drive.usercontent.google.com/download?id=$fileId&export=download&confirm=t"
+            )
 
-            try {
-                val resp = app.get(
-                    directConfirmUrl,
-                    headers = defaultHeaders,
-                    allowRedirects = false
-                )
+            for (cand in candidateUrls) {
+                var finalStreamUrl = cand
+                try {
+                    val resp = app.get(
+                        cand,
+                        headers = gdriveHeaders,
+                        allowRedirects = false
+                    )
+                    val loc = resp.headers["location"] ?: resp.headers["Location"]
+                    if (!loc.isNullOrBlank()) {
+                        finalStreamUrl = resolveRelativeUrl(cand, loc)
+                    } else {
+                        val formAction = resp.document
+                            .selectFirst("form[action]")
+                            ?.absUrl("action")
+                        if (!formAction.isNullOrBlank()) {
+                            val params = resp.document
+                                .select("form[action] input[name]")
+                                .joinToString("&") { inp ->
+                                    val k = URLEncoder.encode(inp.attr("name"), "UTF-8")
+                                    val v = URLEncoder.encode(inp.attr("value"), "UTF-8")
+                                    "$k=$v"
+                                }
+                            finalStreamUrl = if (params.isNotEmpty()) "$formAction?$params" else formAction
+                        }
+                    }
+                } catch (_: Exception) {
+                }
 
-                val loc = resp.headers["location"] ?: resp.headers["Location"]
-                if (!loc.isNullOrEmpty()) {
+                if (emitted.add(finalStreamUrl)) {
                     callback(
                         newExtractorLink(
                             source = "GDrive",
-                            name = "GDrive Direct",
-                            url = resolveRelativeUrl(directConfirmUrl, loc),
+                            name = "GDrive Download/Stream",
+                            url = finalStreamUrl,
                             type = ExtractorLinkType.VIDEO
                         ) {
                             this.referer = "https://drive.google.com/"
+                            this.quality = Qualities.P720.value
+                            this.headers = gdriveHeaders
                         }
                     )
                     found = true
-                } else {
-                    val formAction = resp.document
-                        .selectFirst("form#download-form")
-                        ?.absUrl("action")
-
-                    if (!formAction.isNullOrEmpty()) {
-                        val params = resp.document
-                            .select("form#download-form input[name]")
-                            .joinToString("&") {
-                                val key = URLEncoder.encode(it.attr("name"), "UTF-8")
-                                val value = URLEncoder.encode(it.attr("value"), "UTF-8")
-                                "$key=$value"
-                            }
-
-                        val confirmedStreamUrl = if (params.isNotEmpty()) {
-                            "$formAction?$params"
-                        } else {
-                            formAction
-                        }
-
-                        callback(
-                            newExtractorLink(
-                                source = "GDrive",
-                                name = "GDrive Direct",
-                                url = confirmedStreamUrl,
-                                type = ExtractorLinkType.VIDEO
-                            ) {
-                                this.referer = "https://drive.google.com/"
-                            }
-                        )
-                        found = true
-                    }
                 }
-            } catch (_: Exception) {
-            }
-
-            if (!found) {
-                callback(
-                    newExtractorLink(
-                        source = "GDrive",
-                        name = "GDrive Stream",
-                        url = directConfirmUrl,
-                        type = ExtractorLinkType.VIDEO
-                    ) {
-                        this.referer = "https://drive.google.com/"
-                    }
-                )
-                found = true
             }
         }
 
