@@ -27,17 +27,8 @@ class DramaVerseProvider : MainAPI() {
 
     private val defaultHeaders = mapOf(
         "User-Agent" to "Mozilla/5.0 (Linux; Android 15; Infinix X6851) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
-        "Accept" to "*/*",
-        "Sec-Ch-Ua" to "\"Not.A/Brand\";v=\"8\", \"Chromium\";v=\"122\", \"Google Chrome\";v=\"122\"",
-        "Sec-Ch-Ua-Mobile" to "?1",
-        "Sec-Ch-Ua-Platform" to "\"Android\""
-    )
-
-    private val cookies = mapOf(
-        "_ga_5TVV62JEB6" to "GS2.1.s1794549640\$o1\$g0\$t1794549640\$j60\$l0\$h0",
-        "_ga" to "GA1.1.1175613762.1794549641",
-        "_clck" to "1nykysd%5E2%5Egb4%5E0%5E2508",
-        "_clsk" to "5czkhx%5E1794549642448%5E1%5E1%5Ea.clarity.ms%2Fcollect"
+        "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language" to "en-US,en;q=0.9,hi;q=0.8"
     )
 
     private val xcloudReferer = "https://xcloud.tattoo/"
@@ -65,11 +56,7 @@ class DramaVerseProvider : MainAPI() {
             "${request.data.trimEnd('/')}/page/$page/"
         }
 
-        val document = app.get(
-            url,
-            headers = defaultHeaders,
-            cookies = cookies
-        ).document
+        val document = app.get(url, headers = defaultHeaders).document
 
         val home = document.select(
             "li.post-item, article.item-list, div.post-element"
@@ -125,12 +112,7 @@ class DramaVerseProvider : MainAPI() {
 
     override suspend fun search(query: String): List<SearchResponse> {
         val encodedQuery = URLEncoder.encode(query, "UTF-8")
-
-        val document = app.get(
-            "$mainUrl/?s=$encodedQuery",
-            headers = defaultHeaders,
-            cookies = cookies
-        ).document
+        val document = app.get("$mainUrl/?s=$encodedQuery", headers = defaultHeaders).document
 
         return document.select("li.post-item, article.item-list")
             .mapNotNull { it.toSearchResult() }
@@ -189,12 +171,18 @@ class DramaVerseProvider : MainAPI() {
             isXCloudHlsUrl(lower)
     }
 
+    private fun isEpisodePageUrl(url: String): Boolean {
+        val lower = url.lowercase()
+        return lower.contains("blogspot.com/p/") ||
+            lower.contains("mydverse0") ||
+            lower.contains("sohojgyan")
+    }
+
     private fun isIgnoredOrAdUrl(href: String): Boolean {
         val lower = href.lowercase()
         return !lower.startsWith("http") ||
             lower.contains("ardance.org") ||
             lower.contains("invoke_layer") ||
-            lower.contains("fifa2026.mom") ||
             lower.contains("fifa2026") ||
             lower.contains("machb.org") ||
             lower.contains("viinyzfu.com") ||
@@ -205,13 +193,17 @@ class DramaVerseProvider : MainAPI() {
             lower.contains("/redir2.php") ||
             lower.contains("5gvci.com") ||
             lower.contains("llvpn.com") ||
-            lower.contains("mydverse.com") ||
             lower.contains("telegram") ||
             lower.contains("t.me/") ||
             lower.contains("whatsapp") ||
             lower.contains("facebook.com") ||
             lower.contains("twitter.com") ||
             lower.contains("instagram.com") ||
+            lower.contains("/search/label/") ||
+            lower.contains("/category/") ||
+            lower.contains("/tag/") ||
+            lower.contains("/author/") ||
+            lower.contains("#comment") ||
             (
                 lower.contains("google.com") &&
                     !lower.contains("drive.google.com") &&
@@ -230,7 +222,7 @@ class DramaVerseProvider : MainAPI() {
         var current = url
         var attempts = 0
 
-        while (attempts < 5) {
+        while (attempts < 6) {
             attempts++
             try {
                 val resp = app.get(
@@ -244,14 +236,14 @@ class DramaVerseProvider : MainAPI() {
                     val next = resolveRelativeUrl(current, location)
                     if (next != current && !isIgnoredOrAdUrl(next)) {
                         current = next
-                        if (isXCloudHlsUrl(current)) return current
+                        if (isXCloudHlsUrl(current) || isEpisodePageUrl(current)) return current
                         continue
                     }
                 }
 
                 val html = resp.text
-                if (html.contains("Can't access link ? Stuck into ads ?", ignoreCase = true)) {
-                    break
+                if (html.contains("EpList") || html.contains("EpItem")) {
+                    return current
                 }
 
                 val metaMatch = Regex(
@@ -263,7 +255,7 @@ class DramaVerseProvider : MainAPI() {
                     val nextUrl = resolveRelativeUrl(current, metaMatch.groupValues[1])
                     if (nextUrl != current && !isIgnoredOrAdUrl(nextUrl)) {
                         current = nextUrl
-                        if (isXCloudHlsUrl(current)) return current
+                        if (isXCloudHlsUrl(current) || isEpisodePageUrl(current)) return current
                         continue
                     }
                 }
@@ -275,7 +267,7 @@ class DramaVerseProvider : MainAPI() {
 
                 if (!jsMatch.isNullOrEmpty() && jsMatch != current && !isIgnoredOrAdUrl(jsMatch)) {
                     current = resolveRelativeUrl(current, jsMatch)
-                    if (isXCloudHlsUrl(current)) return current
+                    if (isXCloudHlsUrl(current) || isEpisodePageUrl(current)) return current
                     continue
                 }
 
@@ -289,7 +281,7 @@ class DramaVerseProvider : MainAPI() {
     }
 
     // ---------------------------------------------------------
-    // EPISODE PARSER (FIXED FOR .EpList / .EpItem STRUCTURE)
+    // EPISODE PARSER
     // ---------------------------------------------------------
 
     private fun parseEpNumber(text: String, fallback: Int): Int {
@@ -313,7 +305,7 @@ class DramaVerseProvider : MainAPI() {
         val results = mutableListOf<Pair<Int, String>>()
         val seenPairs = mutableSetOf<Pair<Int, String>>()
 
-        // 1. Primary Structure: <div class="EpList"> -> <div class="EpItem">
+        // 1. Exact Blogspot Structure: <div class="EpList"> -> <div class="EpItem">
         val epItems = doc.select("div.EpItem")
         if (epItems.isNotEmpty()) {
             epItems.forEachIndexed { index, item ->
@@ -335,9 +327,9 @@ class DramaVerseProvider : MainAPI() {
             if (results.isNotEmpty()) return results
         }
 
-        // 2. Fallback: Generic links inside #postBody or .entry-content
+        // 2. Fallback: Any supported host links inside post body
         var autoIdx = 1
-        doc.select("#postBody a[href], .entry-content a[href]").forEach { aTag ->
+        doc.select("#postBody a[href], .entry-content a[href], .post-body a[href]").forEach { aTag ->
             val href = resolveRelativeUrl(baseUrl, aTag.attr("href"))
             if (
                 href.isNotEmpty() &&
@@ -345,10 +337,10 @@ class DramaVerseProvider : MainAPI() {
                 !href.contains("blogspot.com") &&
                 isSupportedHostUrl(href)
             ) {
-                val parentEpName = aTag.parent()?.selectFirst(".EpName")?.text()
+                val contextText = aTag.parent()?.selectFirst(".EpName")?.text()
                     ?: aTag.previousElementSibling()?.text()
                     ?: aTag.text()
-                val epNum = parseEpNumber(parentEpName, autoIdx)
+                val epNum = parseEpNumber(contextText, autoIdx)
                 if (seenPairs.add(epNum to href)) {
                     results.add(epNum to href)
                     autoIdx++
@@ -356,7 +348,7 @@ class DramaVerseProvider : MainAPI() {
             }
         }
 
-        // 3. Regex Fallback for raw embedded links in HTML
+        // 3. Raw Regex Fallback
         if (results.isEmpty()) {
             val hostRegex = Regex(
                 """https?://(?:[a-zA-Z0-9-]+\.)*(?:xcloud\.[a-z]{2,}|xcloud\d*\.[a-z]{2,}|pixeldrain\.[a-z]{2,}|drive\.google\.com|docs\.google\.com|gdflix\.[a-z]{2,}|gdtot\.[a-z]{2,}|filepress\.[a-z]{2,}|hubcloud\.[a-z]{2,}|hubdrive\.[a-z]{2,}|workers\.dev)/[^\s"'<>]+""",
@@ -398,7 +390,8 @@ class DramaVerseProvider : MainAPI() {
                 headers = defaultHeaders,
                 referer = refererUrl
             )
-            parseEpisodesFromDocument(resp.document, resp.url.ifEmpty { resolvedStart })
+            val finalUrl = resp.url.ifEmpty { resolvedStart }
+            parseEpisodesFromDocument(resp.document, finalUrl)
         } catch (_: Exception) {
             emptyList()
         }
@@ -409,71 +402,84 @@ class DramaVerseProvider : MainAPI() {
     // ---------------------------------------------------------
 
     override suspend fun load(url: String): LoadResponse {
-        val document = app.get(
-            url,
-            headers = defaultHeaders,
-            cookies = cookies
-        ).document
+        val document = app.get(url, headers = defaultHeaders).document
 
         val title = document.selectFirst(
             "h1.entry-title, h1.post-title, h1.pTtl"
         )?.text()?.trim() ?: "Drama"
 
         val poster = document.selectFirst(
-            "a.post-thumb img, .post-thumb img, .entry-content img"
+            "a.post-thumb img, .post-thumb img, .entry-content img, .post-body img"
         )?.let {
             it.absUrl("data-src").ifEmpty { it.absUrl("src") }
         }
 
-        val description = document.selectFirst(".entry-content p")?.text()
+        val description = document.selectFirst(".entry-content p, .post-body p")?.text()
 
         val episodeMap = linkedMapOf<Int, MutableList<String>>()
 
-        // Check if current page itself has .EpItem list (e.g. direct blogspot link)
-        val directEpList = parseEpisodesFromDocument(document, url)
-        if (directEpList.isNotEmpty() && document.select("div.EpItem").isNotEmpty()) {
-            for ((epNum, epHref) in directEpList) {
+        // Case 1: Current URL itself is the Blogspot episode page
+        if (document.select("div.EpItem").isNotEmpty()) {
+            val directEps = parseEpisodesFromDocument(document, url)
+            for ((epNum, epHref) in directEps) {
                 episodeMap.getOrPut(epNum) { mutableListOf() }.add(epHref)
             }
-        } else {
-            // Main site post page: find intermediate Blogspot / Sohojgyan / direct host buttons
-            val btnSlides = document.select(
-                "a.btn-slide, " +
-                    ".entry-content a[href*='sohojgyan'], " +
-                    ".entry-content a[href*='blogspot'], " +
-                    ".entry-content a[href*='xcloud'], " +
-                    ".entry-content a[href*='pixeldrain'], " +
-                    ".entry-content a[href*='drive.google.com'], " +
-                    ".entry-content a[href*='gdflix'], " +
-                    ".entry-content a[href*='hubcloud']"
+        }
+
+        // Case 2: Main site post page -> scan ALL candidate buttons/links in content
+        if (episodeMap.isEmpty()) {
+            val candidateUrls = linkedSetOf<Pair<String, String>>() // url to label
+
+            // Scan all links inside content area
+            document.select(".entry-content a[href], .post-body a[href], article a[href], a.btn-slide, a.button").forEach { el ->
+                val href = el.absUrl("href").ifEmpty {
+                    resolveRelativeUrl(url, el.attr("href"))
+                }
+                val label = el.text().trim()
+                if (href.isNotEmpty() && href != url && !isIgnoredOrAdUrl(href)) {
+                    // Ignore navigation/menu links to other posts on mydverse.com unless they look like download/watch redirects
+                    val isInternalPost = href.startsWith(mainUrl) &&
+                        !href.contains("?") &&
+                        !href.contains("go") &&
+                        !href.contains("link") &&
+                        !href.contains("watch") &&
+                        !href.contains("download")
+                    if (!isInternalPost) {
+                        candidateUrls.add(href to label)
+                    }
+                }
+            }
+
+            // Also scan raw HTML for hidden blogspot / sohojgyan / xcloud URLs (e.g. inside JS/onclick)
+            val rawLinkRegex = Regex(
+                """https?://[a-zA-Z0-9.-]*(?:blogspot\.com|sohojgyan\.[a-z]+|xcloud\.[a-z]+|xcloud\d*\.[a-z]+|pixeldrain\.[a-z]+|drive\.google\.com)/[^\s"'<>\\]+""",
+                RegexOption.IGNORE_CASE
             )
-
-            for (slide in btnSlides) {
-                val slideUrl = slide.absUrl("href").ifEmpty { continue }
-                val slideTitle = slide.selectFirst(".btn-title")
-                    ?.text()
-                    ?.trim()
-                    ?: slide.text().trim().ifEmpty { "Episode" }
-
+            rawLinkRegex.findAll(document.html()).forEach { match ->
+                val cleanHref = match.value.replace("\\/", "/").replace("&amp;", "&").trim()
                 if (
-                    slideUrl.contains("sohojgyan", ignoreCase = true) ||
-                    slideUrl.contains("blogspot.com", ignoreCase = true) ||
-                    slideTitle.contains("Episode", ignoreCase = true) ||
-                    slideTitle.contains("Watch", ignoreCase = true) ||
-                    slideTitle.contains("Download", ignoreCase = true)
+                    !isIgnoredOrAdUrl(cleanHref) &&
+                    !cleanHref.contains("/feeds/") &&
+                    !cleanHref.contains("/favicon") &&
+                    !cleanHref.contains("blogger.com")
                 ) {
-                    val scraped = scrapeEpisodeLinksFromIntermediate(slideUrl, url)
+                    candidateUrls.add(cleanHref to "Episode")
+                }
+            }
+
+            for ((candUrl, candLabel) in candidateUrls) {
+                val resolved = resolveIntermediateUrl(candUrl)
+
+                if (isEpisodePageUrl(resolved) || isEpisodePageUrl(candUrl)) {
+                    val scraped = scrapeEpisodeLinksFromIntermediate(resolved, url)
                     if (scraped.isNotEmpty()) {
                         for ((epNum, epHref) in scraped) {
                             episodeMap.getOrPut(epNum) { mutableListOf() }.add(epHref)
                         }
-                    } else if (!isIgnoredOrAdUrl(slideUrl) && !slideUrl.contains("blogspot.com")) {
-                        val epNum = parseEpNumber(slideTitle, (episodeMap.keys.maxOrNull() ?: 0) + 1)
-                        episodeMap.getOrPut(epNum) { mutableListOf() }.add(slideUrl)
                     }
-                } else if (!isIgnoredOrAdUrl(slideUrl)) {
-                    val epNum = parseEpNumber(slideTitle, (episodeMap.keys.maxOrNull() ?: 0) + 1)
-                    episodeMap.getOrPut(epNum) { mutableListOf() }.add(slideUrl)
+                } else if (isSupportedHostUrl(resolved)) {
+                    val epNum = parseEpNumber(candLabel, (episodeMap.keys.maxOrNull() ?: 0) + 1)
+                    episodeMap.getOrPut(epNum) { mutableListOf() }.add(resolved)
                 }
             }
         }
@@ -489,7 +495,7 @@ class DramaVerseProvider : MainAPI() {
         if (episodes.isEmpty()) {
             episodes.add(
                 newEpisode(url) {
-                    this.name = "Full Movie / Stream"
+                    this.name = "Episode 1"
                     this.episode = 1
                 }
             )
@@ -521,13 +527,7 @@ class DramaVerseProvider : MainAPI() {
             .filter { it.isNotEmpty() }
 
         for (itemUrl in rawLinks) {
-            if (
-                isIgnoredOrAdUrl(itemUrl) &&
-                !itemUrl.contains("sohojgyan") &&
-                !itemUrl.contains("blogspot")
-            ) {
-                continue
-            }
+            if (isIgnoredOrAdUrl(itemUrl)) continue
 
             val currentUrl = if (isXCloudHlsUrl(itemUrl)) {
                 itemUrl
@@ -535,10 +535,7 @@ class DramaVerseProvider : MainAPI() {
                 resolveIntermediateUrl(itemUrl)
             }
 
-            if (
-                currentUrl.contains("sohojgyan", ignoreCase = true) ||
-                currentUrl.contains("blogspot.com", ignoreCase = true)
-            ) {
+            if (isEpisodePageUrl(currentUrl)) {
                 val scraped = scrapeEpisodeLinksFromIntermediate(currentUrl, "$mainUrl/")
                 for ((_, link) in scraped) {
                     processSingleHostLink(link, currentUrl, subtitleCallback, callback)
