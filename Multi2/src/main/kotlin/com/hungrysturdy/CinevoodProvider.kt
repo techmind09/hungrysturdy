@@ -104,7 +104,6 @@ class CinevoodProvider : MainAPI() {
             ?: document.selectFirst(".mfx-main-title")?.text()?.trim()
             ?: return null
 
-        // Parse structured info from .mfx-info-box ul li
         val infoMap = mutableMapOf<String, String>()
         document.select("div.mfx-info-box li").forEach { li ->
             val label = li.selectFirst("strong")?.text()?.replace(":", "")?.trim()?.lowercase()
@@ -146,7 +145,6 @@ class CinevoodProvider : MainAPI() {
 
         val actors = infoMap["cast"]?.split(",")?.map { it.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
 
-        // cine7.html uses data-yt-id="f_bKjZeJBBI"
         val trailer = document.selectFirst("div.mfx-yt-lazy")?.let { el ->
             val ytId = el.attr("data-yt-id").ifBlank { el.attr("data-id") }
             if (ytId.isNotBlank()) "https://www.youtube.com/watch?v=$ytId" else null
@@ -264,6 +262,20 @@ class CinevoodProvider : MainAPI() {
     ) {
         if (depth > 4 || url.isBlank()) return
 
+        // 0. MirrorServerExtractor (mCloud, VegaDrive, DOTFLIX)
+        if (url.contains("mcloud", ignoreCase = true) ||
+            url.contains("vegadrive", ignoreCase = true) ||
+            url.contains("dotflix", ignoreCase = true)
+        ) {
+            val mirrorExtractor = MirrorServerExtractor(mainUrl)
+            mirrorExtractor.extractAllServers(
+                url = url,
+                referer = referer,
+                callback = callback
+            )
+            return
+        }
+
         // 1. Direct video file / Googleusercontent stream check
         if (url.contains("video-downloads.googleusercontent.com") ||
             url.matches(Regex(""".*\.(mkv|mp4|m3u8)(\?.*)?$""", RegexOption.IGNORE_CASE))
@@ -281,10 +293,10 @@ class CinevoodProvider : MainAPI() {
             return
         }
 
-        // 2. Try built-in CloudStream extractors
+        // 2. Try built-in & custom CloudStream extractors
         if (loadExtractor(url, referer, subtitleCallback, callback)) return
 
-        // 3. Fetch intermediate page (handles mobilejsr.best -> mcloud.best -> FastDL)
+        // 3. Fetch intermediate page (handles mobilejsr.best -> mcloud.best / vegadrive / dotflix -> FastDL)
         try {
             val res = app.get(url, referer = referer)
             val doc = res.document
@@ -374,16 +386,15 @@ class CinevoodProvider : MainAPI() {
                 return
             }
 
-            // Case C: Intermediate shortener / gateway page (e.g. mobilejsr.best/genxfm...)
-            // Check meta-refresh or JS window.location redirect first
+            // Case C: Intermediate shortener / gateway page (mcloud / vegadrive / dotflix / hubcloud)
             val metaRedirect = doc.selectFirst("meta[http-equiv=refresh]")?.attr("content")
                 ?.substringAfter("url=", "")?.trim()?.trim('\'', '"')
             val jsRedirect = Regex("""(?:window\.location(?:\.href)?|location\.replace)\s*(?:=|\()\s*['"](https?://[^'"]+)['"]""")
                 .find(htmlText)?.groupValues?.getOrNull(1)
-            val mcloudMatch = Regex("""https?://(?:mcloud|hubcloud)\.[a-z]+/[^\s"'<>]+""")
+            val mirrorMatch = Regex("""https?://(?:mcloud|hubcloud|vegadrive|dotflix)\.[a-z]+/[^\s"'<>]+""")
                 .find(htmlText)?.value
 
-            val nextHop = listOfNotNull(metaRedirect, jsRedirect, mcloudMatch)
+            val nextHop = listOfNotNull(metaRedirect, jsRedirect, mirrorMatch)
                 .firstOrNull { it.startsWith("http") && it != currentUrl }
 
             if (nextHop != null) {
