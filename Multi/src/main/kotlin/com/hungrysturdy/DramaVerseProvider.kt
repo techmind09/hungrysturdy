@@ -235,7 +235,6 @@ class DramaVerseProvider : MainAPI() {
                 )
                 sessionCookies = sessionCookies + resp.cookies
 
-                // 1. Standard HTTP 301/302 Redirect
                 val location = resp.headers["location"] ?: resp.headers["Location"]
                 if (!location.isNullOrEmpty()) {
                     val next = resolveRelativeUrl(current, location)
@@ -251,7 +250,6 @@ class DramaVerseProvider : MainAPI() {
                     return current
                 }
 
-                // 2. Direct Blogspot / Episode page URL anywhere in HTML or scripts
                 val blogspotMatch = Regex(
                     """https?://[a-zA-Z0-9.-]*blogspot\.com/p/[^\s"'<>\\]+""",
                     RegexOption.IGNORE_CASE
@@ -261,7 +259,6 @@ class DramaVerseProvider : MainAPI() {
                     return blogspotMatch
                 }
 
-                // 3. Base64 encoded URLs (common in Safelink / Sohojgyan)
                 val b64Regex = Regex("""atob\(\s*["']([A-Za-z0-9+/=]{16,})["']\s*\)""")
                 var decodedFound: String? = null
                 for (m in b64Regex.findAll(html)) {
@@ -282,7 +279,6 @@ class DramaVerseProvider : MainAPI() {
                     continue
                 }
 
-                // 4. Meta Refresh Redirect
                 val metaMatch = Regex(
                     """content\s*=\s*["'][0-9]+;\s*url=([^"']+)["']""",
                     RegexOption.IGNORE_CASE
@@ -297,7 +293,6 @@ class DramaVerseProvider : MainAPI() {
                     }
                 }
 
-                // 5. JS Location Redirect
                 val jsMatch = Regex(
                     """(?:window\.location(?:\.href)?|location\.href|location\.replace)\s*(?:=|\()\s*["'](https?://[^"']+)["']""",
                     RegexOption.IGNORE_CASE
@@ -309,7 +304,6 @@ class DramaVerseProvider : MainAPI() {
                     continue
                 }
 
-                // 6. Auto-submit POST Form (Safelink step)
                 val form = resp.document.selectFirst("form[action]")
                 if (form != null) {
                     val action = resolveRelativeUrl(current, form.attr("action").ifEmpty { current })
@@ -374,7 +368,6 @@ class DramaVerseProvider : MainAPI() {
         val results = mutableListOf<Pair<Int, String>>()
         val seenPairs = mutableSetOf<Pair<Int, String>>()
 
-        // 1. Exact Blogspot Structure: <div class="EpList"> -> <div class="EpItem">
         val epItems = doc.select("div.EpItem")
         if (epItems.isNotEmpty()) {
             epItems.forEachIndexed { index, item ->
@@ -396,7 +389,6 @@ class DramaVerseProvider : MainAPI() {
             if (results.isNotEmpty()) return results
         }
 
-        // 2. Fallback: Any supported host links inside post body
         var autoIdx = 1
         doc.select("#postBody a[href], .entry-content a[href], .post-body a[href]").forEach { aTag ->
             val href = resolveRelativeUrl(baseUrl, aTag.attr("href"))
@@ -417,7 +409,6 @@ class DramaVerseProvider : MainAPI() {
             }
         }
 
-        // 3. Raw Regex Fallback (including xcloud1.space & other hosts)
         if (results.isEmpty()) {
             val hostRegex = Regex(
                 """https?://(?:[a-zA-Z0-9-]+\.)*(?:xcloud\.[a-z]{2,}|xcloud\d*\.[a-z]{2,}|pixeldrain\.[a-z]{2,}|drive\.google\.com|docs\.google\.com|gdflix\.[a-z]{2,}|gdtot\.[a-z]{2,}|filepress\.[a-z]{2,}|hubcloud\.[a-z]{2,}|hubdrive\.[a-z]{2,}|workers\.dev)/[^\s"'<>]+""",
@@ -487,7 +478,6 @@ class DramaVerseProvider : MainAPI() {
 
         val episodeMap = linkedMapOf<Int, MutableList<String>>()
 
-        // Case 1: Current URL itself is the Blogspot episode page
         if (document.select("div.EpItem").isNotEmpty()) {
             val directEps = parseEpisodesFromDocument(document, url)
             for ((epNum, epHref) in directEps) {
@@ -495,7 +485,6 @@ class DramaVerseProvider : MainAPI() {
             }
         }
 
-        // Case 2: Main site post page -> scan ALL candidate buttons/links in content
         if (episodeMap.isEmpty()) {
             val candidateUrls = linkedSetOf<Pair<String, String>>()
 
