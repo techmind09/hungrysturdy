@@ -9,8 +9,11 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.SharedPreferences
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.Handler
@@ -76,6 +79,8 @@ object MovieFoxSettingsDialog {
     private const val KEY_HINDI_ONLY = "mf_hindi_providers_only"
     private const val KEY_LOW_BUFFER = "mf_low_buffer_mode"
     private const val KEY_DOWNLOAD_ONLY = "mf_download_only_mode"
+    private const val KEY_AUTO_OFF_DEAD = "mf_auto_off_dead_servers"
+    private const val KEY_BANNER_THUMB_URL = "mf_custom_banner_thumb_url"
     private const val KEY_CONCURRENCY = "mf_concurrency"
     private const val KEY_TIMEOUT_SEC = "mf_timeout_sec"
     private const val KEY_SHUFFLE_HOME = "mf_shuffle_home_categories"
@@ -124,7 +129,8 @@ object MovieFoxSettingsDialog {
         val isCustom: Boolean = false,
         val isHindi: Boolean = true,
         val category: String = "Movies",
-        val runtimeBadge: String = "⚡ MF"
+        val runtimeBadge: String = "⚡ MF",
+        val thumbnailUrl: String = ""
     )
 
     data class ExtractorItem(
@@ -183,6 +189,7 @@ object MovieFoxSettingsDialog {
     private val cachedCs3Servers = CopyOnWriteArrayList<ServerItem>()
     private val diagLogs = CopyOnWriteArrayList<DiagLogEntry>()
     private val serverHealthMap = ConcurrentHashMap<String, ServerHealthInfo>()
+    private val bitmapCache = ConcurrentHashMap<String, Bitmap>()
     @Volatile
     private var cs3Loaded = false
     private val autoSyncStarted = AtomicBoolean(false)
@@ -329,9 +336,42 @@ object MovieFoxSettingsDialog {
             detail = detail,
             updatedAt = nowTs()
         )
+        val ctx = appContext
+        if (!isHealthy && ctx != null && isAutoOffDeadServers(ctx)) {
+            setServerEnabled(ctx, key, false)
+        }
     }
 
     fun getServerHealth(key: String): ServerHealthInfo? = serverHealthMap[key.lowercase()]
+
+    fun isServerDead(info: ServerHealthInfo?): Boolean {
+        if (info == null) return false
+        if (info.isHealthy) return false
+        val st = info.status.uppercase(Locale.getDefault())
+        return st == "DOWN" ||
+            st == "TIMEOUT" ||
+            st == "ERROR" ||
+            st.startsWith("HTTP ") ||
+            st.startsWith("CF ")
+    }
+
+    fun disableDeadServers(ctx: Context): Int {
+        var disabledCount = 0
+        val ed = prefs(ctx).edit()
+        SERVERS.forEach { srv ->
+            val info = getServerHealth(srv.key)
+            val currentlyOn = prefs(ctx).getBoolean("$KEY_SRV_PREFIX${srv.key.lowercase()}", true)
+            if (isServerDead(info) && currentlyOn) {
+                ed.putBoolean("$KEY_SRV_PREFIX${srv.key.lowercase()}", false)
+                disabledCount++
+            }
+        }
+        ed.apply()
+        if (disabledCount > 0) {
+            appendDiagLog("INFO", "AutoOff", "Turned OFF $disabledCount non-working servers")
+        }
+        return disabledCount
+    }
 
     fun logSiteError(source: String, url: String, error: Throwable?, extra: String = "") {
         val errClass = error?.javaClass?.simpleName.orEmpty()
@@ -396,7 +436,10 @@ object MovieFoxSettingsDialog {
                 updatedAt = nowTs()
             )
             serverHealthMap[srv.key.lowercase()] = info
-            if (!ok) appendDiagLog("ERROR", srv.key, "Probe $status | ${srv.probeUrl}", ms)
+            if (!ok) {
+                appendDiagLog("ERROR", srv.key, "Probe $status | ${srv.probeUrl}", ms)
+                appContext?.let { if (isAutoOffDeadServers(it)) setServerEnabled(it, srv.key, false) }
+            }
             info
         } catch (e: Exception) {
             val ms = System.currentTimeMillis() - start
@@ -415,8 +458,32 @@ object MovieFoxSettingsDialog {
             )
             serverHealthMap[srv.key.lowercase()] = info
             appendDiagLog(if (isTimeout) "TIMEOUT" else "ERROR", srv.key, "Probe $status: ${e.message ?: "Network"} | ${srv.probeUrl}", ms)
+            appContext?.let { if (isAutoOffDeadServers(it)) setServerEnabled(it, srv.key, false) }
             info
         }
+    }
+
+    private suspend fun loadBitmapFromUrl(urlStr: String): Bitmap? = withContext(Dispatchers.IO) {
+        if (urlStr.isBlank()) return@withContext null
+        bitmapCache[urlStr]?.let { return@withContext it }
+        runCatching {
+            val conn = (URL(toRawGithubUrl(urlStr)).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 8000
+                readTimeout = 8000
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", CF_BYPASS_UA)
+            }
+            if (conn.responseCode in 200..299) {
+                conn.inputStream.use { inp ->
+                    val bmp = BitmapFactory.decodeStream(inp)
+                    if (bmp != null) {
+                        bitmapCache[urlStr] = bmp
+                    }
+                    bmp
+                }
+            } else null
+        }.getOrNull()
     }
 
     private fun resolveActivityContext(rawCtx: Context): Context {
@@ -554,9 +621,6 @@ object MovieFoxSettingsDialog {
         }
     }
 
-    /**
-     * Custom Animated Neon Pill Switch — Zero OEM glitch, smooth slide, live theme color.
-     */
     private class NeonSwitch(
         ctx: Context,
         initialChecked: Boolean,
@@ -683,6 +747,12 @@ object MovieFoxSettingsDialog {
     fun isUseWebViewCf(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_USE_WEBVIEW_CF, true)
     fun setUseWebViewCf(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_USE_WEBVIEW_CF, enabled).apply()
 
+    fun isAutoOffDeadServers(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_AUTO_OFF_DEAD, false)
+    fun setAutoOffDeadServers(ctx: Context, enabled: Boolean) = prefs(ctx).edit().putBoolean(KEY_AUTO_OFF_DEAD, enabled).apply()
+
+    fun getCustomBannerThumbnailUrl(ctx: Context): String = prefs(ctx).getString(KEY_BANNER_THUMB_URL, "") ?: ""
+    fun setCustomBannerThumbnailUrl(ctx: Context, url: String) = prefs(ctx).edit().putString(KEY_BANNER_THUMB_URL, url.trim()).apply()
+
     private fun extractHostKey(domainOrUrl: String): String = runCatching {
         val raw = if (domainOrUrl.startsWith("http")) domainOrUrl else "https://$domainOrUrl"
         URL(raw).host.lowercase().removePrefix("www.")
@@ -748,9 +818,6 @@ object MovieFoxSettingsDialog {
         return raw?.takeIf { it.isNotBlank() && it != CF_VERIFIED_MARKER }
     }
 
-    // =========================================================================
-    // Advance CF WebView Solver — Accurate Challenge Detection + Zero Double-Skip
-    // =========================================================================
     fun openCfBypassWindow(
         rawCtx: Context,
         targetName: String,
@@ -1150,7 +1217,8 @@ object MovieFoxSettingsDialog {
     fun isServerEnabled(ctx: Context, key: String): Boolean {
         val enabled = prefs(ctx).getBoolean("$KEY_SRV_PREFIX${key.lowercase()}", true)
         if (!enabled) return false
-        if (isHindiOnly(ctx)) {
+        val langPref = MovieFoxProvider.getPreferredLanguage(ctx)
+        if (langPref == "HI" || isHindiOnly(ctx)) {
             val item = SERVERS.firstOrNull { it.key.equals(key, true) }
             if (item != null && !item.isCustom && !item.isHindi) return false
         }
@@ -1223,7 +1291,8 @@ object MovieFoxSettingsDialog {
                             isCustom = true,
                             isHindi = true,
                             category = "Movies",
-                            runtimeBadge = "⚡ MF"
+                            runtimeBadge = "⚡ MF",
+                            thumbnailUrl = obj.optString("thumbnailUrl", "")
                         )
                     )
                 }
@@ -1246,6 +1315,7 @@ object MovieFoxSettingsDialog {
                     .put("probeUrl", srv.probeUrl)
                     .put("accentHex", srv.accentHex)
                     .put("runtimeBadge", "⚡ MF")
+                    .put("thumbnailUrl", srv.thumbnailUrl)
             )
         }
         prefs(ctx).edit().putString(KEY_CS3_SERVERS, arr.toString()).apply()
@@ -1348,6 +1418,7 @@ object MovieFoxSettingsDialog {
                     val mName = root.optString("name").trim().ifBlank { "Nuvio Addon" }
                     val baseAddonUrl = defaultUrl.substringBefore("/manifest.json").trimEnd('/')
                     val slug = mName.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
+                    val thumb = root.optString("logo").ifBlank { root.optString("background") }.trim()
                     out.add(
                         ServerItem(
                             key = "nuv_${idTag}_${slug.ifBlank { "addon" }}",
@@ -1358,7 +1429,8 @@ object MovieFoxSettingsDialog {
                             isCustom = true,
                             isHindi = true,
                             category = "Movies",
-                            runtimeBadge = "⚡ MF"
+                            runtimeBadge = "⚡ MF",
+                            thumbnailUrl = thumb
                         )
                     )
                     return nestedPluginLists
@@ -1386,6 +1458,10 @@ object MovieFoxSettingsDialog {
                     .ifBlank { pObj.optString("pluginUrl") }
                     .ifBlank { pObj.optString("manifestUrl") }
                     .ifBlank { defaultUrl }.trim()
+                val thumb = pObj.optString("iconUrl")
+                    .ifBlank { pObj.optString("image") }
+                    .ifBlank { pObj.optString("poster") }
+                    .ifBlank { pObj.optString("logo") }.trim()
                 val slug = finalName.lowercase().replace(Regex("[^a-z0-9]+"), "_").trim('_')
                 out.add(
                     ServerItem(
@@ -1397,7 +1473,8 @@ object MovieFoxSettingsDialog {
                         isCustom = true,
                         isHindi = true,
                         category = "Movies",
-                        runtimeBadge = "⚡ MF"
+                        runtimeBadge = "⚡ MF",
+                        thumbnailUrl = thumb
                     )
                 )
             }
@@ -1443,9 +1520,6 @@ object MovieFoxSettingsDialog {
         out.distinctBy { "${it.name.lowercase()}|${it.probeUrl.lowercase()}" }
     }
 
-    // =========================================================================
-    // Ultra Server List Adapter — Zero Clipping, Glowing Monogram, NeonSwitch
-    // =========================================================================
     private class ServerListAdapter(
         private val ctx: Context,
         private val getAccentHex: () -> String,
@@ -1491,7 +1565,6 @@ object MovieFoxSettingsDialog {
                     setPadding(dp(ctx, 10), dp(ctx, 9), dp(ctx, 10), dp(ctx, 9))
                 }
 
-                // Left Monogram Avatar + Corner Health Dot
                 val avatarWrap = FrameLayout(ctx).apply {
                     layoutParams = LinearLayout.LayoutParams(dp(ctx, 36), dp(ctx, 36)).apply { marginEnd = dp(ctx, 10) }
                 }
@@ -1507,7 +1580,6 @@ object MovieFoxSettingsDialog {
                 avatarWrap.addView(avatarTv)
                 avatarWrap.addView(statusDot)
 
-                // Center Info Stack (Name -> Badges -> URL) — zero horizontal overflow
                 val col = LinearLayout(ctx).apply {
                     orientation = LinearLayout.VERTICAL
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
@@ -1557,7 +1629,6 @@ object MovieFoxSettingsDialog {
                 col.addView(badgeLine)
                 col.addView(urlTv)
 
-                // Clean Centered Up/Down Priority Pill Controls (Zero Clipping)
                 val orderCol = LinearLayout(ctx).apply {
                     orientation = LinearLayout.VERTICAL
                     gravity = Gravity.CENTER
@@ -1678,9 +1749,6 @@ object MovieFoxSettingsDialog {
         }
     }
 
-    // =========================================================================
-    // Ultra Server Health Card — Left Neon Strip, Zero Badge Wrap
-    // =========================================================================
     private fun buildServerHealthCard(
         ctx: Context,
         srv: ServerItem,
@@ -1719,7 +1787,6 @@ object MovieFoxSettingsDialog {
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).apply { bottomMargin = dp(ctx, 7) }
 
-            // Glowing Left Vertical Accent Strip
             addView(View(ctx).apply {
                 layoutParams = LinearLayout.LayoutParams(dp(ctx, 4), dp(ctx, 36)).apply { marginEnd = dp(ctx, 9) }
                 background = pillBg(accentHex, dpf(ctx, 4f))
@@ -1731,7 +1798,6 @@ object MovieFoxSettingsDialog {
                     marginEnd = dp(ctx, 6)
                 }
             }
-            // Line 1: Clean Title + ⚡ MF
             infoCol.addView(TextView(ctx).apply {
                 text = "${srv.name}  ⚡ MF"
                 textSize = 12.5f
@@ -1740,7 +1806,6 @@ object MovieFoxSettingsDialog {
                 setTypeface(typeface, Typeface.BOLD)
                 setTextColor(Color.WHITE)
             })
-            // Line 2: Dedicated Single-Line Status Pill (Never wraps awkwardly)
             val statusRow = LinearLayout(ctx).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -1759,7 +1824,6 @@ object MovieFoxSettingsDialog {
             })
             infoCol.addView(statusRow)
 
-            // Line 3: Detail / URL
             infoCol.addView(TextView(ctx).apply {
                 text = h?.detail ?: srv.probeUrl
                 textSize = 9.2f
@@ -1770,7 +1834,6 @@ object MovieFoxSettingsDialog {
             })
             addView(infoCol)
 
-            // Action Buttons (CF + COPY)
             addView(TextView(ctx).apply {
                 text = if (isVerified) "CF ✓" else "CF"
                 textSize = 9.2f
@@ -1812,16 +1875,19 @@ object MovieFoxSettingsDialog {
         val dialogScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         val cs3RepoList = getCs3Repos(ctx).toMutableList()
         var activeTheme = getSelectedTheme(ctx)
+        var selectedLanguage = MovieFoxProvider.getPreferredLanguage(ctx)
         var selectedPlayer = getPreferredPlayer(ctx)
         var selectedSflixHost = getSflixHost(ctx)
         var useWebViewCf = isUseWebViewCf(ctx)
+        var autoOffDead = isAutoOffDeadServers(ctx)
+        var bannerThumbUrl = getCustomBannerThumbnailUrl(ctx)
         var currentQuery = ""
         var selectedCategory = "All"
         var selectedRepoType = "AUTO"
         var selectedLogFilter = "ALL"
         var currentConcurrency = getConcurrency(ctx)
         var currentTimeout = getTimeoutSeconds(ctx)
-        var hindiOnly = isHindiOnly(ctx)
+        var hindiOnly = isHindiOnly(ctx) || selectedLanguage == "HI"
         var downloadOnly = isDownloadOnly(ctx)
         var shuffleHome = isShuffleHomeCategories(ctx)
         var q4k = isQuality4kEnabled(ctx)
@@ -1831,7 +1897,6 @@ object MovieFoxSettingsDialog {
         var lowBuffer = isLowBufferMode(ctx)
         var activeTabIdx = 0
 
-        // Track theme-reactive controls so switching theme updates EVERYTHING live
         val themedSwitches = mutableListOf<NeonSwitch>()
         val themedPlusBtns = mutableListOf<TextView>()
         val themedSectionBars = mutableListOf<View>()
@@ -1841,7 +1906,7 @@ object MovieFoxSettingsDialog {
             setPadding(dp(ctx, 13), dp(ctx, 13), dp(ctx, 13), dp(ctx, 13))
         }
 
-        // ── Hero Header ──────────────────────────────────────────────────────
+        // ── Hero Header + Unique Banner & Thumbnail Strip ────────────────────
         val header = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(ctx, 14), dp(ctx, 12), dp(ctx, 14), dp(ctx, 12))
@@ -1884,6 +1949,169 @@ object MovieFoxSettingsDialog {
             setPadding(dp(ctx, 9), dp(ctx, 5), dp(ctx, 9), dp(ctx, 5))
         })
         header.addView(titleRow)
+
+        val showcaseBanner = FrameLayout(ctx).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 92)).apply {
+                topMargin = dp(ctx, 10)
+            }
+            background = cardBg("#0A101D", "#273756", dpf(ctx, 14f), 2)
+            clipToOutline = true
+        }
+        val bannerImageView = ImageView(ctx).apply {
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            alpha = 0.42f
+        }
+        val bannerOverlay = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            setPadding(dp(ctx, 11), dp(ctx, 8), dp(ctx, 11), dp(ctx, 8))
+        }
+        val bannerTopRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+        val heroThumbBox = TextView(ctx).apply {
+            text = "MF"
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            background = neonGradBtn(activeTheme.primaryHex, dpf(ctx, 10f))
+            layoutParams = LinearLayout.LayoutParams(dp(ctx, 42), dp(ctx, 42)).apply { marginEnd = dp(ctx, 10) }
+        }
+        val bannerTextCol = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val bannerTitleTv = TextView(ctx).apply {
+            text = "UNIQUE SERVER SHOWCASE"
+            textSize = 11.5f
+            isSingleLine = true
+            ellipsize = TextUtils.TruncateAt.END
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+        }
+        val bannerSubTv = TextView(ctx).apply {
+            text = "Lang: $selectedLanguage • Tap any server thumbnail to toggle"
+            textSize = 9.2f
+            isSingleLine = true
+            ellipsize = TextUtils.TruncateAt.END
+            setTextColor(safeColor("#CBD5E1"))
+        }
+        bannerTextCol.addView(bannerTitleTv)
+        bannerTextCol.addView(bannerSubTv)
+        bannerTopRow.addView(heroThumbBox)
+        bannerTopRow.addView(bannerTextCol)
+
+        val thumbStripScroll = HorizontalScrollView(ctx).apply {
+            isHorizontalScrollBarEnabled = false
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(ctx, 6)
+            }
+        }
+        val thumbStripRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+        }
+        thumbStripScroll.addView(thumbStripRow)
+
+        bannerOverlay.addView(bannerTopRow)
+        bannerOverlay.addView(thumbStripScroll)
+        showcaseBanner.addView(bannerImageView)
+        showcaseBanner.addView(bannerOverlay)
+        header.addView(showcaseBanner)
+
+        lateinit var applyServerFilter: () -> Unit
+        lateinit var refreshHealthPane: () -> Unit
+
+        fun refreshBannerAndThumbnails() {
+            val activeServers = SERVERS.filter { isServerEnabled(ctx, it.key) }
+            val featured = activeServers.firstOrNull() ?: SERVERS.firstOrNull()
+            if (featured != null) {
+                heroThumbBox.text = monogramOf(featured.name)
+                bannerTitleTv.text = "TOP ACTIVE: ${featured.name.uppercase()} • ${featured.tag}"
+                bannerSubTv.text = "${activeServers.size}/${SERVERS.size} Live • Lang: $selectedLanguage • ${activeTheme.name}"
+            }
+
+            if (bannerThumbUrl.isNotBlank()) {
+                dialogScope.launch {
+                    val bmp = loadBitmapFromUrl(bannerThumbUrl)
+                    if (bmp != null && isContextAlive(ctx)) {
+                        bannerImageView.setImageBitmap(bmp)
+                        heroThumbBox.background = BitmapDrawable(ctx.resources, bmp)
+                        heroThumbBox.text = ""
+                    }
+                }
+            } else {
+                bannerImageView.setImageDrawable(null)
+                heroThumbBox.background = neonGradBtn(activeTheme.primaryHex, dpf(ctx, 10f))
+            }
+
+            thumbStripRow.removeAllViews()
+            SERVERS.take(16).forEach { srv ->
+                val isOn = isServerEnabled(ctx, srv.key)
+                val h = getServerHealth(srv.key)
+                val dotHex = when {
+                    h == null -> if (isOn) srv.accentHex else "#475569"
+                    h.isHealthy -> "#22C55E"
+                    isServerDead(h) -> "#EF4444"
+                    else -> "#F59E0B"
+                }
+                val chip = LinearLayout(ctx).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    background = cardBg(
+                        bgHex = if (isOn) "#141D31" else "#0C101A",
+                        strokeHex = if (isOn) srv.accentHex else "#243049",
+                        radius = dpf(ctx, 9f),
+                        strokeWidth = 1
+                    )
+                    setPadding(dp(ctx, 7), dp(ctx, 3), dp(ctx, 8), dp(ctx, 3))
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        marginEnd = dp(ctx, 5)
+                    }
+                    alpha = if (isOn) 1f else 0.55f
+                    attachPressAnim(this)
+                    setOnClickListener {
+                        val nextState = !isServerEnabled(ctx, srv.key)
+                        setServerEnabled(ctx, srv.key, nextState)
+                        applyServerFilter()
+                        refreshBannerAndThumbnails()
+                        safeToast(ctx, "${srv.name}: ${if (nextState) "ON" else "OFF"}")
+                    }
+                }
+                chip.addView(View(ctx).apply {
+                    layoutParams = LinearLayout.LayoutParams(dp(ctx, 7), dp(ctx, 7)).apply { marginEnd = dp(ctx, 5) }
+                    background = GradientDrawable().apply {
+                        shape = GradientDrawable.OVAL
+                        setColor(safeColor(dotHex))
+                    }
+                })
+                chip.addView(TextView(ctx).apply {
+                    text = "${monogramOf(srv.name)} • ${srv.name}"
+                    textSize = 8.5f
+                    isSingleLine = true
+                    setTypeface(typeface, Typeface.BOLD)
+                    setTextColor(Color.WHITE)
+                })
+                if (srv.thumbnailUrl.isNotBlank()) {
+                    val miniIv = ImageView(ctx).apply {
+                        layoutParams = LinearLayout.LayoutParams(dp(ctx, 16), dp(ctx, 16)).apply { marginStart = dp(ctx, 5) }
+                        scaleType = ImageView.ScaleType.CENTER_CROP
+                    }
+                    chip.addView(miniIv)
+                    dialogScope.launch {
+                        val bmp = loadBitmapFromUrl(srv.thumbnailUrl)
+                        if (bmp != null && isContextAlive(ctx)) {
+                            miniIv.setImageBitmap(bmp)
+                        }
+                    }
+                }
+                thumbStripRow.addView(chip)
+            }
+        }
 
         val statsRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1932,7 +2160,8 @@ object MovieFoxSettingsDialog {
             val srvOn = SERVERS.count { isServerEnabled(ctx, it.key) }
             srvValTv.text = "$srvOn/${SERVERS.size}"
             extValTv.text = "${EXTRACTORS.count { isExtractorEnabled(ctx, it.key) }}/${EXTRACTORS.size}"
-            spdValTv.text = "${currentConcurrency}x • ${getPreferredQuality(ctx)}"
+            spdValTv.text = "${currentConcurrency}x • $selectedLanguage"
+            refreshBannerAndThumbnails()
         }
         refreshStats()
 
@@ -1968,7 +2197,7 @@ object MovieFoxSettingsDialog {
         val actionRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
         }
         val searchBox = EditText(ctx).apply {
             hint = "🔍 Search servers, tags..."
@@ -2006,13 +2235,99 @@ object MovieFoxSettingsDialog {
         actionRow.addView(allOffBtn)
         root.addView(actionRow)
 
+        // Language Filter Chips Synced with MovieFoxProvider
+        val langFilterRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 6) }
+        }
+        val langChips = linkedMapOf<String, TextView>()
+        val langLabels = mapOf(
+            "ALL" to "🌐 ALL LANG",
+            "HI" to "🇮🇳 HINDI",
+            "EN" to "🇺🇸 ENGLISH",
+            "SOUTH" to "🎬 SOUTH",
+            "ASIAN" to "🌏 ASIAN"
+        )
+        fun refreshLangChips() {
+            MovieFoxProvider.SUPPORTED_LANGUAGE_FILTERS.forEach { code ->
+                val tv = langChips[code] ?: return@forEach
+                val active = code.equals(selectedLanguage, true)
+                tv.setTextColor(if (active) Color.WHITE else safeColor("#94A3B8"))
+                tv.background = if (active) neonGradBtn("#0284C7", dpf(ctx, 9f))
+                else cardBg("#0F1523", "#222E46", dpf(ctx, 9f), 1)
+            }
+        }
+        MovieFoxProvider.SUPPORTED_LANGUAGE_FILTERS.forEach { code ->
+            val tv = TextView(ctx).apply {
+                text = langLabels[code] ?: code
+                textSize = 9.5f
+                setTypeface(typeface, Typeface.BOLD)
+                setPadding(dp(ctx, 10), dp(ctx, 5), dp(ctx, 10), dp(ctx, 5))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = dp(ctx, 6) }
+                attachPressAnim(this)
+                setOnClickListener {
+                    selectedLanguage = code
+                    MovieFoxProvider.setPreferredLanguage(ctx, code)
+                    if (code == "HI") {
+                        hindiOnly = true
+                        setHindiOnly(ctx, true)
+                    }
+                    refreshLangChips()
+                    applyServerFilter()
+                    safeToast(ctx, "Language filter: $code")
+                }
+            }
+            langChips[code] = tv
+            langFilterRow.addView(tv)
+        }
+        refreshLangChips()
+        val langScroll = HorizontalScrollView(ctx).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(langFilterRow)
+        }
+        root.addView(langScroll)
+
+        // Dedicated Quick Action Row to Turn OFF Non-Working / Dead Servers
+        val deadServersActionRow = LinearLayout(ctx).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+        }
+        val offDeadBtn = Button(ctx).apply {
+            text = "🛑 OFF NON-WORKING SERVERS"
+            textSize = 9.5f
+            isAllCaps = false
+            isSingleLine = true
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(safeColor("#FCA5A5"))
+            background = tintBadgeBg("#EF4444", dpf(ctx, 10f), 42, 120)
+            setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 34), 1.3f).apply { marginEnd = dp(ctx, 6) }
+            attachPressAnim(this)
+        }
+        val testAndOffDeadBtn = Button(ctx).apply {
+            text = "⚡ SCAN & OFF DEAD"
+            textSize = 9.5f
+            isAllCaps = false
+            isSingleLine = true
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            background = neonGradBtn("#D97706", dpf(ctx, 10f))
+            setPadding(dp(ctx, 10), 0, dp(ctx, 10), 0)
+            layoutParams = LinearLayout.LayoutParams(0, dp(ctx, 34), 1f)
+            attachPressAnim(this)
+        }
+        deadServersActionRow.addView(offDeadBtn)
+        deadServersActionRow.addView(testAndOffDeadBtn)
+        root.addView(deadServersActionRow)
+
         val chipRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
         }
         val categories = listOf("All", "Movies", "Series", "AsianDrama", "Hindi", "Custom")
         val chipViews = mutableListOf<TextView>()
-        lateinit var applyServerFilter: () -> Unit
 
         fun refreshCategoryChips() {
             chipViews.forEachIndexed { idx, tv ->
@@ -2047,7 +2362,7 @@ object MovieFoxSettingsDialog {
         root.addView(chipScroll)
 
         val screenH = ctx.resources.displayMetrics.heightPixels
-        val contentHeight = (screenH * 0.44f).toInt().coerceIn(dp(ctx, 300), dp(ctx, 440))
+        val contentHeight = (screenH * 0.37f).toInt().coerceIn(dp(ctx, 250), dp(ctx, 380))
 
         lateinit var serverAdapter: ServerListAdapter
         serverAdapter = ServerListAdapter(
@@ -2087,6 +2402,11 @@ object MovieFoxSettingsDialog {
             val orderMap = getServerOrder(ctx).withIndex().associate { it.value to it.index }
             val sorted = SERVERS.sortedBy { orderMap[it.key] ?: Int.MAX_VALUE }
             val filtered = sorted.filter { item ->
+                val langOk = when (selectedLanguage) {
+                    "HI" -> item.isHindi || item.isCustom
+                    "ASIAN" -> item.category.equals("AsianDrama", true) || item.isCustom
+                    else -> true
+                }
                 val catOk = when (selectedCategory) {
                     "All" -> true
                     "Hindi" -> item.isHindi
@@ -2097,12 +2417,39 @@ object MovieFoxSettingsDialog {
                     item.name.lowercase().contains(currentQuery) ||
                     item.tag.lowercase().contains(currentQuery) ||
                     item.probeUrl.lowercase().contains(currentQuery)
-                catOk && qOk
+                langOk && catOk && qOk
             }
             serverAdapter.submitList(filtered)
             refreshStats()
         }
         applyServerFilter()
+
+        offDeadBtn.setOnClickListener {
+            val turnedOff = disableDeadServers(ctx)
+            applyServerFilter()
+            refreshHealthPane()
+            if (turnedOff > 0) {
+                safeToast(ctx, "$turnedOff non-working servers turned OFF")
+            } else {
+                safeToast(ctx, "No failed/dead servers found yet — tap SCAN & OFF DEAD")
+            }
+        }
+
+        testAndOffDeadBtn.setOnClickListener {
+            testAndOffDeadBtn.text = "SCANNING..."
+            testAndOffDeadBtn.isEnabled = false
+            dialogScope.launch {
+                supervisorScope {
+                    SERVERS.map { srv -> async { probeServerLive(srv) } }.awaitAll()
+                }
+                val turnedOff = disableDeadServers(ctx)
+                testAndOffDeadBtn.text = "⚡ SCAN & OFF DEAD"
+                testAndOffDeadBtn.isEnabled = true
+                applyServerFilter()
+                refreshHealthPane()
+                safeToast(ctx, "Scan complete: $turnedOff dead servers turned OFF")
+            }
+        }
 
         allOnBtn.setOnClickListener {
             val ed = prefs(ctx).edit()
@@ -2128,7 +2475,7 @@ object MovieFoxSettingsDialog {
         val scrollView = ScrollView(ctx).apply {
             isVerticalScrollBarEnabled = false
             visibility = View.GONE
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, contentHeight + dp(ctx, 76))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, contentHeight + dp(ctx, 130))
         }
         val wrapper = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
         val extractorPane = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
@@ -2288,10 +2635,25 @@ object MovieFoxSettingsDialog {
         makeToggleCard(streamPane, "720p HD & Web", "Standard HD & WebRip", q720) { q720 = it; setQuality720Enabled(ctx, it); refreshStats() }
         makeToggleCard(streamPane, "480p & Below", "Data saver streams", q480) { q480 = it; setQuality480Enabled(ctx, it); refreshStats() }
 
-        val pSec = makeSectionLabel(ctx, "⚡ Playback & Engine", activeTheme.primaryHex)
+        val pSec = makeSectionLabel(ctx, "⚡ Playback, Language & Engine", activeTheme.primaryHex)
         themedSectionBars.add(pSec.getChildAt(0))
         streamPane.addView(pSec)
-        makeToggleCard(streamPane, "Hindi Providers Only 🇮🇳", "Hide English-only providers", hindiOnly) { hindiOnly = it; setHindiOnly(ctx, it); applyServerFilter() }
+        makeToggleCard(streamPane, "Auto-Off Dead Servers", "Automatically switch OFF servers that fail or time out", autoOffDead) {
+            autoOffDead = it
+            setAutoOffDeadServers(ctx, it)
+            if (it) {
+                disableDeadServers(ctx)
+                applyServerFilter()
+            }
+        }
+        makeToggleCard(streamPane, "Hindi Providers Only 🇮🇳", "Syncs HI language filter & hides English-only providers", hindiOnly) {
+            hindiOnly = it
+            setHindiOnly(ctx, it)
+            selectedLanguage = if (it) "HI" else "ALL"
+            MovieFoxProvider.setPreferredLanguage(ctx, selectedLanguage)
+            refreshLangChips()
+            applyServerFilter()
+        }
         makeToggleCard(streamPane, "Download Only Links", "Prefer direct MP4/MKV links", downloadOnly) { downloadOnly = it; setDownloadOnly(ctx, it) }
         makeToggleCard(streamPane, "Zero-Buffer Mode", "Prioritize fast HLS/MP4 streams first", lowBuffer) { lowBuffer = it; setLowBufferMode(ctx, it) }
         makeToggleCard(streamPane, "Shuffle Home", "Shuffle home categories", shuffleHome) { shuffleHome = it; setShuffleHomeCategories(ctx, it) }
@@ -2310,7 +2672,50 @@ object MovieFoxSettingsDialog {
         themedSectionBars.add(aSec.getChildAt(0))
         streamPane.addView(aSec)
 
-        // Theme Picker Card
+        val thumbConfigCard = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            background = glassCardBg("#131A2B", "#0D121F", safeColor("#222D45"), dpf(ctx, 15f), 2)
+            setPadding(dp(ctx, 12), dp(ctx, 10), dp(ctx, 12), dp(ctx, 10))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 7) }
+        }
+        thumbConfigCard.addView(TextView(ctx).apply {
+            text = "🖼️ Banner & Thumbnail Image URL"
+            textSize = 13f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+        })
+        val thumbUrlInput = EditText(ctx).apply {
+            hint = "https://.../banner-or-thumbnail.jpg (leave empty for dynamic)"
+            setText(bannerThumbUrl)
+            setHintTextColor(safeColor("#64748B"))
+            setTextColor(Color.WHITE)
+            textSize = 11f
+            isSingleLine = true
+            background = cardBg("#0B111E", "#263654", dpf(ctx, 10f), 1)
+            setPadding(dp(ctx, 10), dp(ctx, 6), dp(ctx, 10), dp(ctx, 6))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 36)).apply {
+                topMargin = dp(ctx, 6)
+                bottomMargin = dp(ctx, 6)
+            }
+        }
+        thumbConfigCard.addView(thumbUrlInput)
+        thumbConfigCard.addView(Button(ctx).apply {
+            text = "APPLY BANNER THUMBNAIL"
+            textSize = 10f
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.WHITE)
+            background = neonGradBtn(activeTheme.primaryHex, dpf(ctx, 10f))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 34))
+            attachPressAnim(this)
+            setOnClickListener {
+                bannerThumbUrl = thumbUrlInput.text?.toString().orEmpty().trim()
+                setCustomBannerThumbnailUrl(ctx, bannerThumbUrl)
+                refreshBannerAndThumbnails()
+                safeToast(ctx, "Banner thumbnail updated")
+            }
+        })
+        streamPane.addView(thumbConfigCard)
+
         val themeCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = glassCardBg("#131A2B", "#0D121F", safeColor("#222D45"), dpf(ctx, 15f), 2)
@@ -2365,6 +2770,7 @@ object MovieFoxSettingsDialog {
                     setSelectedTheme(ctx, pal.id)
                     applyThemeEverywhere()
                     refreshThemeSwatches()
+                    refreshBannerAndThumbnails()
                 }
             }
             themeChipMap[pal.id] = chip
@@ -2375,7 +2781,6 @@ object MovieFoxSettingsDialog {
         themeCard.addView(themeScroll)
         streamPane.addView(themeCard)
 
-        // Preferred Player Chips Card
         val playerCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = glassCardBg("#131A2B", "#0D121F", safeColor("#222D45"), dpf(ctx, 15f), 2)
@@ -2416,7 +2821,6 @@ object MovieFoxSettingsDialog {
         playerCard.addView(playerScroll)
         streamPane.addView(playerCard)
 
-        // Sflix Mirror Host Card
         val hostCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = glassCardBg("#131A2B", "#0D121F", safeColor("#222D45"), dpf(ctx, 15f), 2)
@@ -2437,7 +2841,7 @@ object MovieFoxSettingsDialog {
         hostCard.addView(rg)
         streamPane.addView(hostCard)
 
-        // ── Tab 4: Repos & Manifest (CS3 / SkyStream / Nuvio Manifest URL) ──
+        // ── Tab 4: Repos & Manifest ──────────────────────────────────────────
         val addRepoCard = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = glassCardBg("#0E1A30", "#0A1120", alphaColor("#38BDF8", 115), dpf(ctx, 16f), 2)
@@ -2684,7 +3088,7 @@ object MovieFoxSettingsDialog {
         cs3Pane.addView(addRepoCard)
         cs3Pane.addView(cs3RepoHolder)
 
-        // ── Tab 5: Health & Logs (CF Solve All + Structured Diagnostics) ─────
+        // ── Tab 5: Health & Logs ─────────────────────────────────────────────
         val cfBox = LinearLayout(ctx).apply {
             orientation = LinearLayout.VERTICAL
             background = glassCardBg("#0B1D1E", "#081216", alphaColor("#10B981", 105), dpf(ctx, 16f), 2)
@@ -2699,8 +3103,6 @@ object MovieFoxSettingsDialog {
             setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         })
-
-        lateinit var refreshHealthPane: () -> Unit
 
         cfHeader.addView(Button(ctx).apply {
             text = "⚡ Solve All"
@@ -2813,7 +3215,6 @@ object MovieFoxSettingsDialog {
             }
         })
 
-        // Live Diagnostics Metric Strip
         val metricsRow = LinearLayout(ctx).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(ctx, 8) }
@@ -2843,7 +3244,6 @@ object MovieFoxSettingsDialog {
         metricsRow.addView(mParseBox)
         metricsRow.addView(mAvgBox)
 
-        // Log Filter Chips
         val logFilterNames = listOf("ALL", "SEARCH", "LOADLINK", "PARSING", "TIMEOUT", "ERROR")
         val logFilterChips = mutableListOf<TextView>()
         val logFilterRow = LinearLayout(ctx).apply {
@@ -2895,6 +3295,7 @@ object MovieFoxSettingsDialog {
 
         refreshHealthPane = {
             refreshCfBanner()
+            refreshBannerAndThumbnails()
             val healthValues = serverHealthMap.values
             val liveCount = healthValues.count { it.isHealthy }
             val timeoutCount = diagLogs.count { it.category == "TIMEOUT" }
@@ -2931,6 +3332,9 @@ object MovieFoxSettingsDialog {
                 isEnabled = false
                 dialogScope.launch {
                     supervisorScope { SERVERS.map { srv -> async { probeServerLive(srv) } }.awaitAll() }
+                    if (isAutoOffDeadServers(ctx)) {
+                        disableDeadServers(ctx)
+                    }
                     text = "⚡ TEST ALL (${SERVERS.size})"
                     isEnabled = true
                     refreshHealthPane()
@@ -3002,6 +3406,8 @@ object MovieFoxSettingsDialog {
             if (idx == 0) {
                 serversListView.visibility = View.VISIBLE
                 actionRow.visibility = View.VISIBLE
+                langScroll.visibility = View.VISIBLE
+                deadServersActionRow.visibility = View.VISIBLE
                 chipScroll.visibility = View.VISIBLE
                 scrollView.visibility = View.GONE
                 serversListView.alpha = 0f
@@ -3010,6 +3416,8 @@ object MovieFoxSettingsDialog {
             } else {
                 serversListView.visibility = View.GONE
                 actionRow.visibility = View.GONE
+                langScroll.visibility = View.GONE
+                deadServersActionRow.visibility = View.GONE
                 chipScroll.visibility = View.GONE
                 scrollView.visibility = View.VISIBLE
                 scrollView.scrollTo(0, 0)
@@ -3033,7 +3441,6 @@ object MovieFoxSettingsDialog {
                     btn.setTextColor(safeColor("#8B98B3"))
                 }
             }
-            // Auto-scroll selected tab into view
             tabScroll.post {
                 val targetBtn = tabButtons[idx]
                 val scrollX = (targetBtn.left - tabScroll.width / 2 + targetBtn.width / 2).coerceAtLeast(0)
@@ -3048,7 +3455,6 @@ object MovieFoxSettingsDialog {
         val dialog = AlertDialog.Builder(ctx).setView(root).create()
         dialog.setOnDismissListener { runCatching { dialogScope.cancel() } }
 
-        // Subtle Footer Divider
         root.addView(View(ctx).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(ctx, 1)).apply {
                 topMargin = dp(ctx, 10)
@@ -3071,10 +3477,13 @@ object MovieFoxSettingsDialog {
             attachPressAnim(this)
             setOnClickListener {
                 prefs(ctx).edit().clear().apply()
+                MovieFoxProvider.setPreferredLanguage(ctx, "ALL")
+                selectedLanguage = "ALL"
                 cachedCs3Repos = null
                 cachedCs3Servers.clear()
                 serverHealthMap.clear()
                 clearDiagnosticLogs()
+                refreshLangChips()
                 applyServerFilter()
                 runCatching { dialog.dismiss() }
             }
@@ -3091,18 +3500,21 @@ object MovieFoxSettingsDialog {
                 saveCs3Repos(ctx, cs3RepoList)
                 setSflixHost(ctx, selectedSflixHost)
                 setSelectedTheme(ctx, activeTheme.id)
+                MovieFoxProvider.setPreferredLanguage(ctx, selectedLanguage)
                 setPreferredPlayer(ctx, selectedPlayer)
                 setQuality4kEnabled(ctx, q4k)
                 setQuality1080Enabled(ctx, q1080)
                 setQuality720Enabled(ctx, q720)
                 setQuality480Enabled(ctx, q480)
                 setLowBufferMode(ctx, lowBuffer)
+                setAutoOffDeadServers(ctx, autoOffDead)
+                setCustomBannerThumbnailUrl(ctx, thumbUrlInput.text?.toString().orEmpty().trim())
                 setConcurrency(ctx, currentConcurrency)
                 setTimeoutSeconds(ctx, currentTimeout)
                 setHindiOnly(ctx, hindiOnly)
                 setDownloadOnly(ctx, downloadOnly)
                 setShuffleHomeCategories(ctx, shuffleHome)
-                safeToast(ctx, "Settings saved & applied")
+                safeToast(ctx, "Settings saved & applied ($selectedLanguage)")
                 runCatching { dialog.dismiss() }
             }
         }
@@ -3110,7 +3522,6 @@ object MovieFoxSettingsDialog {
         footer.addView(saveApplyBtn)
         root.addView(footer)
 
-        // Master Live Theme Applier
         applyThemeEverywhere = {
             root.background = glassCardBg("#090D18", "#05070E", alphaColor(activeTheme.primaryHex, 95), dpf(ctx, 24f), 3)
             header.background = GradientDrawable(
@@ -3125,6 +3536,7 @@ object MovieFoxSettingsDialog {
             themedSwitches.forEach { it.updateAccent(activeTheme.primaryHex) }
             themedPlusBtns.forEach { it.background = neonGradBtn(activeTheme.primaryHex, dpf(ctx, 9f)) }
             themedSectionBars.forEach { it.background = pillBg(activeTheme.primaryHex, 4f) }
+            refreshLangChips()
             refreshCategoryChips()
             refreshPlayerChips()
             refreshRepoTypeChips()
@@ -3139,6 +3551,7 @@ object MovieFoxSettingsDialog {
         }
 
         applyThemeEverywhere()
+        refreshBannerAndThumbnails()
         selectTab(0)
 
         runCatching {
