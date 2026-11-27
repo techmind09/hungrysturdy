@@ -48,29 +48,32 @@ class MirrorServerExtractor(
             else -> {
                 val res = app.get(cleanUrl, referer = referer)
                 val html = res.text
+                val activePage = if (res.url.isNotBlank()) res.url else cleanUrl
                 when {
                     html.contains("FSL Server", true) || html.contains("data-minute-base-url", true) ->
-                        results.addAll(parseMCloudDocument(html, res.url.ifBlank { cleanUrl }))
+                        results.addAll(parseMCloudDocument(html, activePage))
 
                     html.contains("Vegadrop", true) || html.contains("/api/file/", true) ->
-                        results.addAll(parseVegaDriveDocument(html, res.url.ifBlank { cleanUrl }))
+                        results.addAll(parseVegaDriveDocument(html, activePage))
 
                     html.contains("/api/extract-download", true) || html.contains("sharingCode", true) ->
-                        results.addAll(parseDotflixDocument(html, res.url.ifBlank { cleanUrl }))
+                        results.addAll(parseDotflixDocument(html, activePage))
                 }
             }
         }
 
         results.distinctBy { "${it.name}|${it.url}" }.forEach { server ->
-            val resolvedUrl = resolveUrl(getOrigin(server.referer ?: cleanUrl), server.url)
+            val refUrl = server.referer ?: cleanUrl
+            val resolvedUrl = resolveUrl(getOrigin(refUrl), server.url)
+            val linkType = if (server.isDirect) ExtractorLinkType.VIDEO else INFER_TYPE
             callback.invoke(
                 newExtractorLink(
                     source = server.name,
                     name = server.name,
                     url = resolvedUrl,
-                    type = if (server.isDirect) ExtractorLinkType.VIDEO else INFER_TYPE
+                    type = linkType
                 ) {
-                    this.referer = server.referer ?: cleanUrl
+                    this.referer = refUrl
                     this.quality = Qualities.P1080.value
                 }
             )
@@ -79,7 +82,8 @@ class MirrorServerExtractor(
 
     suspend fun extractMCloudServers(url: String, referer: String? = null): List<ExtractedServer> {
         val res = app.get(url, referer = referer)
-        return parseMCloudDocument(res.text, res.url.ifBlank { url })
+        val activePage = if (res.url.isNotBlank()) res.url else url
+        return parseMCloudDocument(res.text, activePage)
     }
 
     private fun parseMCloudDocument(html: String, pageUrl: String): List<ExtractedServer> {
@@ -87,7 +91,7 @@ class MirrorServerExtractor(
         val servers = mutableListOf<ExtractedServer>()
 
         val fslEl = doc.selectFirst("#fsl[data-minute-base-url], [data-minute-base-url]")
-        val minuteBaseUrl = fslEl?.attr("data-minute-base-url")?.trim().orEmpty()
+        val minuteBaseUrl = fslEl?.attr("data-minute-base-url")?.trim() ?: ""
         if (minuteBaseUrl.isNotEmpty()) {
             val minutes = Calendar.getInstance().get(Calendar.MINUTE)
             val minuteStr = minutes.toString().padStart(2, '0')
@@ -103,7 +107,9 @@ class MirrorServerExtractor(
         }
 
         for (a in doc.select("a[href]")) {
-            val href = a.attr("abs:href").ifBlank { a.attr("href") }.replace("&amp;", "&").trim()
+            val absHref = a.attr("abs:href")
+            val rawHref = if (absHref.isNotBlank()) absHref else a.attr("href")
+            val href = rawHref.replace("&amp;", "&").trim()
             if (href.isEmpty() || href.startsWith("javascript:", true) || href.startsWith("#")) continue
 
             val label = a.text().trim()
@@ -112,16 +118,18 @@ class MirrorServerExtractor(
 
             when {
                 lowerHref.contains("pixeldrain") || lowerLabel.contains("pixelserver") -> {
-                    val normalized = href.replace("pixeldrain.dev/u/", "pixeldrain.dev/api/file/")
+                    val normalized = href
+                        .replace("pixeldrain.dev/u/", "pixeldrain.dev/api/file/")
                         .replace("pixeldrain.com/u/", "pixeldrain.com/api/file/")
                     val finalPxl = if (normalized.contains("/api/file/") && !normalized.contains("?download")) {
                         "$normalized?download"
                     } else {
                         href
                     }
+                    val pxlName = if (label.isNotBlank()) label else "PixelServer"
                     servers.add(
                         ExtractedServer(
-                            name = "mCloud - ${label.ifBlank { "PixelServer" }}",
+                            name = "mCloud - $pxlName",
                             url = finalPxl,
                             referer = pageUrl
                         )
@@ -130,9 +138,10 @@ class MirrorServerExtractor(
 
                 lowerHref.contains("hubcloud") || lowerLabel.contains("10gbps") || lowerLabel.contains("server") -> {
                     if (!lowerHref.contains("t.me") && !lowerHref.contains("telegram")) {
+                        val srvName = if (label.isNotBlank()) label else "10Gbps Server"
                         servers.add(
                             ExtractedServer(
-                                name = "mCloud - ${label.ifBlank { "10Gbps Server" }}",
+                                name = "mCloud - $srvName",
                                 url = href,
                                 referer = pageUrl
                             )
@@ -147,7 +156,7 @@ class MirrorServerExtractor(
 
     suspend fun extractVegaDriveServers(url: String, referer: String? = null): List<ExtractedServer> {
         val res = app.get(url, referer = referer)
-        val activeUrl = res.url.ifBlank { url }
+        val activeUrl = if (res.url.isNotBlank()) res.url else url
         val servers = parseVegaDriveDocument(res.text, activeUrl).toMutableList()
 
         val apiMatch = Regex("""/api/file/([A-Za-z0-9_-]+)""").find(res.text)
@@ -158,11 +167,11 @@ class MirrorServerExtractor(
                 val apiJson = app.get("$origin/api/file/$fileId", referer = activeUrl).text.trim()
                 if (apiJson.startsWith("{")) {
                     val json = JSONObject(apiJson)
-                    val directUrl = json.optString("downloadUrl")
-                        .ifBlank { json.optString("url") }
-                        .ifBlank { json.optString("link") }
-                        .replace("\\/", "/")
-                        .trim()
+                    val dlCandidate = json.optString("downloadUrl")
+                    val urlCandidate = if (dlCandidate.isNotBlank()) dlCandidate else json.optString("url")
+                    val linkCandidate = if (urlCandidate.isNotBlank()) urlCandidate else json.optString("link")
+                    val directUrl = linkCandidate.replace("\\/", "/").trim()
+
                     if (directUrl.isNotBlank() && directUrl != "null") {
                         servers.add(
                             ExtractedServer(
@@ -195,10 +204,12 @@ class MirrorServerExtractor(
         )
 
         for (a in doc.select("a[href]")) {
-            val rawHref = a.attr("abs:href").ifBlank { a.attr("href") }.replace("&amp;", "&").trim()
-            if (rawHref.isEmpty() || rawHref.startsWith("javascript:", true) || rawHref.startsWith("#")) continue
+            val absHref = a.attr("abs:href")
+            val rawHref = if (absHref.isNotBlank()) absHref else a.attr("href")
+            val cleanedHref = rawHref.replace("&amp;", "&").trim()
+            if (cleanedHref.isEmpty() || cleanedHref.startsWith("javascript:", true) || cleanedHref.startsWith("#")) continue
 
-            val href = resolveUrl(origin, rawHref)
+            val href = resolveUrl(origin, cleanedHref)
             if (href.contains("t.me") || href.contains("telegram")) continue
 
             val text = a.text().trim()
@@ -210,7 +221,7 @@ class MirrorServerExtractor(
             }
 
             if (matchedMirror != null) {
-                val niceName = text.ifBlank { matchedMirror.second }
+                val niceName = if (text.isNotBlank()) text else matchedMirror.second
                 servers.add(
                     ExtractedServer(
                         name = "VegaDrive - $niceName",
@@ -220,9 +231,10 @@ class MirrorServerExtractor(
                     )
                 )
             } else if (lowerHref.contains("/d/")) {
+                val directName = if (text.isNotBlank()) text else "Direct Link"
                 servers.add(
                     ExtractedServer(
-                        name = "VegaDrive - ${text.ifBlank { "Direct Link" }}",
+                        name = "VegaDrive - $directName",
                         url = href,
                         referer = pageUrl
                     )
@@ -235,7 +247,8 @@ class MirrorServerExtractor(
 
     suspend fun extractDotflixServers(url: String, referer: String? = null): List<ExtractedServer> {
         val res = app.get(url, referer = referer)
-        return parseDotflixDocument(res.text, res.url.ifBlank { url })
+        val activePage = if (res.url.isNotBlank()) res.url else url
+        return parseDotflixDocument(res.text, activePage)
     }
 
     private suspend fun parseDotflixDocument(html: String, pageUrl: String): List<ExtractedServer> {
@@ -243,14 +256,25 @@ class MirrorServerExtractor(
         val origin = getOrigin(pageUrl)
         val servers = mutableListOf<ExtractedServer>()
 
-        val sharingCode = Regex("""sharingCode\s*[:=]\s*["']([a-fA-F0-9]+)["']""")
+        val regexCode = Regex("""sharingCode\s*[:=]\s*["']([a-fA-F0-9]+)["']""")
             .find(html)?.groupValues?.get(1)
-            ?: doc.selectFirst("input[name=sharingCode], [data-sharing-code]")
-                ?.let { it.attr("value").ifBlank { it.attr("data-sharing-code") } }
-            ?: ""
 
-        val proof = Regex("""[?&]proof=([A-Za-z0-9_%-]+)""").find(pageUrl)?.groupValues?.get(1)
-            ?: Regex("""proof\s*[:=]\s*["']([A-Za-z0-9_%-]+)["']""").find(html)?.groupValues?.get(1)
+        val domCodeEl = doc.selectFirst("input[name=sharingCode], [data-sharing-code]")
+        val domCode = if (domCodeEl != null) {
+            val attrVal = domCodeEl.attr("value")
+            if (attrVal.isNotBlank()) attrVal else domCodeEl.attr("data-sharing-code")
+        } else {
+            ""
+        }
+
+        val sharingCode = if (!regexCode.isNullOrBlank()) regexCode else domCode
+
+        val urlProof = Regex("""[?&]proof=([A-Za-z0-9_%-]+)""").find(pageUrl)?.groupValues?.get(1)
+        val proof = if (!urlProof.isNullOrBlank()) {
+            urlProof
+        } else {
+            Regex("""proof\s*[:=]\s*["']([A-Za-z0-9_%-]+)["']""").find(html)?.groupValues?.get(1)
+        }
 
         if (sharingCode.isNotBlank()) {
             val endpoint = if (!proof.isNullOrBlank()) {
@@ -279,11 +303,10 @@ class MirrorServerExtractor(
 
                 if (apiResponse.startsWith("{")) {
                     val json = JSONObject(apiResponse)
-                    val downloadUrl = json.optString("downloadUrl")
-                        .ifBlank { json.optString("url") }
-                        .ifBlank { json.optString("link") }
-                        .replace("\\/", "/")
-                        .trim()
+                    val dlField = json.optString("downloadUrl")
+                    val urlField = if (dlField.isNotBlank()) dlField else json.optString("url")
+                    val linkField = if (urlField.isNotBlank()) urlField else json.optString("link")
+                    val downloadUrl = linkField.replace("\\/", "/").trim()
 
                     if (downloadUrl.isNotBlank() && downloadUrl != "null") {
                         servers.add(
@@ -296,12 +319,20 @@ class MirrorServerExtractor(
                         )
                     }
 
-                    val mirrorsArray = json.optJSONArray("mirrors") ?: json.optJSONArray("servers")
+                    val mirrorsArray = if (json.has("mirrors")) {
+                        json.optJSONArray("mirrors")
+                    } else {
+                        json.optJSONArray("servers")
+                    }
+
                     if (mirrorsArray != null) {
                         for (i in 0 until mirrorsArray.length()) {
                             val item = mirrorsArray.optJSONObject(i)
-                            val mUrl = item?.optString("url").orEmpty().replace("\\/", "/").trim()
-                            val mName = item?.optString("name").orEmpty().ifBlank { "Mirror ${i + 1}" }
+                            val rawMUrl = if (item != null) item.optString("url") else ""
+                            val mUrl = rawMUrl.replace("\\/", "/").trim()
+                            val rawMName = if (item != null) item.optString("name") else ""
+                            val mName = if (rawMName.isNotBlank()) rawMName else "Mirror ${i + 1}"
+
                             if (mUrl.isNotBlank() && mUrl != "null") {
                                 servers.add(
                                     ExtractedServer(
@@ -309,7 +340,7 @@ class MirrorServerExtractor(
                                         url = resolveUrl(origin, mUrl),
                                         referer = pageUrl
                                     )
-                                }
+                                )
                             }
                         }
                     }
@@ -319,7 +350,8 @@ class MirrorServerExtractor(
         }
 
         doc.select("a[href*=/share/]").firstOrNull()?.let { a ->
-            val shareHref = a.attr("abs:href").ifBlank { a.attr("href") }.trim()
+            val absShare = a.attr("abs:href")
+            val shareHref = (if (absShare.isNotBlank()) absShare else a.attr("href")).trim()
             if (shareHref.isNotBlank()) {
                 servers.add(
                     ExtractedServer(
@@ -353,3 +385,4 @@ class MirrorServerExtractor(
         }
     }
 }
+
