@@ -16,6 +16,10 @@ class Plugin : Plugin() {
         // HubCloud & GDFlix Extractors
         registerExtractorAPI(HubCloudExtractor())
         registerExtractorAPI(GDFlixExtractor())
+        registerExtractorAPI(MCloudExtractor())
+        registerExtractorAPI(VegaDriveExtractor())
+        registerExtractorAPI(DotflixExtractor())
+
 
         // LuluStream Extractors
         registerExtractorAPI(LuluVidExtractor())
