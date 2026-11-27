@@ -60,6 +60,20 @@ private suspend fun katGetLatestBaseUrl(baseUrl: String, source: String): String
     }
 }
 
+suspend fun emitSubtitle(
+    subtitleCallback: (SubtitleFile) -> Unit,
+    lang: String,
+    url: String
+) {
+    if (url.isBlank()) return
+    subtitleCallback.invoke(
+        newSubtitleFile(
+            lang = lang,
+            url = url
+        )
+    )
+}
+
 class Filemoon : Filesim() {
     override val name = "Filemoon"
     override var mainUrl = "https://filemoon.sx"
@@ -370,9 +384,6 @@ object KatServerLogic {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // mCloud Extractor (FSL Server + Minute Token, PixelServer, 10Gbps Server)
-    // -------------------------------------------------------------------------
     suspend fun extractMCloudServers(
         url: String,
         referer: String?,
@@ -391,7 +402,6 @@ object KatServerLogic {
 
             if (parseJsonResponse(respText, quality, "mCloud", callback)) return
 
-            // FSL Server with minute suffix ('1' + MM)
             val fslEl = doc.selectFirst("#fsl[data-minute-base-url], [data-minute-base-url]")
             val minuteBaseUrl = fslEl?.attr("data-minute-base-url")?.trim().orEmpty()
             if (minuteBaseUrl.isNotEmpty()) {
@@ -450,9 +460,6 @@ object KatServerLogic {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // VegaDrive Extractor (Vegadrop, Transferit, Gofile, Buzzheavier, VikingFile + API)
-    // -------------------------------------------------------------------------
     suspend fun extractVegaDriveServers(
         url: String,
         referer: String?,
@@ -472,7 +479,6 @@ object KatServerLogic {
 
             if (parseJsonResponse(respText, quality, "VegaDrive", callback)) return
 
-            // Poll /api/file/<id> if present on page
             val apiMatch = Regex("""/api/file/([A-Za-z0-9_-]+)""").find(respText)
             if (apiMatch != null) {
                 val fileId = apiMatch.groupValues[1]
@@ -551,9 +557,6 @@ object KatServerLogic {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // DOTFLIX Extractor (POST /api/extract-download + sharingCode & proof)
-    // -------------------------------------------------------------------------
     suspend fun extractDotflixServers(
         url: String,
         referer: String?,
@@ -654,7 +657,6 @@ object KatServerLogic {
                 }
             }
 
-            // Fallback share or external links if any
             doc.select("a[href]").forEach { a ->
                 val href = cleanUrl(a.attr("abs:href").ifBlank { a.attr("href") })
                 if (href.isBlank() || href.contains("t.me") || href.contains("telegram")) return@forEach
@@ -671,9 +673,6 @@ object KatServerLogic {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // HubCloud Extractor
-    // -------------------------------------------------------------------------
     suspend fun extractHubCloudServers(
         url: String,
         referer: String?,
@@ -763,9 +762,6 @@ object KatServerLogic {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // GDFlix Extractor
-    // -------------------------------------------------------------------------
     suspend fun extractGdFlixServers(
         sourceName: String = "GDFlix",
         url: String,
@@ -837,31 +833,24 @@ object KatServerLogic {
 
                 when {
                     text.contains("FSL V2", true) -> emitGdLink(resolvedLink, " [FSL V2]")
-
                     text.contains("DIRECT DL", true) -> emitGdLink(resolvedLink, " [Direct]")
-
                     text.contains("DIRECT SERVER", true) -> emitGdLink(resolvedLink, " [Direct]")
-
                     text.contains("CLOUD DOWNLOAD [R2]", true) -> emitGdLink(resolvedLink, " [Cloud]")
-
                     text.contains("GD Index", true) -> {
-                        val cfTypes = listOf(1, 2)
-                        cfTypes.amap { cfType ->
+                        listOf(1, 2).amap { cfType ->
                             try {
                                 val separator = if (resolvedLink.contains("?")) "&" else "?"
                                 app.get(resolvedLink + "${separator}type=$cfType", headers = katBrowserHeaders, interceptor = katCfKiller)
                                     .document
                                     .select("a.btn-success")
                                     .amap { btn ->
-                                        val source = btn.attr("href")
-                                        emitGdLink(source, " [CF]")
+                                        emitGdLink(btn.attr("href"), " [CF]")
                                     }
                             } catch (e: Exception) {
                                 Log.d("GD Index", e.toString())
                             }
                         }
                     }
-
                     text.contains("FAST CLOUD", true) -> {
                         try {
                             val cloudResp = app.get(resolvedLink, headers = katBrowserHeaders, referer = newUrl, interceptor = katCfKiller)
@@ -883,7 +872,6 @@ object KatServerLogic {
                             Log.d("FAST CLOUD", e.toString())
                         }
                     }
-
                     resolvedLink.contains("pixeldra", true) -> {
                         val baseUrlLink = katGetBaseUrl(resolvedLink)
                         val finalURL = if (resolvedLink.contains("download", true)) {
@@ -893,7 +881,6 @@ object KatServerLogic {
                         }
                         emitGdLink(finalURL, " [Pixeldrain]")
                     }
-
                     text.contains("Instant DL", true) -> {
                         try {
                             val instantLoc = app.get(resolvedLink, headers = katBrowserHeaders, allowRedirects = false)
@@ -921,7 +908,6 @@ object KatServerLogic {
                             Log.d("Instant DL", e.toString())
                         }
                     }
-
                     text.contains("GoFile", true) -> {
                         try {
                             app.get(resolvedLink, headers = katBrowserHeaders, interceptor = katCfKiller).document
@@ -935,7 +921,6 @@ object KatServerLogic {
                             Log.d("Gofile", e.toString())
                         }
                     }
-
                     else -> {
                         Log.d("Error", "No Server matched: $text -> $resolvedLink")
                     }
