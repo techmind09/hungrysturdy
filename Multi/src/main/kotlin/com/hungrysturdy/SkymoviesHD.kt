@@ -2,6 +2,7 @@ package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
 class SkymoviesHD : MainAPI() {
@@ -45,6 +46,10 @@ class SkymoviesHD : MainAPI() {
 
     private fun cleanTitle(title: String): String {
         return title
+            .replace(Regex("""\s*\(\d{4}\).*"""), { m ->
+                val yearPart = m.value.substringBefore(")") + ")"
+                yearPart
+            })
             .substringBefore(" 2160p")
             .substringBefore(" 1080p")
             .substringBefore(" 720p")
@@ -67,26 +72,65 @@ class SkymoviesHD : MainAPI() {
             Regex("""S\d{1,2}""", RegexOption.IGNORE_CASE).containsMatchIn(title)
     }
 
+    private fun isJunkImage(src: String): Boolean {
+        val s = src.lowercase()
+        return s.isBlank() ||
+            s.startsWith("data:image") ||
+            s.contains("icon.png") ||
+            s.contains("arw.gif") ||
+            s.contains("logo") ||
+            s.contains("favicon") ||
+            s.contains("snvhost") ||
+            s.contains("banner") ||
+            s.contains("ad") && (s.contains("adangle") || s.contains("vitalickitten") || s.contains("doubleclick"))
+    }
+
     private fun Element.getPoster(): String? {
         val img = selectFirst("img") ?: return null
-
         val image = listOf(
             img.attr("data-src"),
             img.attr("data-original"),
             img.attr("data-lazy-src"),
             img.attr("src")
-        ).firstOrNull {
-            it.isNotBlank() &&
-                !it.contains("icon.png", true) &&
-                !it.contains("arw.gif", true) &&
-                !it.startsWith("data:image")
-        }
-
+        ).firstOrNull { !isJunkImage(it) }
         return image?.let { fixUrl(it) }
     }
 
+    private fun extractDetailPoster(document: Document): String? {
+        val candidates = document.select("img").mapNotNull { img ->
+            val src = listOf(
+                img.attr("data-src"),
+                img.attr("data-original"),
+                img.attr("data-lazy-src"),
+                img.attr("src")
+            ).firstOrNull { !isJunkImage(it) }
+            src?.let { fixUrl(it) }
+        }
+
+        // Prefer known movie poster hosts first, then any remaining valid image
+        return candidates.firstOrNull { u ->
+            u.contains("tmdb", true) ||
+                u.contains("imdb", true) ||
+                u.contains("amazon", true) ||
+                u.contains("blogger", true) ||
+                u.contains("googleusercontent", true) ||
+                u.contains("bmscdn", true) ||
+                u.contains("catimages", true) ||
+                u.contains("postimg", true) ||
+                u.contains("imgbb", true)
+        } ?: candidates.firstOrNull()
+    }
+
+    private suspend fun fetchPosterFromDetail(movieUrl: String): String? {
+        return try {
+            val doc = app.get(movieUrl, timeout = 10).document
+            extractDetailPoster(doc)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun Element.toSearchResult(): SearchResponse? {
-        // Strict selector: only match actual movie/series links, ignoring "BookMark" and "category/" links
         val anchor = selectFirst("a[href*='/movie/'], a[href^='movie/']") ?: return null
         val rawHref = anchor.attr("href").trim()
 
@@ -133,25 +177,38 @@ class SkymoviesHD : MainAPI() {
         }
 
         val document = app.get(url).document
-        val home = ArrayList<SearchResponse>()
+        val rawList = ArrayList<SearchResponse>()
 
-        // Check all item containers used across homepage and category pages
         document.select("div.Let, div.Fmvideo, div.Bolly").forEach { element ->
-            element.toSearchResult()?.let { home.add(it) }
+            element.toSearchResult()?.let { rawList.add(it) }
         }
 
-        // Fallback if a category page renders direct <a> tags outside those divs
-        if (home.isEmpty()) {
+        if (rawList.isEmpty()) {
             document.select("a[href*='/movie/'], a[href^='movie/']").forEach { a ->
-                a.parent()?.toSearchResult()?.let { home.add(it) }
+                a.parent()?.toSearchResult()?.let { rawList.add(it) }
             }
         }
 
-        val uniqueResults = home.distinctBy { it.url }
+        // Remove duplicate quality cards for the same title
+        val uniqueResults = rawList.distinctBy { it.name.lowercase() }
+
+        // Fetch posters for items missing a poster (like category pages)
+        val withPosters = uniqueResults.amap { item ->
+            if (item.posterUrl == null) {
+                val poster = fetchPosterFromDetail(item.url)
+                when (item) {
+                    is MovieSearchResponse -> item.copy(posterUrl = poster)
+                    is TvSeriesSearchResponse -> item.copy(posterUrl = poster)
+                    else -> item
+                }
+            } else {
+                item
+            }
+        }
 
         return newHomePageResponse(
             request.name,
-            uniqueResults
+            withPosters
         )
     }
 
@@ -160,9 +217,22 @@ class SkymoviesHD : MainAPI() {
         val searchUrl = "$mainUrl/search.php?search=$encodedQuery&cat=All"
         val document = app.get(searchUrl).document
 
-        return document.select("div.Fmvideo, div.Let, div.Bolly")
+        val uniqueResults = document.select("div.Fmvideo, div.Let, div.Bolly")
             .mapNotNull { it.toSearchResult() }
-            .distinctBy { it.url }
+            .distinctBy { it.name.lowercase() }
+
+        return uniqueResults.amap { item ->
+            if (item.posterUrl == null) {
+                val poster = fetchPosterFromDetail(item.url)
+                when (item) {
+                    is MovieSearchResponse -> item.copy(posterUrl = poster)
+                    is TvSeriesSearchResponse -> item.copy(posterUrl = poster)
+                    else -> item
+                }
+            } else {
+                item
+            }
+        }
     }
 
     override suspend fun load(url: String): LoadResponse? {
@@ -182,36 +252,19 @@ class SkymoviesHD : MainAPI() {
             ?.getOrNull(1)
             ?.toIntOrNull()
 
-        val poster = document.select("img")
-            .mapNotNull { img ->
-                val src = listOf(
-                    img.attr("data-src"),
-                    img.attr("data-original"),
-                    img.attr("src")
-                ).firstOrNull {
-                    it.isNotBlank() &&
-                        !it.startsWith("data:image") &&
-                        (
-                            it.contains("tmdb", true) ||
-                            it.contains("amazon", true) ||
-                            it.contains("blogger", true) ||
-                            it.contains("bmscdn", true)
-                        )
-                }
-                src?.let { fixUrl(it) }
-            }
-            .firstOrNull()
+        val poster = extractDetailPoster(document)
 
+        // Ignore category list / navigation / copyright blocks in plot
         val plot = document.select("div.Let, div.Fmvideo, .description, .story, p")
+            .filter { el -> el.select("select, option, form").isEmpty() }
             .map { it.text().trim() }
-            .firstOrNull {
-                it.length > 100 &&
-                    !it.contains("BookMark", true) &&
-                    (
-                        it.contains("Story", true) ||
-                        it.contains("Plot", true) ||
-                        it.length > 150
-                    )
+            .firstOrNull { text ->
+                text.length > 60 &&
+                    !text.contains("BookMark", true) &&
+                    !text.contains("Bollywood Movies South Indian", true) &&
+                    !text.contains("WWE TV Shows TV Serial", true) &&
+                    !text.contains("Pc HD 1080p 720p 480p Movies Download", true) &&
+                    !text.contains("All Rights Reserved", true)
             }
 
         val linkElements = document.select("a[href]").filter { a ->
@@ -336,7 +389,6 @@ class SkymoviesHD : MainAPI() {
         val generatedUrl = doc1.selectFirst("a#download")?.attr("href") ?: return
         val doc2 = app.get(generatedUrl, referer = hubCloudUrl).document
 
-        // 1. Direct Cloudflare R2 Storage link (FSL Server)
         doc2.selectFirst("a#fsl")?.attr("href")?.let { fslLink ->
             if (fslLink.isNotBlank()) {
                 callback.invoke(
@@ -353,7 +405,6 @@ class SkymoviesHD : MainAPI() {
             }
         }
 
-        // 2. Pixeldrain Server (/u/{id} -> /api/file/{id})
         doc2.selectFirst("a#pxl-1, a[href*='pixeldrain']")?.attr("href")?.let { pxlUrl ->
             val fileId = pxlUrl.substringAfterLast("/").substringBefore("?")
             if (fileId.isNotBlank()) {
@@ -371,7 +422,6 @@ class SkymoviesHD : MainAPI() {
             }
         }
 
-        // 3. 10Gbps Server & Buzz Server
         doc2.select("a[href*='pixel.hubcloud'], a[href*='fuckingfast']").forEach { a ->
             val serverUrl = a.attr("href")
             if (serverUrl.isNotBlank()) {
