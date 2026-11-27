@@ -6,12 +6,9 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.extractors.Filesim
 import com.lagradost.cloudstream3.network.CloudflareKiller
 import com.lagradost.cloudstream3.utils.*
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
-import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.net.URI
 import java.net.URLDecoder
-import java.util.Calendar
 
 private val katCfKiller by lazy { CloudflareKiller() }
 
@@ -60,20 +57,6 @@ private suspend fun katGetLatestBaseUrl(baseUrl: String, source: String): String
     }
 }
 
-suspend fun emitSubtitle(
-    subtitleCallback: (SubtitleFile) -> Unit,
-    lang: String,
-    url: String
-) {
-    if (url.isBlank()) return
-    subtitleCallback.invoke(
-        newSubtitleFile(
-            lang = lang,
-            url = url
-        )
-    )
-}
-
 class Filemoon : Filesim() {
     override val name = "Filemoon"
     override var mainUrl = "https://filemoon.sx"
@@ -107,7 +90,7 @@ open class KatFastDlServer : ExtractorApi() {
 }
 
 // =========================================================================
-// 1. HubCloud & mCloud Extractors & Mirrors
+// 1. HubCloud Extractors & Mirrors
 // =========================================================================
 open class KatHubCloudExtractor : ExtractorApi() {
     override val name = "HubCloud"
@@ -120,7 +103,7 @@ open class KatHubCloudExtractor : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        KatServerLogic.extractHubCloudServers(url, referer, subtitleCallback, callback)
+        KatServerLogic.extractHubCloudServers(url, referer, callback)
     }
 }
 
@@ -139,21 +122,6 @@ class HubCloudOne : KatHubCloudExtractor() {
 class GamerXYTExtractor : KatHubCloudExtractor() {
     override val name = "GamerXYT"
     override val mainUrl = "https://gamerxyt.com"
-}
-
-class KatMCloudExtractor : ExtractorApi() {
-    override val name = "mCloud"
-    override val mainUrl = "https://mcloud.best"
-    override val requiresReferer = false
-
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        KatServerLogic.extractMCloudServers(url, referer, subtitleCallback, callback)
-    }
 }
 
 // =========================================================================
@@ -211,40 +179,7 @@ class GDFlixNew10 : KatGDFlixExtractor() {
 }
 
 // =========================================================================
-// 3. VegaDrive & DOTFLIX Extractors
-// =========================================================================
-class KatVegaDriveExtractor : ExtractorApi() {
-    override val name = "VegaDrive"
-    override val mainUrl = "https://one.vegadrive.me"
-    override val requiresReferer = false
-
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        KatServerLogic.extractVegaDriveServers(url, referer, subtitleCallback, callback)
-    }
-}
-
-class KatDotflixExtractor : ExtractorApi() {
-    override val name = "DOTFLIX"
-    override val mainUrl = "https://dt.dotflix.website"
-    override val requiresReferer = false
-
-    override suspend fun getUrl(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        KatServerLogic.extractDotflixServers(url, referer, subtitleCallback, callback)
-    }
-}
-
-// =========================================================================
-// 4. Standalone Extractors
+// 3. Standalone Extractors
 // =========================================================================
 class KatPixelDrainExtractor : ExtractorApi() {
     override val name = "PixelServer"
@@ -322,24 +257,14 @@ object KatServerLogic {
         return cleaned
     }
 
-    private fun detectQualityFromText(vararg texts: String?): Int {
-        val combined = texts.filterNotNull().joinToString(" ")
-        val indexQuality = katGetIndexQuality(combined)
-        if (indexQuality != Qualities.Unknown.value) return indexQuality
-        return Regex("""(\d{3,4}p)""", RegexOption.IGNORE_CASE)
-            .find(combined)?.groupValues?.get(1)?.let { getQualityFromName(it) }
-            ?: Qualities.Unknown.value
-    }
-
     private suspend fun parseJsonResponse(
         respText: String,
         quality: Int,
-        sourceTag: String = "GDFlix",
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         if (!respText.startsWith("{") && !respText.startsWith("[")) return false
         try {
-            val uFieldMatch = Regex(""""(?:u|url|downloadUrl|download_url|link)"\s*:\s*"(https?://[^"]+)"""").find(respText)
+            val uFieldMatch = Regex(""""(?:u|url|download_url|link)"\s*:\s*"(https?://[^"]+)"""").find(respText)
             if (uFieldMatch != null) {
                 val foundUrl = cleanUrl(uFieldMatch.groupValues[1])
                 when {
@@ -348,7 +273,7 @@ object KatServerLogic {
                     foundUrl.contains("fuckingfast.net") -> extractFuckingFast(foundUrl, quality, callback)
                     else -> {
                         callback.invoke(
-                            newExtractorLink(sourceTag, "$sourceTag [JSON Direct]", foundUrl, ExtractorLinkType.VIDEO) {
+                            newExtractorLink("GDFlix", "GDFlix [JSON Direct]", foundUrl, ExtractorLinkType.VIDEO) {
                                 this.referer = ""
                                 this.quality = quality
                             }
@@ -368,7 +293,7 @@ object KatServerLogic {
                         foundUrl.contains("fuckingfast") -> { extractFuckingFast(foundUrl, quality, callback); extracted = true }
                         else -> {
                             callback.invoke(
-                                newExtractorLink(sourceTag, "$sourceTag [Task Direct]", foundUrl, ExtractorLinkType.VIDEO) {
+                                newExtractorLink("GDFlix", "GDFlix [Task Direct]", foundUrl, ExtractorLinkType.VIDEO) {
                                     this.referer = ""
                                     this.quality = quality
                                 }
@@ -384,306 +309,16 @@ object KatServerLogic {
         }
     }
 
-    suspend fun extractMCloudServers(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        try {
-            val cleanedInputUrl = cleanUrl(url)
-            val response = app.get(cleanedInputUrl, headers = katBrowserHeaders, referer = referer, interceptor = katCfKiller)
-            val respText = response.text.trim()
-            val doc = response.document
-            val currentUrl = response.url.ifEmpty { cleanedInputUrl }
-            val emitted = mutableSetOf<String>()
-
-            val quality = detectQualityFromText(doc.title(), doc.select("h1, h2, h3, h4, h5, h6").text(), referer)
-
-            if (parseJsonResponse(respText, quality, "mCloud", callback)) return
-
-            val fslEl = doc.selectFirst("#fsl[data-minute-base-url], [data-minute-base-url]")
-            val minuteBaseUrl = fslEl?.attr("data-minute-base-url")?.trim().orEmpty()
-            if (minuteBaseUrl.isNotEmpty()) {
-                val minutes = Calendar.getInstance().get(Calendar.MINUTE)
-                val minuteStr = minutes.toString().padStart(2, '0')
-                val fslFinalUrl = cleanUrl(minuteBaseUrl + "1" + minuteStr)
-                if (fslFinalUrl.startsWith("http") && emitted.add(fslFinalUrl)) {
-                    callback.invoke(
-                        newExtractorLink("mCloud", "mCloud [FSL Server]", fslFinalUrl, ExtractorLinkType.VIDEO) {
-                            this.referer = ""
-                            this.quality = quality
-                        }
-                    )
-                }
-            }
-
-            doc.select("a[href]").forEach { a ->
-                val href = cleanUrl(a.attr("abs:href").ifBlank { a.attr("href") })
-                if (href.isBlank() || !href.startsWith("http") || href.contains("t.me") || href.contains("telegram")) return@forEach
-
-                val label = a.text().trim()
-                val lowerHref = href.lowercase()
-                val lowerLabel = label.lowercase()
-
-                when {
-                    lowerHref.contains("pixeldrain") || lowerLabel.contains("pixelserver") -> {
-                        if (emitted.add(href)) extractPixelDrain(href, quality, callback)
-                    }
-
-                    lowerHref.contains("fuckingfast") || lowerLabel.contains("buzz") -> {
-                        if (emitted.add(href)) extractFuckingFast(href, quality, callback)
-                    }
-
-                    lowerHref.contains("hbplay.pages.dev") -> {
-                        if (emitted.add(href)) extractHbPlay(href, quality, callback)
-                    }
-
-                    lowerHref.contains("hubcloud") || lowerLabel.contains("10gbps") || lowerLabel.contains("server") -> {
-                        if (emitted.add(href)) {
-                            callback.invoke(
-                                newExtractorLink("mCloud", "mCloud [${label.ifBlank { "10Gbps Server" }}]", href, ExtractorLinkType.VIDEO) {
-                                    this.referer = currentUrl
-                                    this.quality = quality
-                                }
-                            )
-                        }
-                    }
-
-                    lowerHref.contains("gofile") -> {
-                        if (emitted.add(href)) loadExtractor(href, currentUrl, subtitleCallback, callback)
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.d("mCloud", e.toString())
-        }
-    }
-
-    suspend fun extractVegaDriveServers(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        try {
-            val cleanedInputUrl = cleanUrl(url)
-            val response = app.get(cleanedInputUrl, headers = katBrowserHeaders, referer = referer, interceptor = katCfKiller)
-            val respText = response.text.trim()
-            val doc = response.document
-            val currentUrl = response.url.ifEmpty { cleanedInputUrl }
-            val origin = katGetBaseUrl(currentUrl)
-            val emitted = mutableSetOf<String>()
-
-            val quality = detectQualityFromText(doc.title(), doc.select("h1, h2, h3, h4, h5, h6").text(), referer)
-
-            if (parseJsonResponse(respText, quality, "VegaDrive", callback)) return
-
-            val apiMatch = Regex("""/api/file/([A-Za-z0-9_-]+)""").find(respText)
-            if (apiMatch != null) {
-                val fileId = apiMatch.groupValues[1]
-                try {
-                    val apiJson = app.get("$origin/api/file/$fileId", headers = katBrowserHeaders, referer = currentUrl, interceptor = katCfKiller).text.trim()
-                    if (!parseJsonResponse(apiJson, quality, "VegaDrive", callback) && apiJson.startsWith("{")) {
-                        val json = JSONObject(apiJson)
-                        val directUrl = cleanUrl(
-                            json.optString("downloadUrl")
-                                .ifBlank { json.optString("url") }
-                                .ifBlank { json.optString("link") }
-                        )
-                        if (directUrl.isNotBlank() && directUrl != "null" && emitted.add(directUrl)) {
-                            val resolved = if (directUrl.startsWith("http")) directUrl else "$origin${if (directUrl.startsWith("/")) "" else "/"}$directUrl"
-                            callback.invoke(
-                                newExtractorLink("VegaDrive", "VegaDrive [API Direct]", resolved, ExtractorLinkType.VIDEO) {
-                                    this.referer = currentUrl
-                                    this.quality = quality
-                                }
-                            )
-                        }
-                    }
-                } catch (_: Exception) {}
-            }
-
-            val mirrorLabels = listOf(
-                "skydrop" to "Vegadrop 10Gbps Direct",
-                "transferit" to "Transferit",
-                "gofile" to "Gofile",
-                "buzzheavier" to "Buzzheavier",
-                "vikingfile" to "VikingFile"
-            )
-
-            doc.select("a[href]").forEach { a ->
-                val rawHref = a.attr("abs:href").ifBlank { a.attr("href") }
-                val href = cleanUrl(rawHref)
-                if (href.isBlank() || href.startsWith("javascript:", true) || href.startsWith("#")) return@forEach
-
-                val resolvedHref = if (href.startsWith("http")) {
-                    href
-                } else {
-                    "$origin${if (href.startsWith("/")) "" else "/"}$href"
-                }
-
-                if (resolvedHref.contains("t.me") || resolvedHref.contains("telegram")) return@forEach
-
-                val text = a.text().trim()
-                val lowerHref = resolvedHref.lowercase()
-                val lowerText = text.lowercase()
-
-                val matchedMirror = mirrorLabels.firstOrNull { (key, _) ->
-                    lowerHref.contains("/$key") || lowerHref.contains(key) || lowerText.contains(key)
-                }
-
-                if (matchedMirror != null && emitted.add(resolvedHref)) {
-                    val serverTitle = text.ifBlank { matchedMirror.second }
-                    when {
-                        matchedMirror.first == "gofile" || lowerHref.contains("gofile.io") -> {
-                            loadExtractor(resolvedHref, currentUrl, subtitleCallback, callback)
-                        }
-                        lowerHref.contains("pixeldrain") -> extractPixelDrain(resolvedHref, quality, callback)
-                        lowerHref.contains("fuckingfast") -> extractFuckingFast(resolvedHref, quality, callback)
-                        else -> {
-                            callback.invoke(
-                                newExtractorLink("VegaDrive", "VegaDrive [$serverTitle]", resolvedHref, ExtractorLinkType.VIDEO) {
-                                    this.referer = currentUrl
-                                    this.quality = quality
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.d("VegaDrive", e.toString())
-        }
-    }
-
-    suspend fun extractDotflixServers(
-        url: String,
-        referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (ExtractorLink) -> Unit
-    ) {
-        try {
-            val cleanedInputUrl = cleanUrl(url)
-            val response = app.get(cleanedInputUrl, headers = katBrowserHeaders, referer = referer, interceptor = katCfKiller)
-            val respText = response.text.trim()
-            val doc = response.document
-            val currentUrl = response.url.ifEmpty { cleanedInputUrl }
-            val origin = katGetBaseUrl(currentUrl)
-            val emitted = mutableSetOf<String>()
-
-            val quality = detectQualityFromText(doc.title(), doc.select("h1, h2, h3, h4, h5, h6").text(), referer)
-
-            if (parseJsonResponse(respText, quality, "DOTFLIX", callback)) return
-
-            val sharingCode = Regex("""sharingCode\s*[:=]\s*["']([a-fA-F0-9]+)["']""")
-                .find(respText)?.groupValues?.get(1)
-                ?: doc.selectFirst("input[name=sharingCode], [data-sharing-code]")
-                    ?.let { it.attr("value").ifBlank { it.attr("data-sharing-code") } }
-                ?: ""
-
-            val proof = Regex("""[?&]proof=([A-Za-z0-9_%-]+)""").find(currentUrl)?.groupValues?.get(1)
-                ?: Regex("""proof\s*[:=]\s*["']([A-Za-z0-9_%-]+)["']""").find(respText)?.groupValues?.get(1)
-
-            if (sharingCode.isNotBlank()) {
-                val endpoint = if (!proof.isNullOrBlank()) {
-                    "$origin/api/extract-download?proof=$proof"
-                } else {
-                    "$origin/api/extract-download"
-                }
-
-                val jsonPayload = JSONObject().apply {
-                    put("sharingCode", sharingCode)
-                }.toString()
-
-                val requestBody = jsonPayload.toRequestBody("application/json; charset=utf-8".toMediaTypeOrNull())
-
-                val apiHeaders = katBrowserHeaders + mapOf(
-                    "Content-Type" to "application/json",
-                    "Accept" to "application/json, text/plain, */*",
-                    "Origin" to origin
-                )
-
-                val apiResp = app.post(
-                    url = endpoint,
-                    headers = apiHeaders,
-                    referer = currentUrl,
-                    requestBody = requestBody,
-                    interceptor = katCfKiller
-                )
-                val apiText = apiResp.text.trim()
-
-                if (!parseJsonResponse(apiText, quality, "DOTFLIX", callback) && apiText.startsWith("{")) {
-                    val obj = JSONObject(apiText)
-                    val directUrl = cleanUrl(
-                        obj.optString("downloadUrl")
-                            .ifBlank { obj.optString("url") }
-                            .ifBlank { obj.optString("link") }
-                    )
-                    if (directUrl.isNotBlank() && directUrl != "null" && emitted.add(directUrl)) {
-                        val resolved = if (directUrl.startsWith("http")) directUrl else "$origin${if (directUrl.startsWith("/")) "" else "/"}$directUrl"
-                        when {
-                            resolved.contains("pixeldrain") -> extractPixelDrain(resolved, quality, callback)
-                            resolved.contains("fuckingfast") -> extractFuckingFast(resolved, quality, callback)
-                            resolved.contains("gofile") -> loadExtractor(resolved, currentUrl, subtitleCallback, callback)
-                            else -> {
-                                callback.invoke(
-                                    newExtractorLink("DOTFLIX", "DOTFLIX [Direct]", resolved, ExtractorLinkType.VIDEO) {
-                                        this.referer = currentUrl
-                                        this.quality = quality
-                                    }
-                                )
-                            }
-                        }
-                    }
-
-                    val mirrorsArray = obj.optJSONArray("mirrors") ?: obj.optJSONArray("servers")
-                    if (mirrorsArray != null) {
-                        for (i in 0 until mirrorsArray.length()) {
-                            val item = mirrorsArray.optJSONObject(i)
-                            val rawMirrorUrl = cleanUrl(item?.optString("url").orEmpty())
-                            if (rawMirrorUrl.isNotBlank() && rawMirrorUrl != "null" && emitted.add(rawMirrorUrl)) {
-                                val resolvedMirror = if (rawMirrorUrl.startsWith("http")) rawMirrorUrl else "$origin${if (rawMirrorUrl.startsWith("/")) "" else "/"}$rawMirrorUrl"
-                                val mirrorName = item?.optString("name").orEmpty().ifBlank { "Mirror ${i + 1}" }
-                                callback.invoke(
-                                    newExtractorLink("DOTFLIX", "DOTFLIX [$mirrorName]", resolvedMirror, ExtractorLinkType.VIDEO) {
-                                        this.referer = currentUrl
-                                        this.quality = quality
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            doc.select("a[href]").forEach { a ->
-                val href = cleanUrl(a.attr("abs:href").ifBlank { a.attr("href") })
-                if (href.isBlank() || href.contains("t.me") || href.contains("telegram")) return@forEach
-                if ((href.contains("pixeldrain") || href.contains("fuckingfast") || href.contains("gofile")) && emitted.add(href)) {
-                    when {
-                        href.contains("pixeldrain") -> extractPixelDrain(href, quality, callback)
-                        href.contains("fuckingfast") -> extractFuckingFast(href, quality, callback)
-                        href.contains("gofile") -> loadExtractor(href, currentUrl, subtitleCallback, callback)
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.d("DOTFLIX", e.toString())
-        }
-    }
-
     suspend fun extractHubCloudServers(
         url: String,
         referer: String?,
-        subtitleCallback: (SubtitleFile) -> Unit = {},
         callback: (ExtractorLink) -> Unit
     ) {
         try {
             val cleanedInputUrl = cleanUrl(url)
             val response = app.get(cleanedInputUrl, headers = katBrowserHeaders, referer = referer, interceptor = katCfKiller)
             val respText = response.text.trim()
-            if (parseJsonResponse(respText, Qualities.Unknown.value, "HubCloud", callback)) return
+            if (parseJsonResponse(respText, Qualities.Unknown.value, callback)) return
 
             val doc = response.document
             val currentUrl = response.url.ifEmpty { cleanedInputUrl }
@@ -703,7 +338,7 @@ object KatServerLogic {
             val gamerDoc = if (!gamerLinkRaw.isNullOrBlank()) {
                 val finalGamerUrl = cleanUrl(gamerLinkRaw)
                 val gResp = app.get(finalGamerUrl, headers = katBrowserHeaders, referer = currentUrl, interceptor = katCfKiller)
-                if (parseJsonResponse(gResp.text.trim(), detectedQuality, "HubCloud", callback)) return
+                if (parseJsonResponse(gResp.text.trim(), detectedQuality, callback)) return
                 gResp.document
             } else {
                 doc
@@ -750,13 +385,6 @@ object KatServerLogic {
                     extractFuckingFast(buzzUrl, detectedQuality, callback)
                 }
             }
-
-            gamerDoc.select("a[href*='gofile.io']").forEach { a ->
-                val goUrl = cleanUrl(a.attr("href"))
-                if (goUrl.startsWith("http")) {
-                    loadExtractor(goUrl, gamerRef, subtitleCallback, callback)
-                }
-            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -781,7 +409,7 @@ object KatServerLogic {
 
             val resp = app.get(newUrl, headers = katBrowserHeaders, referer = referer, interceptor = katCfKiller)
             val respText = resp.text.trim()
-            if (parseJsonResponse(respText, Qualities.Unknown.value, sourceName, callback)) return
+            if (parseJsonResponse(respText, Qualities.Unknown.value, callback)) return
 
             val document = resp.document
             val activeOrigin = katGetBaseUrl(resp.url.ifEmpty { newUrl })
@@ -833,29 +461,36 @@ object KatServerLogic {
 
                 when {
                     text.contains("FSL V2", true) -> emitGdLink(resolvedLink, " [FSL V2]")
+
                     text.contains("DIRECT DL", true) -> emitGdLink(resolvedLink, " [Direct]")
+
                     text.contains("DIRECT SERVER", true) -> emitGdLink(resolvedLink, " [Direct]")
+
                     text.contains("CLOUD DOWNLOAD [R2]", true) -> emitGdLink(resolvedLink, " [Cloud]")
+
                     text.contains("GD Index", true) -> {
-                        listOf(1, 2).amap { cfType ->
+                        val cfTypes = listOf(1, 2)
+                        cfTypes.amap { cfType ->
                             try {
                                 val separator = if (resolvedLink.contains("?")) "&" else "?"
                                 app.get(resolvedLink + "${separator}type=$cfType", headers = katBrowserHeaders, interceptor = katCfKiller)
                                     .document
                                     .select("a.btn-success")
                                     .amap { btn ->
-                                        emitGdLink(btn.attr("href"), " [CF]")
+                                        val source = btn.attr("href")
+                                        emitGdLink(source, " [CF]")
                                     }
                             } catch (e: Exception) {
                                 Log.d("GD Index", e.toString())
                             }
                         }
                     }
+
                     text.contains("FAST CLOUD", true) -> {
                         try {
                             val cloudResp = app.get(resolvedLink, headers = katBrowserHeaders, referer = newUrl, interceptor = katCfKiller)
                             val cloudRespText = cloudResp.text.trim()
-                            if (parseJsonResponse(cloudRespText, detectedQuality, sourceName, callback)) {
+                            if (parseJsonResponse(cloudRespText, detectedQuality, callback)) {
                                 return@amap
                             }
                             if (cloudRespText.contains("In Queue") || cloudRespText.contains("queue") || cloudRespText.contains("false")) {
@@ -872,6 +507,7 @@ object KatServerLogic {
                             Log.d("FAST CLOUD", e.toString())
                         }
                     }
+
                     resolvedLink.contains("pixeldra", true) -> {
                         val baseUrlLink = katGetBaseUrl(resolvedLink)
                         val finalURL = if (resolvedLink.contains("download", true)) {
@@ -881,6 +517,7 @@ object KatServerLogic {
                         }
                         emitGdLink(finalURL, " [Pixeldrain]")
                     }
+
                     text.contains("Instant DL", true) -> {
                         try {
                             val instantLoc = app.get(resolvedLink, headers = katBrowserHeaders, allowRedirects = false)
@@ -908,6 +545,7 @@ object KatServerLogic {
                             Log.d("Instant DL", e.toString())
                         }
                     }
+
                     text.contains("GoFile", true) -> {
                         try {
                             app.get(resolvedLink, headers = katBrowserHeaders, interceptor = katCfKiller).document
@@ -921,6 +559,7 @@ object KatServerLogic {
                             Log.d("Gofile", e.toString())
                         }
                     }
+
                     else -> {
                         Log.d("Error", "No Server matched: $text -> $resolvedLink")
                     }
@@ -940,7 +579,7 @@ object KatServerLogic {
         try {
             val resp = app.get(instantUrl, headers = katBrowserHeaders, referer = refererUrl, interceptor = katCfKiller)
             val respText = resp.text.trim()
-            if (parseJsonResponse(respText, quality, "GDFlix", callback)) return
+            if (parseJsonResponse(respText, quality, callback)) return
 
             val finalPageUrl = cleanUrl(resp.url.ifEmpty { instantUrl })
             if (finalPageUrl.contains("googleusercontent.com") || finalPageUrl.contains("r2.cloudflarestorage.com") || finalPageUrl.contains("workers.dev")) {
@@ -983,7 +622,7 @@ object KatServerLogic {
             var resp = app.get(cloudUrl, headers = katBrowserHeaders, referer = refererUrl, interceptor = katCfKiller)
             var respText = resp.text.trim()
 
-            if (parseJsonResponse(respText, quality, "GDFlix", callback)) return
+            if (parseJsonResponse(respText, quality, callback)) return
 
             if (respText.contains("In Queue") || respText.contains("queue") || respText.contains("false") || respText.contains("challenge-platform")) {
                 repeat(5) {
@@ -991,7 +630,7 @@ object KatServerLogic {
                     try {
                         resp = app.get(cloudUrl, headers = katBrowserHeaders, referer = refererUrl, interceptor = katCfKiller)
                         respText = resp.text.trim()
-                        if (parseJsonResponse(respText, quality, "GDFlix", callback)) return
+                        if (parseJsonResponse(respText, quality, callback)) return
                     } catch (_: Exception) {}
                 }
             }
@@ -1108,4 +747,3 @@ object KatServerLogic {
         } catch (_: Exception) {}
     }
 }
-
