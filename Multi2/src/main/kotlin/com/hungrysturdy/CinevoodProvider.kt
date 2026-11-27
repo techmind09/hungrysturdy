@@ -1,10 +1,13 @@
 package com.hungrysturdy
 
+import android.util.Base64
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.LoadResponse.Companion.addActors
 import com.lagradost.cloudstream3.LoadResponse.Companion.addScore
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTrailer
 import com.lagradost.cloudstream3.utils.*
+import org.jsoup.Jsoup
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
 class CinevoodProvider : MainAPI() {
@@ -97,6 +100,93 @@ class CinevoodProvider : MainAPI() {
         }
     }
 
+    private fun isIgnoredLink(href: String): Boolean {
+        val lower = href.lowercase()
+        return href.isBlank() ||
+            !href.startsWith("http") ||
+            lower.contains("whatsapp.com") ||
+            lower.contains("t.me/") ||
+            lower.contains("telegram") ||
+            lower.contains("imdb.com") ||
+            lower.contains("instagram.com") ||
+            lower.contains("youtube.com") ||
+            lower.contains("youtu.be") ||
+            lower.contains("#")
+    }
+
+    private fun decodeEncodedEpisodeHtml(rawHtml: String): String {
+        val match = Regex("""const\s+encoded\s*=\s*["']([A-Za-z0-9+/=\s]+)["']""").find(rawHtml)
+        if (match != null) {
+            try {
+                val cleanB64 = match.groupValues[1].replace(Regex("""\s+"""), "")
+                val decoded = String(Base64.decode(cleanB64, Base64.DEFAULT), Charsets.UTF_8)
+                if (decoded.contains("<a") || decoded.contains("href")) {
+                    return "$rawHtml\n$decoded"
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return rawHtml
+    }
+
+    private fun extractEpisodesFromDocument(
+        doc: Document,
+        defaultSeason: Int,
+        qualityHint: String
+    ): List<Triple<Int, String, List<Pair<String, String>>>> {
+        // Returns list of Triple(episodeNumber, episodeTitle, listOf(label to href))
+        val epHeadingRegex = Regex("""(?:Episodes?|Ep|E)\s*[:\-]?\s*0*(\d+)""", RegexOption.IGNORE_CASE)
+        val result = mutableListOf<Triple<Int, String, List<Pair<String, String>>>>()
+
+        // Structure like mobilejsr: <h4>-:Episodes: 01:-</h4> followed by <p><a href="...">...</a></p>
+        val headings = doc.select("h1, h2, h3, h4, h5, h6, strong, b").filter { el ->
+            epHeadingRegex.containsMatchIn(el.text())
+        }
+
+        if (headings.isNotEmpty()) {
+            headings.forEach { heading ->
+                val hText = heading.text().replace(Regex("""^[\-:\s]+|[\-:\s]+$"""), "").trim()
+                val epNum = epHeadingRegex.find(hText)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: return@forEach
+
+                val links = mutableListOf<Pair<String, String>>()
+                var sibling: Element? = heading.nextElementSibling()
+                var steps = 0
+                while (sibling != null && steps < 8) {
+                    if (sibling.tagName().matches(Regex("""h[1-6]""")) && epHeadingRegex.containsMatchIn(sibling.text())) {
+                        break
+                    }
+                    sibling.select("a[href]").forEach { a ->
+                        val href = fixUrlNull(a.attr("href"))
+                        if (href != null && !isIgnoredLink(href)) {
+                            val btnText = a.text().replace(Regex("""\s+"""), " ").trim()
+                                .ifBlank { "Server" }
+                            val fullLabel = if (qualityHint.isNotBlank()) "$qualityHint - $btnText" else btnText
+                            links.add(fullLabel to href)
+                        }
+                    }
+                    if (sibling.tagName() == "a" && sibling.hasAttr("href")) {
+                        val href = fixUrlNull(sibling.attr("href"))
+                        if (href != null && !isIgnoredLink(href)) {
+                            val btnText = sibling.text().replace(Regex("""\s+"""), " ").trim()
+                                .ifBlank { "Server" }
+                            val fullLabel = if (qualityHint.isNotBlank()) "$qualityHint - $btnText" else btnText
+                            links.add(fullLabel to href)
+                        }
+                    }
+                    sibling = sibling.nextElementSibling()
+                    steps++
+                }
+
+                if (links.isNotEmpty()) {
+                    val cleanHeading = hText.ifBlank { "Episode $epNum" }
+                    result.add(Triple(epNum, cleanHeading, links.distinctBy { it.second }))
+                }
+            }
+        }
+
+        return result
+    }
+
     override suspend fun load(url: String): LoadResponse? {
         val document = app.get(url).document
 
@@ -155,34 +245,141 @@ class CinevoodProvider : MainAPI() {
         }
 
         val downloadGroups = document.select("div.mfx-download-group")
+        val fallbackAnchors = document.select("div.entry-content a[href], div.single_post a[href]")
+            .mapNotNull { a ->
+                val link = fixUrlNull(a.attr("href"))
+                if (link == null || isIgnoredLink(link) || link.contains(mainUrl, true)) null
+                else Pair(a.text().trim(), link)
+            }
+            .distinctBy { it.second }
+
         val isSeries = rawTitle.contains(
             Regex("""(Season\s*\d+|S\d{1,2}|Series|Tv-Show|Episode)""", RegexOption.IGNORE_CASE)
-        )
+        ) || downloadGroups.any { grp ->
+            grp.select("a[href]").any {
+                Regex("""(?:Ep|Episode|E)\s*0?\d+""", RegexOption.IGNORE_CASE).containsMatchIn(it.text())
+            }
+        }
 
         if (isSeries) {
+            val seasonRegex = Regex("""(?:Season|S)\s*0?(\d+)""", RegexOption.IGNORE_CASE)
+            val epRegex = Regex("""(?:Ep|Episode|E)\s*0?(\d+)""", RegexOption.IGNORE_CASE)
+
+            // Map: season -> episodeNumber -> mutableListOf(label to href)
+            val groupedEpisodes = LinkedHashMap<Int, LinkedHashMap<Int, MutableList<Pair<String, String>>>>()
+            val qualityFallbackEpisodes = mutableListOf<Episode>()
+
+            fun addEpisodeLinks(
+                season: Int,
+                epNum: Int,
+                links: List<Pair<String, String>>
+            ) {
+                val epMap = groupedEpisodes.getOrPut(season) { LinkedHashMap() }
+                val targetList = epMap.getOrPut(epNum) { mutableListOf() }
+                links.forEach { pair ->
+                    if (targetList.none { it.second == pair.second }) {
+                        targetList.add(pair)
+                    }
+                }
+            }
+
+            val sourceGroups = if (downloadGroups.isNotEmpty()) {
+                downloadGroups.mapIndexed { idx, group ->
+                    val gTitle = group.selectFirst(".mfx-quality-title")?.text()?.trim()
+                        ?: "Group ${idx + 1}"
+                    val gSeason = seasonRegex.find("$gTitle $rawTitle")?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
+                    val gLinks = group.select("a.mfx-download-link[href], a[href]")
+                        .mapNotNull { a ->
+                            val link = fixUrlNull(a.attr("href"))
+                            if (link == null || isIgnoredLink(link) || link.contains(mainUrl, true)) null
+                            else Pair(a.text().replace(Regex("""\s+"""), " ").trim().ifBlank { gTitle }, link)
+                        }
+                        .distinctBy { it.second }
+                    Triple(gSeason, gTitle, gLinks)
+                }
+            } else if (fallbackAnchors.isNotEmpty()) {
+                val sNum = seasonRegex.find(rawTitle)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
+                listOf(Triple(sNum, title, fallbackAnchors))
+            } else {
+                emptyList()
+            }
+
+            sourceGroups.forEachIndexed { idx, (gSeason, gTitle, gLinks) ->
+                if (gLinks.isEmpty()) return@forEachIndexed
+
+                // Check if this group's links are intermediate pages (like mobilejsr.best) containing individual episodes
+                val intermediateLinks = gLinks.filter { (_, href) ->
+                    href.contains("mobilejsr", true) ||
+                        href.contains("genxfm", true) ||
+                        href.contains("howblogs", true) ||
+                        href.contains("drivehub", true) ||
+                        href.contains("hubdrive", true)
+                }
+
+                var expandedFromIntermediate = false
+                if (intermediateLinks.isNotEmpty()) {
+                    intermediateLinks.forEach { (_, interUrl) ->
+                        try {
+                            val res = app.get(interUrl, referer = url)
+                            val expandedHtml = decodeEncodedEpisodeHtml(res.text)
+                            val parsedDoc = Jsoup.parse(expandedHtml, res.url.ifBlank { interUrl })
+                            val extractedEps = extractEpisodesFromDocument(parsedDoc, gSeason, gTitle)
+                            if (extractedEps.isNotEmpty()) {
+                                expandedFromIntermediate = true
+                                extractedEps.forEach { (epNum, _, epLinks) ->
+                                    addEpisodeLinks(gSeason, epNum, epLinks)
+                                }
+                            }
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+
+                if (!expandedFromIntermediate) {
+                    val numbered = gLinks.mapNotNull { (btnLabel, href) ->
+                        val epNum = epRegex.find("$btnLabel $gTitle")?.groupValues?.getOrNull(1)?.toIntOrNull()
+                        if (epNum != null) Triple(epNum, btnLabel, href) else null
+                    }
+
+                    if (numbered.size > 1) {
+                        numbered.groupBy { it.first }.forEach { (epNum, items) ->
+                            addEpisodeLinks(
+                                gSeason,
+                                epNum,
+                                items.map { "${gTitle} - ${it.second}" to it.third }
+                            )
+                        }
+                    } else {
+                        // Keep quality/batch entry (e.g. 480p / 720p / 1080p)
+                        val epNum = epRegex.find(gTitle)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: (idx + 1)
+                        val payload = gLinks.joinToString("|") { "$gTitle - ${it.first}###${it.second}" }
+                        qualityFallbackEpisodes.add(
+                            newEpisode(payload) {
+                                this.name = gTitle
+                                this.season = gSeason
+                                this.episode = epNum
+                            }
+                        )
+                    }
+                }
+            }
+
             val episodes = mutableListOf<Episode>()
-            downloadGroups.forEachIndexed { index, group ->
-                val groupTitle = group.selectFirst(".mfx-quality-title")?.text()?.trim()
-                    ?: "Link Group ${index + 1}"
-                val links = group.select("a.mfx-download-link[href], a[href]")
-                    .mapNotNull { fixUrlNull(it.attr("href")) }
-                    .filter { it.startsWith("http") && !it.contains(mainUrl) }
-                    .distinct()
-
-                if (links.isNotEmpty()) {
-                    val seasonNum = Regex("""(?:Season|S)\s*0?(\d+)""", RegexOption.IGNORE_CASE)
-                        .find(groupTitle)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 1
-                    val epNum = Regex("""(?:Episode|Ep|E)\s*0?(\d+)""", RegexOption.IGNORE_CASE)
-                        .find(groupTitle)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: (index + 1)
-
+            groupedEpisodes.forEach { (seasonNum, epMap) ->
+                epMap.toSortedMap().forEach { (epNum, pairs) ->
+                    val payload = pairs.joinToString("|") { "${it.first}###${it.second}" }
                     episodes.add(
-                        newEpisode(links.joinToString("|")) {
-                            this.name = groupTitle
+                        newEpisode(payload) {
+                            this.name = "Episode $epNum"
                             this.season = seasonNum
                             this.episode = epNum
                         }
                     )
                 }
+            }
+
+            if (episodes.isEmpty()) {
+                episodes.addAll(qualityFallbackEpisodes)
             }
 
             return newTvSeriesLoadResponse(title, url, TvType.TvSeries, episodes) {
@@ -201,22 +398,16 @@ class CinevoodProvider : MainAPI() {
                 val qualityLabel = group.selectFirst(".mfx-quality-title")?.text()?.trim() ?: ""
                 group.select("a.mfx-download-link[href], a[href]").forEach { aTag ->
                     val link = fixUrlNull(aTag.attr("href"))
-                    if (!link.isNullOrBlank() && link.startsWith("http") && !link.contains(mainUrl)) {
-                        allLinks.add("$qualityLabel###$link")
+                    if (link != null && !isIgnoredLink(link) && !link.contains(mainUrl, true)) {
+                        val label = qualityLabel.ifBlank { aTag.text().trim() }
+                        allLinks.add("$label###$link")
                     }
                 }
             }
 
             if (allLinks.isEmpty()) {
-                document.select("div.entry-content a[href]").forEach { aTag ->
-                    val link = fixUrlNull(aTag.attr("href"))
-                    val btnText = aTag.text().trim()
-                    if (!link.isNullOrBlank() && link.startsWith("http") &&
-                        !link.contains(mainUrl) && !link.contains("whatsapp.com") &&
-                        !link.contains("imdb.com")
-                    ) {
-                        allLinks.add("$btnText###$link")
-                    }
+                fallbackAnchors.forEach { (btnText, link) ->
+                    allLinks.add("$btnText###$link")
                 }
             }
 
@@ -296,12 +487,34 @@ class CinevoodProvider : MainAPI() {
         // 2. Try built-in & custom CloudStream extractors
         if (loadExtractor(url, referer, subtitleCallback, callback)) return
 
-        // 3. Fetch intermediate page (handles mobilejsr.best -> mcloud.best / vegadrive / dotflix -> FastDL)
+        // 3. Fetch intermediate page (handles mobilejsr -> fastdl.rest / filebee.live / mcloud / vegadrive / dotflix)
         try {
             val res = app.get(url, referer = referer)
-            val doc = res.document
-            val currentUrl = res.url
-            val htmlText = res.text
+            val expandedHtml = decodeEncodedEpisodeHtml(res.text)
+            val currentUrl = res.url.ifBlank { url }
+            val doc = Jsoup.parse(expandedHtml, currentUrl)
+
+            // If this page has episode blocks and we arrived at episode level, extract all download anchors inside it
+            val hasEpisodeBlocks = doc.select("h1, h2, h3, h4, h5, h6, strong, b").any {
+                Regex("""(?:Episodes?|Ep|E)\s*[:\-]?\s*0*\d+""", RegexOption.IGNORE_CASE).containsMatchIn(it.text())
+            }
+            if (hasEpisodeBlocks) {
+                val allEpLinks = doc.select("a[href]")
+                    .mapNotNull { a ->
+                        val href = fixUrlNull(a.attr("href"))
+                        if (href == null || isIgnoredLink(href) || href == currentUrl) null
+                        else Pair(a.text().replace(Regex("""\s+"""), " ").trim().ifBlank { "Mirror" }, href)
+                    }
+                    .distinctBy { it.second }
+
+                if (allEpLinks.isNotEmpty()) {
+                    allEpLinks.forEach { (btnLabel, targetHref) ->
+                        val combinedLabel = if (qualityLabel.isNotBlank()) "$qualityLabel - $btnLabel" else btnLabel
+                        resolveLink(targetHref, combinedLabel, currentUrl, subtitleCallback, callback, depth + 1)
+                    }
+                    return
+                }
+            }
 
             // Case A: FastDL Server page -> div.vd a#vd
             val fastDlAnchor = doc.selectFirst("div.vd a#vd[href], a#vd[href]")
@@ -358,7 +571,7 @@ class CinevoodProvider : MainAPI() {
                             )
                         }
                         targetHref.contains("gpdl") || targetHref.contains("hubcloud") ||
-                        btnLabel.contains("10Gbps", ignoreCase = true) -> {
+                            btnLabel.contains("10Gbps", ignoreCase = true) -> {
                             resolveLink(
                                 url = targetHref,
                                 qualityLabel = fileTitle,
@@ -386,13 +599,13 @@ class CinevoodProvider : MainAPI() {
                 return
             }
 
-            // Case C: Intermediate shortener / gateway page (mcloud / vegadrive / dotflix / hubcloud)
+            // Case C: Intermediate shortener / gateway page
             val metaRedirect = doc.selectFirst("meta[http-equiv=refresh]")?.attr("content")
                 ?.substringAfter("url=", "")?.trim()?.trim('\'', '"')
             val jsRedirect = Regex("""(?:window\.location(?:\.href)?|location\.replace)\s*(?:=|\()\s*['"](https?://[^'"]+)['"]""")
-                .find(htmlText)?.groupValues?.getOrNull(1)
-            val mirrorMatch = Regex("""https?://(?:mcloud|hubcloud|vegadrive|dotflix)\.[a-z]+/[^\s"'<>]+""")
-                .find(htmlText)?.value
+                .find(expandedHtml)?.groupValues?.getOrNull(1)
+            val mirrorMatch = Regex("""https?://(?:mcloud|hubcloud|vegadrive|dotflix|fastdl)\.[a-z]+/[^\s"'<>]+""")
+                .find(expandedHtml)?.value
 
             val nextHop = listOfNotNull(metaRedirect, jsRedirect, mirrorMatch)
                 .firstOrNull { it.startsWith("http") && it != currentUrl }
@@ -414,10 +627,7 @@ class CinevoodProvider : MainAPI() {
                 val target = fixUrlNull(
                     if (el.tagName() == "iframe") el.attr("src") else el.attr("href")
                 )
-                if (!target.isNullOrBlank() && target != currentUrl && target.startsWith("http") &&
-                    !target.contains("telegram") && !target.contains("t.me") &&
-                    !target.contains("whatsapp")
-                ) {
+                if (!target.isNullOrBlank() && target != currentUrl && !isIgnoredLink(target)) {
                     if (!loadExtractor(target, currentUrl, subtitleCallback, callback)) {
                         resolveLink(
                             url = target,
