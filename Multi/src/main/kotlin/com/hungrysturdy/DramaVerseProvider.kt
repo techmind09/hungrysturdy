@@ -5,6 +5,7 @@ import android.util.Base64
 import com.hungrysturdy.donation.DonationDialogFragment
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import org.json.JSONObject
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URI
@@ -178,6 +179,11 @@ class DramaVerseProvider : MainAPI() {
         return lower.contains("blogspot.com") || lower.contains("mydverse0")
     }
 
+    private fun isSafelinkUrl(url: String): Boolean {
+        val lower = url.lowercase()
+        return lower.contains("sohojgyan.com")
+    }
+
     private fun isIgnoredOrAdUrl(href: String): Boolean {
         val lower = href.lowercase()
         return !lower.startsWith("http") ||
@@ -212,6 +218,81 @@ class DramaVerseProvider : MainAPI() {
             )
     }
 
+    private fun extractCodeParam(url: String): String? {
+        val match = Regex("""[?&]code=([^&#]+)""", RegexOption.IGNORE_CASE).find(url)
+            ?: return null
+        return try {
+            URLDecoder.decode(match.groupValues[1], "UTF-8").trim().ifBlank { null }
+        } catch (_: Exception) {
+            match.groupValues[1].trim().ifBlank { null }
+        }
+    }
+
+    private suspend fun decodeSafelinkByCode(code: String, referer: String): String? {
+        if (code.isBlank()) return null
+        return try {
+            val apiUrl = "https://safe.sohojgyan.com/api/decode/${URLEncoder.encode(code, "UTF-8")}"
+            val jsonText = app.get(
+                apiUrl,
+                headers = defaultHeaders + mapOf("Accept" to "application/json, text/plain, */*"),
+                referer = referer
+            ).text
+
+            val root = JSONObject(jsonText)
+            if (root.optBoolean("success", false)) {
+                val originalUrl = root.optJSONObject("data")
+                    ?.optString("original_url", "")
+                    ?.trim()
+                if (!originalUrl.isNullOrBlank() && originalUrl.startsWith("http")) {
+                    return resolveRelativeUrl(referer, originalUrl)
+                }
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun extractTargetUrlFromHtml(html: String, baseUrl: String): String? {
+        val blogspotMatch = Regex(
+            """https?://[a-zA-Z0-9.-]*blogspot\.com/p/[^\s"'<>\\]+""",
+            RegexOption.IGNORE_CASE
+        ).find(html)?.value
+        if (!blogspotMatch.isNullOrBlank()) {
+            return resolveRelativeUrl(baseUrl, blogspotMatch)
+        }
+
+        val b64Regex = Regex("""atob\(\s*["']([A-Za-z0-9+/=]{12,})["']\s*\)""")
+        for (m in b64Regex.findAll(html)) {
+            try {
+                val decoded = String(
+                    Base64.decode(m.groupValues[1], Base64.DEFAULT)
+                ).trim()
+                if (decoded.startsWith("http") && !isIgnoredOrAdUrl(decoded)) {
+                    return decoded
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        val jsUrlMatch = Regex(
+            """(?:window\.location(?:\.href)?|location\.href|location\.replace|href\s*=|url\s*[:=])\s*["'](https?://[^"']+)["']""",
+            RegexOption.IGNORE_CASE
+        ).findAll(html)
+            .map { it.groupValues[1] }
+            .firstOrNull { candidate ->
+                val clean = candidate.replace("\\/", "/").replace("&amp;", "&").trim()
+                !isIgnoredOrAdUrl(clean) &&
+                    (isEpisodePageUrl(clean) || isSupportedHostUrl(clean))
+            }
+
+        if (!jsUrlMatch.isNullOrBlank()) {
+            return resolveRelativeUrl(baseUrl, jsUrlMatch)
+        }
+
+        return null
+    }
+
     // ---------------------------------------------------------
     // REDIRECT & SAFELINK RESOLVER
     // ---------------------------------------------------------
@@ -219,12 +300,21 @@ class DramaVerseProvider : MainAPI() {
     private suspend fun resolveIntermediateUrl(url: String): String {
         if (isXCloudHlsUrl(url) || isEpisodePageUrl(url)) return url
 
+        // Direct ?code= check if already present
+        extractCodeParam(url)?.let { code ->
+            decodeSafelinkByCode(code, url)?.let { decoded ->
+                return resolveIntermediateUrl(decoded)
+            }
+        }
+
         var current = url
         var attempts = 0
         var sessionCookies = emptyMap<String, String>()
+        val visited = mutableSetOf<String>()
 
-        while (attempts < 8) {
+        while (attempts < 10) {
             attempts++
+            if (!visited.add(current)) break
             try {
                 val resp = app.get(
                     current,
@@ -238,7 +328,14 @@ class DramaVerseProvider : MainAPI() {
                 val location = resp.headers["location"] ?: resp.headers["Location"]
                 if (!location.isNullOrEmpty()) {
                     val next = resolveRelativeUrl(current, location)
-                    if (next != current && !isIgnoredOrAdUrl(next)) {
+
+                    extractCodeParam(next)?.let { code ->
+                        decodeSafelinkByCode(code, next)?.let { decoded ->
+                            return resolveIntermediateUrl(decoded)
+                        }
+                    }
+
+                    if (!isIgnoredOrAdUrl(next)) {
                         current = next
                         if (isXCloudHlsUrl(current) || isEpisodePageUrl(current)) return current
                         continue
@@ -250,31 +347,18 @@ class DramaVerseProvider : MainAPI() {
                     return current
                 }
 
-                val blogspotMatch = Regex(
-                    """https?://[a-zA-Z0-9.-]*blogspot\.com/p/[^\s"'<>\\]+""",
-                    RegexOption.IGNORE_CASE
-                ).find(html)?.value?.replace("\\/", "/")?.replace("&amp;", "&")
-
-                if (!blogspotMatch.isNullOrEmpty()) {
-                    return blogspotMatch
-                }
-
-                val b64Regex = Regex("""atob\(\s*["']([A-Za-z0-9+/=]{16,})["']\s*\)""")
-                var decodedFound: String? = null
-                for (m in b64Regex.findAll(html)) {
-                    try {
-                        val decoded = String(
-                            Base64.decode(m.groupValues[1], Base64.DEFAULT)
-                        ).trim()
-                        if (decoded.startsWith("http") && !isIgnoredOrAdUrl(decoded)) {
-                            decodedFound = decoded
-                            break
-                        }
-                    } catch (_: Exception) {
+                // Check if page/script contains a safelink code or /api/decode/
+                val inlineCode = Regex("""[?&]code=([A-Za-z0-9_-]+)""").find(html)?.groupValues?.getOrNull(1)
+                    ?: Regex("""safelink_code["']?\s*[,:]\s*["']([A-Za-z0-9_-]+)["']""").find(html)?.groupValues?.getOrNull(1)
+                if (!inlineCode.isNullOrBlank()) {
+                    decodeSafelinkByCode(inlineCode, current)?.let { decoded ->
+                        return resolveIntermediateUrl(decoded)
                     }
                 }
-                if (!decodedFound.isNullOrEmpty() && decodedFound != current) {
-                    current = decodedFound
+
+                val extracted = extractTargetUrlFromHtml(html, current)
+                if (!extracted.isNullOrBlank() && !isIgnoredOrAdUrl(extracted)) {
+                    current = extracted
                     if (isXCloudHlsUrl(current) || isEpisodePageUrl(current)) return current
                     continue
                 }
@@ -286,22 +370,11 @@ class DramaVerseProvider : MainAPI() {
 
                 if (metaMatch != null) {
                     val nextUrl = resolveRelativeUrl(current, metaMatch.groupValues[1])
-                    if (nextUrl != current && !isIgnoredOrAdUrl(nextUrl)) {
+                    if (!isIgnoredOrAdUrl(nextUrl)) {
                         current = nextUrl
                         if (isXCloudHlsUrl(current) || isEpisodePageUrl(current)) return current
                         continue
                     }
-                }
-
-                val jsMatch = Regex(
-                    """(?:window\.location(?:\.href)?|location\.href|location\.replace)\s*(?:=|\()\s*["'](https?://[^"']+)["']""",
-                    RegexOption.IGNORE_CASE
-                ).find(html)?.groupValues?.get(1)
-
-                if (!jsMatch.isNullOrEmpty() && jsMatch != current && !isIgnoredOrAdUrl(jsMatch)) {
-                    current = resolveRelativeUrl(current, jsMatch)
-                    if (isXCloudHlsUrl(current) || isEpisodePageUrl(current)) return current
-                    continue
                 }
 
                 val form = resp.document.selectFirst("form[action]")
@@ -326,11 +399,8 @@ class DramaVerseProvider : MainAPI() {
                             if (isXCloudHlsUrl(current) || isEpisodePageUrl(current)) return current
                             continue
                         }
-                        val postBlogspot = Regex(
-                            """https?://[a-zA-Z0-9.-]*blogspot\.com/p/[^\s"'<>\\]+""",
-                            RegexOption.IGNORE_CASE
-                        ).find(postResp.text)?.value?.replace("\\/", "/")?.replace("&amp;", "&")
-                        if (!postBlogspot.isNullOrEmpty()) return postBlogspot
+                        val postExtracted = extractTargetUrlFromHtml(postResp.text, action)
+                        if (!postExtracted.isNullOrBlank()) return postExtracted
                     }
                 }
 
@@ -466,7 +536,7 @@ class DramaVerseProvider : MainAPI() {
 
         val title = document.selectFirst(
             "h1.entry-title, h1.post-title, h1.pTtl"
-        )?.text()?.trim() ?: "Drama"
+        )?.text()?.trim()?.substringBefore("|")?.trim() ?: "Drama"
 
         val poster = document.selectFirst(
             "a.post-thumb img, .post-thumb img, .entry-content img, .post-body img"
@@ -488,11 +558,13 @@ class DramaVerseProvider : MainAPI() {
         if (episodeMap.isEmpty()) {
             val candidateUrls = linkedSetOf<Pair<String, String>>()
 
-            document.select(".entry-content a[href], .post-body a[href], article a[href], a.btn-slide, a.button").forEach { el ->
+            document.select(
+                ".btn-container a.btn-slide[href], a.btn-slide[href], .entry-content a[href], .post-body a[href], article a[href], a.button[href]"
+            ).forEach { el ->
                 val href = el.absUrl("href").ifEmpty {
                     resolveRelativeUrl(url, el.attr("href"))
                 }
-                val label = el.text().trim()
+                val label = el.text().trim().ifEmpty { el.selectFirst(".btn-title")?.text()?.trim().orEmpty() }
                 if (href.isNotEmpty() && href != url && !isIgnoredOrAdUrl(href)) {
                     val isInternalPost = href.startsWith(mainUrl) &&
                         !href.contains("?") &&
@@ -525,7 +597,12 @@ class DramaVerseProvider : MainAPI() {
             for ((candUrl, candLabel) in candidateUrls) {
                 val resolved = resolveIntermediateUrl(candUrl)
 
-                if (isEpisodePageUrl(resolved) || isEpisodePageUrl(candUrl) || candUrl.contains("sohojgyan", ignoreCase = true)) {
+                if (
+                    isEpisodePageUrl(resolved) ||
+                    isEpisodePageUrl(candUrl) ||
+                    isSafelinkUrl(candUrl) ||
+                    isSafelinkUrl(resolved)
+                ) {
                     val scraped = scrapeEpisodeLinksFromIntermediate(resolved, url)
                     if (scraped.isNotEmpty()) {
                         for ((epNum, epHref) in scraped) {
