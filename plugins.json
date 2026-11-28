@@ -1,0 +1,82 @@
+[
+  {
+    "url": "https://raw.githubusercontent.com/techmind09/hungrysturdy/builds/AllowTV.cs3",
+    "status": 1,
+    "version": 6,
+    "name": "AllowTV",
+    "internalName": "AllowTV",
+    "authors": [
+      "hungrysturdy"
+    ],
+    "description": "AllowTV - Indian Hindi+English Movies&Web Series",
+    "fileSize": 33341,
+    "repositoryUrl": "https://github.com/techmind09/hungrysturdy",
+    "language": "hi",
+    "tvTypes": [
+      "Movies&Series"
+    ],
+    "iconUrl": "https://raw.githubusercontent.com/techmind09/hungrysturdy/refs/heads/main/246481509.png",
+    "apiVersion": 1,
+    "fileHash": "sha256-37cfb3e91f886324704a949fbf2eb415e43b127cd39775be9f05008564920089"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/techmind09/hungrysturdy/builds/MovieFox.cs3",
+    "status": 1,
+    "version": 4,
+    "name": "MovieFox",
+    "internalName": "MovieFox",
+    "authors": [
+      "hungrysturdy"
+    ],
+    "description": "MovieFox - Indian Hindi+English Movies&Web Series",
+    "fileSize": 503581,
+    "repositoryUrl": "https://github.com/techmind09/hungrysturdy",
+    "language": "hi",
+    "tvTypes": [
+      "Movies&Series"
+    ],
+    "iconUrl": "https://raw.githubusercontent.com/techmind09/hungrysturdy/refs/heads/main/246481509.png",
+    "apiVersion": 1,
+    "fileHash": "sha256-a47bac7405ae5b69a7d052b8d12d9aa9c1b26df7d49f7dd0a81a929a9bbebc0f"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/techmind09/hungrysturdy/builds/Multi.cs3",
+    "status": 1,
+    "version": 10,
+    "name": "Multi",
+    "internalName": "Multi",
+    "authors": [
+      "hungrysturdy"
+    ],
+    "description": "Multi - Indian Hindi+English+Other Movies&Web Series",
+    "fileSize": 278752,
+    "repositoryUrl": "https://github.com/techmind09/hungrysturdy",
+    "language": "hi",
+    "tvTypes": [
+      "Movies&Series"
+    ],
+    "iconUrl": "https://raw.githubusercontent.com/techmind09/hungrysturdy/refs/heads/main/246481509.png",
+    "apiVersion": 1,
+    "fileHash": "sha256-dca88ac693185a0036baebfcedec34227d9efe3d0f9787e34c179c6de9e437dc"
+  },
+  {
+    "url": "https://raw.githubusercontent.com/techmind09/hungrysturdy/builds/Multi2.cs3",
+    "status": 1,
+    "version": 6,
+    "name": "Multi2",
+    "internalName": "Multi2",
+    "authors": [
+      "sturdyfishstick1"
+    ],
+    "description": "Multi2 - Indian Hindi+English Movies&Web Series",
+    "fileSize": 268778,
+    "repositoryUrl": "https://github.com/techmind09/hungrysturdy",
+    "language": "hi",
+    "tvTypes": [
+      "Movies&Series"
+    ],
+    "iconUrl": "https://raw.githubusercontent.com/techmind09/hungrysturdy/refs/heads/main/246481509.png",
+    "apiVersion": 1,
+    "fileHash": "sha256-aaec9ecab572484f213701000ac475c4b09042f89f49764e5dd99eeee5b0ff74"
+  }
+]
