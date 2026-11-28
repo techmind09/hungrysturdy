@@ -409,19 +409,16 @@ class ArrowTvProvider : MainAPI() {
             "User-Agent" to USER_AGENT
         )
 
-        // 1. Subtitles direct API se fetch karo
         fetchSubtitles(subtitleApiUrl, headers, subtitleCallback)
 
-        // 2. Direct Punkflix JSON API se streams fetch karo
         val raw = runCatching {
             app.get(punkflixUrl, referer = playerReferer, headers = headers).text.trim()
         }.getOrNull() ?: return false
 
         if (raw.isEmpty()) return false
 
-        val foundStreams = linkedMapOf<String, String>() // url -> label
+        val foundStreams = linkedMapOf<String, String>()
 
-        // Structured JSON parse
         runCatching {
             if (raw.startsWith("{")) {
                 collectMediaFromJson(JSONObject(raw), foundStreams, subtitleCallback)
@@ -430,7 +427,6 @@ class ArrowTvProvider : MainAPI() {
             }
         }
 
-        // Regex fallback: agar JSON structure alag ho toh bhi saare .m3u8/.mp4 links pakad lega
         if (foundStreams.isEmpty()) {
             val unescaped = raw.replace("\\/", "/")
             Regex("""https?://[^\s"'<>\\]+\.(?:m3u8|mp4)(?:\?[^\s"'<>\\]*)?""", RegexOption.IGNORE_CASE)
@@ -492,7 +488,7 @@ class ArrowTvProvider : MainAPI() {
         return emitted
     }
 
-    private fun collectMediaFromJson(
+    private suspend fun collectMediaFromJson(
         obj: JSONObject,
         streams: MutableMap<String, String>,
         subtitleCallback: (SubtitleFile) -> Unit
@@ -551,7 +547,7 @@ class ArrowTvProvider : MainAPI() {
         }
     }
 
-    private fun collectMediaFromJsonArray(
+    private suspend fun collectMediaFromJsonArray(
         arr: JSONArray,
         streams: MutableMap<String, String>,
         subtitleCallback: (SubtitleFile) -> Unit
