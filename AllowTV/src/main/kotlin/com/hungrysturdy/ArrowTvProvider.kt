@@ -1,7 +1,6 @@
 package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
-import com.lagradost.cloudstream3.network.WebViewResolver
 import com.lagradost.cloudstream3.utils.*
 import org.json.JSONArray
 import org.json.JSONObject
@@ -20,7 +19,11 @@ class ArrowTvProvider : MainAPI() {
         TvType.Anime
     )
 
-    private val cinezoEmbedBase = "https://player.cinezo.live/embed"
+    private val punkflixBase = "https://punkflix.net"
+    private val subtitleApiBase = "https://proxy1.flikhub.net/subtitles"
+    private val playerReferer = "https://player.cinezo.live/"
+    private val playerOrigin = "https://player.cinezo.live"
+
     private val tmdbPosterBase = "https://image.tmdb.org/t/p/w500"
     private val tmdbBackdropBase = "https://image.tmdb.org/t/p/w1280"
     private val tmdbStillBase = "https://image.tmdb.org/t/p/w342"
@@ -385,49 +388,229 @@ class ArrowTvProvider : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         val parts = data.split("|")
-        val embedUrl = when (parts.firstOrNull()) {
-            "movie" -> "$cinezoEmbedBase/movie/${parts[1]}"
-            "tv" -> "$cinezoEmbedBase/tv/${parts[1]}/${parts[2]}/${parts[3]}"
+        val punkflixUrl: String
+        val subtitleApiUrl: String
+
+        when (parts.firstOrNull()) {
+            "movie" -> {
+                punkflixUrl = "$punkflixBase/movie/${parts[1]}.json"
+                subtitleApiUrl = "$subtitleApiBase/movie/${parts[1]}"
+            }
+            "tv" -> {
+                punkflixUrl = "$punkflixBase/tv/${parts[1]}/${parts[2]}/${parts[3]}.json"
+                subtitleApiUrl = "$subtitleApiBase/tv/${parts[1]}/${parts[2]}/${parts[3]}"
+            }
             else -> return false
         }
 
-        if (loadExtractor(embedUrl, "$mainUrl/", subtitleCallback, callback)) {
-            return true
-        }
-
-        val resolved = app.get(
-            embedUrl,
-            referer = "$mainUrl/",
-            interceptor = WebViewResolver(
-                interceptUrl = Regex("\\.(m3u8|mp4)(\\?.*)?$", RegexOption.IGNORE_CASE),
-                timeout = 15_000L
-            )
+        val headers = mapOf(
+            "Referer" to playerReferer,
+            "Origin" to playerOrigin,
+            "User-Agent" to USER_AGENT
         )
 
-        val streamUrl = resolved.url
-        if (streamUrl.contains(".m3u8", ignoreCase = true)) {
-            M3u8Helper.generateM3u8(
-                source = "Cinezo",
-                streamUrl = streamUrl,
-                referer = "https://player.cinezo.live/"
-            ).forEach(callback)
-            return true
-        } else if (streamUrl.contains(".mp4", ignoreCase = true)) {
-            callback.invoke(
-                newExtractorLink(
-                    source = "Cinezo",
-                    name = "Cinezo",
-                    url = streamUrl,
-                    type = ExtractorLinkType.VIDEO
-                ) {
-                    this.referer = "https://player.cinezo.live/"
-                    this.quality = Qualities.Unknown.value
-                }
-            )
-            return true
+        // 1. Subtitles direct API se fetch karo
+        fetchSubtitles(subtitleApiUrl, headers, subtitleCallback)
+
+        // 2. Direct Punkflix JSON API se streams fetch karo
+        val raw = runCatching {
+            app.get(punkflixUrl, referer = playerReferer, headers = headers).text.trim()
+        }.getOrNull() ?: return false
+
+        if (raw.isEmpty()) return false
+
+        val foundStreams = linkedMapOf<String, String>() // url -> label
+
+        // Structured JSON parse
+        runCatching {
+            if (raw.startsWith("{")) {
+                collectMediaFromJson(JSONObject(raw), foundStreams, subtitleCallback)
+            } else if (raw.startsWith("[")) {
+                collectMediaFromJsonArray(JSONArray(raw), foundStreams, subtitleCallback)
+            }
         }
 
-        return false
+        // Regex fallback: agar JSON structure alag ho toh bhi saare .m3u8/.mp4 links pakad lega
+        if (foundStreams.isEmpty()) {
+            val unescaped = raw.replace("\\/", "/")
+            Regex("""https?://[^\s"'<>\\]+\.(?:m3u8|mp4)(?:\?[^\s"'<>\\]*)?""", RegexOption.IGNORE_CASE)
+                .findAll(unescaped)
+                .forEachIndexed { idx, match ->
+                    foundStreams.putIfAbsent(match.value, "Cinezo ${idx + 1}")
+                }
+        }
+
+        if (foundStreams.isEmpty()) return false
+
+        var emitted = false
+        foundStreams.forEach { (streamUrl, label) ->
+            if (streamUrl.contains(".m3u8", ignoreCase = true)) {
+                val generated = runCatching {
+                    M3u8Helper.generateM3u8(
+                        source = label,
+                        streamUrl = streamUrl,
+                        referer = playerReferer,
+                        headers = headers
+                    )
+                }.getOrDefault(emptyList())
+
+                if (generated.isNotEmpty()) {
+                    generated.forEach(callback)
+                    emitted = true
+                } else {
+                    callback.invoke(
+                        newExtractorLink(
+                            source = label,
+                            name = label,
+                            url = streamUrl,
+                            type = ExtractorLinkType.M3U8
+                        ) {
+                            this.referer = playerReferer
+                            this.headers = headers
+                            this.quality = Qualities.Unknown.value
+                        }
+                    )
+                    emitted = true
+                }
+            } else {
+                callback.invoke(
+                    newExtractorLink(
+                        source = label,
+                        name = label,
+                        url = streamUrl,
+                        type = ExtractorLinkType.VIDEO
+                    ) {
+                        this.referer = playerReferer
+                        this.headers = headers
+                        this.quality = Qualities.Unknown.value
+                    }
+                )
+                emitted = true
+            }
+        }
+
+        return emitted
+    }
+
+    private fun collectMediaFromJson(
+        obj: JSONObject,
+        streams: MutableMap<String, String>,
+        subtitleCallback: (SubtitleFile) -> Unit
+    ) {
+        val directUrl = obj.optString("url")
+            .ifBlank { obj.optString("file") }
+            .ifBlank { obj.optString("src") }
+            .ifBlank { obj.optString("stream") }
+            .ifBlank { obj.optString("hls") }
+            .ifBlank { obj.optString("playlist") }
+
+        if (directUrl.startsWith("http") &&
+            (directUrl.contains(".m3u8", true) || directUrl.contains(".mp4", true) || directUrl.contains("punkflix.net", true))
+        ) {
+            val label = obj.optString("name")
+                .ifBlank { obj.optString("server") }
+                .ifBlank { obj.optString("quality") }
+                .ifBlank { obj.optString("label") }
+                .ifBlank { "Cinezo" }
+            streams.putIfAbsent(directUrl, label)
+        }
+
+        val keys = obj.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            val value = obj.opt(key)
+            when (value) {
+                is JSONObject -> collectMediaFromJson(value, streams, subtitleCallback)
+                is JSONArray -> {
+                    if (key.contains("sub", true) || key.contains("track", true) || key.contains("caption", true)) {
+                        for (i in 0 until value.length()) {
+                            val subObj = value.optJSONObject(i) ?: continue
+                            val subUrl = subObj.optString("url")
+                                .ifBlank { subObj.optString("file") }
+                                .ifBlank { subObj.optString("src") }
+                            if (subUrl.startsWith("http")) {
+                                val lang = subObj.optString("display")
+                                    .ifBlank { subObj.optString("label") }
+                                    .ifBlank { subObj.optString("lang") }
+                                    .ifBlank { "Subtitle" }
+                                subtitleCallback.invoke(newSubtitleFile(lang, subUrl))
+                            }
+                        }
+                    } else {
+                        collectMediaFromJsonArray(value, streams, subtitleCallback)
+                    }
+                }
+                is String -> {
+                    if (value.startsWith("http") &&
+                        (value.contains(".m3u8", true) || value.contains(".mp4", true))
+                    ) {
+                        streams.putIfAbsent(value, "Cinezo ($key)")
+                    }
+                }
+            }
+        }
+    }
+
+    private fun collectMediaFromJsonArray(
+        arr: JSONArray,
+        streams: MutableMap<String, String>,
+        subtitleCallback: (SubtitleFile) -> Unit
+    ) {
+        for (i in 0 until arr.length()) {
+            when (val item = arr.opt(i)) {
+                is JSONObject -> collectMediaFromJson(item, streams, subtitleCallback)
+                is JSONArray -> collectMediaFromJsonArray(item, streams, subtitleCallback)
+                is String -> {
+                    if (item.startsWith("http") &&
+                        (item.contains(".m3u8", true) || item.contains(".mp4", true))
+                    ) {
+                        streams.putIfAbsent(item, "Cinezo ${i + 1}")
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun fetchSubtitles(
+        apiUrl: String,
+        headers: Map<String, String>,
+        subtitleCallback: (SubtitleFile) -> Unit
+    ) {
+        val raw = runCatching {
+            app.get(apiUrl, referer = playerReferer, headers = headers).text.trim()
+        }.getOrNull() ?: return
+
+        if (raw.isEmpty()) return
+
+        runCatching {
+            val array: JSONArray = if (raw.startsWith("[")) {
+                JSONArray(raw)
+            } else {
+                val root = JSONObject(raw)
+                root.optJSONArray("subtitles")
+                    ?: root.optJSONArray("tracks")
+                    ?: root.optJSONArray("data")
+                    ?: root.optJSONArray("results")
+                    ?: JSONArray()
+            }
+
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                val subUrl = item.optString("url")
+                    .ifBlank { item.optString("file") }
+                    .ifBlank { item.optString("src") }
+                    .ifBlank { item.optString("link") }
+                if (subUrl.isBlank()) continue
+
+                val lang = item.optString("display")
+                    .ifBlank { item.optString("label") }
+                    .ifBlank { item.optString("language") }
+                    .ifBlank { item.optString("lang") }
+                    .ifBlank { "Unknown" }
+
+                subtitleCallback.invoke(newSubtitleFile(lang, subUrl))
+            }
+        }
     }
 }
 
