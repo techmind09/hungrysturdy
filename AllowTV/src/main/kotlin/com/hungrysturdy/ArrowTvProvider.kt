@@ -8,7 +8,7 @@ import org.json.JSONObject
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
 
-class ArrowTvProvider : MainAPI(){
+class ArrowTvProvider : MainAPI() {
     override var mainUrl = "https://arrowtv.net"
     override var name = "ArrowTV"
     override val hasMainPage = true
@@ -206,7 +206,6 @@ class ArrowTvProvider : MainAPI(){
 
         val pageUrl = "$mainUrl/$type/$tmdbId"
 
-        // 1. Direct ArrowTV media-info JSON API se metadata fetch karo
         val mediaJson = runCatching {
             val raw = app.get("$mainUrl/api/media-info?id=$tmdbId&type=$type", referer = "$mainUrl/").text.trim()
             if (raw.startsWith("{")) JSONObject(raw) else null
@@ -238,7 +237,6 @@ class ArrowTvProvider : MainAPI(){
             }
         }
 
-        // Fallback agar media-info API empty/fail ho
         if (title.isNullOrBlank()) {
             val doc = app.get(pageUrl, referer = "$mainUrl/").document
             title = doc.selectFirst("h1.cz-watch-title, h1")?.text()?.trim()
@@ -288,7 +286,6 @@ class ArrowTvProvider : MainAPI(){
         tmdbId: String,
         mediaInfoObj: JSONObject?
     ): List<Episode> {
-        // Step 1: /api/tv-seasons se saare season numbers nikalo
         val seasonNumbers = mutableListOf<Int>()
 
         val seasonsRaw = runCatching {
@@ -320,8 +317,7 @@ class ArrowTvProvider : MainAPI(){
 
         if (seasonNumbers.isEmpty()) seasonNumbers.add(1)
 
-        // Step 2: Har season ke liye /api/tv-episodes parallel fetch karo
-        return seasonNumbers.distinct().sorted().apmap { seasonNum ->
+        return seasonNumbers.distinct().sorted().amap { seasonNum ->
             fetchSeasonEpisodes(tmdbId, seasonNum)
         }.flatten()
     }
@@ -434,3 +430,4 @@ class ArrowTvProvider : MainAPI(){
         return false
     }
 }
+
