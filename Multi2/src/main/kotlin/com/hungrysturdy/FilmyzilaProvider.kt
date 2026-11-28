@@ -2,6 +2,7 @@ package com.hungrysturdy
 
 import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.*
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 
 class FilmyzilaProvider : MainAPI() {
@@ -43,21 +44,79 @@ class FilmyzilaProvider : MainAPI() {
         }
 
         val document = app.get(targetUrl).document
-        val items = document.select("main.movie-grid div.fz-movie-row, div.fz-movie-row")
+        var items = document.select("main.movie-grid div.fz-movie-row, div.fz-movie-row")
             .mapNotNull { element -> element.toSearchResult() }
             .distinctBy { it.url }
+
+        // Fallback for Trending Movies from homepage section if /treding-movies/ returns empty
+        if (items.isEmpty() && page <= 1 && request.data.contains("treding-movies", ignoreCase = true)) {
+            val homeDoc = app.get("$mainUrl/").document
+            val trendingHeader = homeDoc.select("div.head")
+                .firstOrNull { it.text().contains("Trending", ignoreCase = true) }
+            val trendingItems = mutableListOf<SearchResponse>()
+            var sibling = trendingHeader?.nextElementSibling()
+            while (sibling != null && !sibling.hasClass("head")) {
+                if (sibling.hasClass("fz-movie-row")) {
+                    sibling.toSearchResult()?.let { trendingItems.add(it) }
+                }
+                sibling = sibling.nextElementSibling()
+            }
+            items = trendingItems.distinctBy { it.url }
+        }
+
+        // Fallback parser if a category uses div.touch or simple .html links instead of .fz-movie-row
+        if (items.isEmpty()) {
+            items = document.select("div.touch a[href$='.html'], main a[href$='.html']")
+                .mapNotNull { anchor ->
+                    val href = fixUrlNull(anchor.attr("href")) ?: return@mapNotNull null
+                    if (href.contains("dmca.html", true) || href.contains("disclaimer.html", true)) {
+                        return@mapNotNull null
+                    }
+                    val rawTitle = anchor.text().trim().ifBlank { return@mapNotNull null }
+                    val cleanTitle = cleanTitleText(rawTitle)
+                    val slug = href.substringAfterLast("/").substringBeforeLast(".html")
+                    val thumb = if (slug.isNotBlank()) "$mainUrl/uploads/thumb/$slug.webp" else null
+                    val isSeries = rawTitle.contains(Regex("""\bS\d+\b|Series""", RegexOption.IGNORE_CASE))
+                    val isAnime = request.data.contains("anime", ignoreCase = true)
+
+                    if (isSeries) {
+                        newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) {
+                            this.posterUrl = thumb
+                        }
+                    } else {
+                        val type = if (isAnime) TvType.Anime else TvType.Movie
+                        newMovieSearchResponse(cleanTitle, href, type) {
+                            this.posterUrl = thumb
+                        }
+                    }
+                }
+                .distinctBy { it.url }
+        }
 
         val hasNextPage = if (request.data == "$mainUrl/") {
             false
         } else {
-            document.selectFirst("div.fz-pagination a[href*='/page/${page + 1}/']") != null ||
-                items.isNotEmpty()
+            document.selectFirst("div.fz-pagination a[href*='/page/${page + 1}/']") != null
         }
 
         return newHomePageResponse(
             list = HomePageList(request.name, items),
             hasNext = hasNextPage
         )
+    }
+
+    private fun cleanTitleText(rawTitle: String): String {
+        return rawTitle
+            .replace(Regex("""\(\d{4}\).*$"""), "")
+            .replace(
+                Regex(
+                    """\b(Hindi|English|Telugu|Tamil|Malayalam|Dual Audio|UnCut|South Movie|Bollywood|Hollywood|Web Series|HEVC|ESub|PreDvD|HQCam)\b.*$""",
+                    RegexOption.IGNORE_CASE
+                ),
+                ""
+            )
+            .trim()
+            .ifEmpty { rawTitle }
     }
 
     private fun Element.toSearchResult(): SearchResponse? {
@@ -75,15 +134,7 @@ class FilmyzilaProvider : MainAPI() {
             rawTitle.contains(Regex("""\bS\d+\b|Series""", RegexOption.IGNORE_CASE))
 
         val isAnime = categoryText.contains("Anime", ignoreCase = true)
-
-        val cleanTitle = rawTitle
-            .replace(Regex("""\(\d{4}\).*$"""), "")
-            .replace(
-                Regex("""\b(Hindi|English|Telugu|Tamil|Malayalam|Dual Audio|UnCut|South Movie|Bollywood|Hollywood|Web Series|HEVC|ESub|PreDvD|HQCam)\b.*$""", RegexOption.IGNORE_CASE),
-                ""
-            )
-            .trim()
-            .ifEmpty { rawTitle }
+        val cleanTitle = cleanTitleText(rawTitle)
 
         return if (isSeries) {
             newTvSeriesSearchResponse(cleanTitle, href, TvType.TvSeries) {
@@ -106,6 +157,30 @@ class FilmyzilaProvider : MainAPI() {
             .distinctBy { it.url }
     }
 
+    private fun extractPoster(document: Document, url: String): String? {
+        val slug = url.substringAfterLast("/").substringBeforeLast(".html").trim()
+
+        val metaImage = document.selectFirst("meta[property=og:image], meta[name=twitter:image]")
+            ?.attr("content")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() && !it.contains("favicon", ignoreCase = true) }
+        if (metaImage != null) return fixUrlNull(metaImage)
+
+        if (slug.isNotBlank()) {
+            val slugImg = document.select("img[src]")
+                .firstOrNull { it.attr("src").contains(slug, ignoreCase = true) }
+                ?.attr("src")
+            if (!slugImg.isNullOrBlank()) return fixUrlNull(slugImg)
+        }
+
+        val mainImg = document.select("img[src*='/uploads/']")
+            .firstOrNull { img -> img.parents().none { it.hasClass("fz-movie-row") } }
+            ?.attr("src")
+        if (!mainImg.isNullOrBlank()) return fixUrlNull(mainImg)
+
+        return if (slug.isNotBlank()) "$mainUrl/uploads/thumb/$slug.webp" else null
+    }
+
     override suspend fun load(url: String): LoadResponse {
         val document = app.get(url).document
 
@@ -117,9 +192,7 @@ class FilmyzilaProvider : MainAPI() {
             .trim()
             .ifEmpty { rawTitle }
 
-        val posterUrl = fixUrlNull(
-            document.selectFirst("img.fz-poster, img[src*='/uploads/thumb/']")?.attr("src")
-        )
+        val posterUrl = extractPoster(document, url)
         val year = Regex("""\((\d{4})\)""").find(rawTitle)?.groupValues?.getOrNull(1)?.toIntOrNull()
         val plot = document.selectFirst("div.fz-seo p, meta[name=description]")?.let {
             if (it.tagName() == "meta") it.attr("content") else it.text()
