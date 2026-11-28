@@ -13,6 +13,8 @@ class Plugin : Plugin() {
         registerMainAPI(Movies4uProvider())
         registerMainAPI(OlaMoviesProvider())
         registerMainAPI(CinevoodProvider())
+        registerMainAPI(FilmyzilaProvider())
+        
         // HubCloud & GDFlix Extractors
         registerExtractorAPI(HubCloudExtractor())
         registerExtractorAPI(GDFlixExtractor())
