@@ -8,6 +8,6 @@ import com.lagradost.cloudstream3.plugins.Plugin
 class Plugin : Plugin() {
     override fun load(context: Context) {
         // Main Providers
-        registerMainAPI(ArrorTvProvider())
+        registerMainAPI(ArrowTvProvider())
        }
 }
