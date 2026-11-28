@@ -295,15 +295,16 @@ class FilmyzilaProvider : MainAPI() {
                 source = sourceLabel,
                 name = "$name - $sourceLabel",
                 url = url,
-                referer = referer,
                 type = if (url.contains(".m3u8", ignoreCase = true)) {
                     ExtractorLinkType.M3U8
                 } else {
                     ExtractorLinkType.VIDEO
                 }
             ) {
+                this.referer = referer
                 this.quality = quality
             }
         )
     }
 }
+
